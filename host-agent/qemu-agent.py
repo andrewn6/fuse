@@ -779,7 +779,14 @@ def create_vm(req: dict) -> dict:
     image = req.get("image") or ""
     source_rootfs = BASE_ROOTFS 
     if image:
-        source_rootfs = IMAGES_DIR / f"{image}.qcow2"
+        # image names the request into a filesystem path, so resolve it and
+        # confirm it stays under IMAGES_DIR; "../../etc/shadow" would else
+        # reach a file outside it and get copied into the caller's guest.
+        images_root = os.path.realpath(IMAGES_DIR)
+        resolved = os.path.realpath(os.path.join(images_root, f"{image}.qcow2"))
+        if not resolved.startswith(images_root + os.sep):
+            raise HTTPError(400, f"invalid base image name: {image!r}")
+        source_rootfs = Path(resolved)
 
     if not source_rootfs.exists():
         raise HTTPError(400, f"base image {image or 'default'!r} not found at {source_rootfs}; bake and place a rootfs there before use")

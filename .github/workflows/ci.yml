@@ -6,6 +6,12 @@ on:
   pull_request:
     branches: [main]
 
+# Least privilege for the default GITHUB_TOKEN. Every job here only checks out
+# the repo and runs build/test/lint, so read access to contents is enough. A job
+# that needs more should raise it with its own narrower `permissions:` block.
+permissions:
+  contents: read
+
 # Cancel in-progress runs for the same ref when a new run is triggered,
 # so superseded commits/PR updates don't waste CI minutes.
 concurrency:
