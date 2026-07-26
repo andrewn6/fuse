@@ -386,8 +386,12 @@ func notEmpty(s string) error {
 
 func i32s(v int32) string { return strconv.Itoa(int(v)) }
 
+// atoi32 parses a base-10 int32. Parsing at bitSize 32 keeps out-of-range
+// input saturated at the int32 bounds instead of letting a wider parse wrap
+// around (Atoi is int-sized, so "4294967296" would silently become 0);
+// unparseable input yields 0, which the orchestrator rejects as an empty spec.
 func atoi32(s string) int32 {
-	n, _ := strconv.Atoi(s)
+	n, _ := strconv.ParseInt(s, 10, 32)
 	return int32(n)
 }
 

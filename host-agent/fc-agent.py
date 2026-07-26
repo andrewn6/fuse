@@ -540,7 +540,15 @@ def snapshot_restore(vm_id: str, snapshot_id: str) -> None:
     meta = load_meta(vm_id)
     if not meta:
         raise HTTPError(404, "vm not found")
-    snap_rootfs = vm_dir(vm_id) / "snapshots" / snapshot_id / "rootfs.ext4"
+    # snapshot_id names the request into a filesystem path, so resolve it and
+    # confirm it stays under this vm's snapshots dir before touching the file:
+    # "../../<other-vm>/snapshots/<id>" would else restore a rootfs belonging to
+    # a different vm over this one. Same guard fork_vm applies to its seed.
+    snaps_root = os.path.realpath(os.path.join(str(vm_dir(vm_id)), "snapshots"))
+    resolved = os.path.realpath(os.path.join(snaps_root, snapshot_id, "rootfs.ext4"))
+    if not resolved.startswith(snaps_root + os.sep):
+        raise HTTPError(400, f"invalid snapshot id: {snapshot_id!r}")
+    snap_rootfs = Path(resolved)
     if not snap_rootfs.exists():
         raise HTTPError(404, "snapshot not found")
     # Stop firecracker, swap rootfs, recreate the TAP (the dead fc process
