@@ -904,6 +904,15 @@ paths:
       operationId: registerHost
       summary: Register or update a host
       description: |
+        Requires the **master token**: this endpoint takes a caller-supplied
+        agent URL and token and can replace the provider details of an
+        existing host ID, so it decides where the orchestrator sends every
+        subsequent VM operation. An API-key principal gets 403.
+
+        The `url` is validated before anything is dialled: `http` or `https`
+        only, no embedded credentials, no query string, no fragment. A
+        rejected URL is never probed or persisted (400).
+
         Registers a host. Re-registering an existing ID is a **full
         replacement, not a patch**: the handler builds a fresh host
         record from the request alone and overwrites the stored entry.
@@ -981,6 +990,10 @@ paths:
       tags: [hosts]
       operationId: hostAction
       summary: Perform an action on a host
+      description: |
+        Requires the **master token**. Cordon and uncordon change where the
+        scheduler will place work, so they are operator actions. An API-key
+        principal gets 403.
       parameters:
         - name: action
           in: query
@@ -1008,6 +1021,8 @@ paths:
       operationId: removeHost
       summary: Remove a host from the scheduler
       description: |
+        Requires the **master token**. An API-key principal gets 403.
+
         The host must have no environments assigned; cordon it and wait
         for (or destroy) its VMs first. A host that still has VMs
         assigned returns 409 `conflict` with the message
