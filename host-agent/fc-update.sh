@@ -26,6 +26,15 @@ FC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${FUSE_REPO:-folsomintel/fuse}"
 MARKER="$FC_DIR/.fc-version"
 
+# SHA-256 verification for every release asset this script installs. Sourcing
+# it is mandatory: without the helpers there is no way to check a download, so
+# a missing library is a hard failure rather than a silent skip.
+# shellcheck source=../scripts/lib/release-verify.sh
+. "$FC_DIR/../scripts/lib/release-verify.sh" || {
+  printf '\033[1;31m  ✗ %s\033[0m\n' "cannot source scripts/lib/release-verify.sh" >&2
+  exit 1
+}
+
 log()  { printf '\033[1;36m[update] %s\033[0m\n' "$*"; }
 ok()   { printf '\033[1;32m  ✓ %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m  ! %s\033[0m\n' "$*" >&2; }
@@ -91,6 +100,17 @@ if [ -n "$LATEST" ]; then
   log "downloading $ASSET ($LATEST)"
   TMP="$(mktemp)"
   if curl_dl -o "$TMP" "https://github.com/$REPO/releases/download/$LATEST/$ASSET"; then
+    # Verify before chmod +x and before running --version: an unverified
+    # binary must never be executed, and the installed fused must stay
+    # untouched if the check fails.
+    SUMS="$(mktemp)"
+    fuse_fetch_checksums "$REPO" "$LATEST" "$SUMS" \
+      || { rm -f "$TMP" "$SUMS"; die "no checksums.txt for release $LATEST — refusing to install $ASSET"; }
+    fuse_verify_asset "$TMP" "$ASSET" "$SUMS" \
+      || { rm -f "$TMP" "$SUMS"; die "checksum verification failed for $ASSET ($LATEST)"; }
+    rm -f "$SUMS"
+    ok "verified $ASSET against checksums.txt"
+
     chmod +x "$TMP"
     "$TMP" --version >/dev/null 2>&1 || die "downloaded fused is not runnable on this host (arch mismatch?)"
     mv "$TMP" "$FC_DIR/fused"
@@ -132,8 +152,16 @@ if [ -n "${FUSE_ORCH_SERVICE:-}" ]; then
   if [ -n "$LATEST" ]; then
     log "updating orchestrator -> $FUSE_ORCH_BIN"
     TARBALL="fuse_Linux_${ASSET_ARCH}.tar.gz"
-    TGZ="$(mktemp)"; EXDIR="$(mktemp -d)"
+    TGZ="$(mktemp)"; EXDIR="$(mktemp -d)"; SUMS="$(mktemp)"
     curl_dl -o "$TGZ" "https://github.com/$REPO/releases/download/$LATEST/$TARBALL" || die "orchestrator download failed"
+    # Verify before extracting: a bad archive must not reach the filesystem,
+    # and the running orchestrator must not be replaced or restarted.
+    fuse_fetch_checksums "$REPO" "$LATEST" "$SUMS" \
+      || { rm -rf "$TGZ" "$EXDIR" "$SUMS"; die "no checksums.txt for release $LATEST — refusing to install $TARBALL"; }
+    fuse_verify_asset "$TGZ" "$TARBALL" "$SUMS" \
+      || { rm -rf "$TGZ" "$EXDIR" "$SUMS"; die "checksum verification failed for $TARBALL ($LATEST)"; }
+    rm -f "$SUMS"
+    ok "verified $TARBALL against checksums.txt"
     tar -xzf "$TGZ" -C "$EXDIR" orchestrator
     sudo -n install -m 0755 "$EXDIR/orchestrator" "$FUSE_ORCH_BIN"
     rm -rf "$TGZ" "$EXDIR"

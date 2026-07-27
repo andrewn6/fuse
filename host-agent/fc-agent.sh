@@ -12,6 +12,13 @@ ORCH_BIN="${ORCH_BIN:-/usr/local/bin/orchestrator}"
 ORCH_DEFAULTS=/etc/default/orchestrator
 ORCH_UNIT=/etc/systemd/system/orchestrator.service
 
+# SHA-256 verification for the release assets `install-orchestrator` downloads.
+# Mandatory: a missing library is a hard failure, not a skipped check.
+# shellcheck source=../scripts/lib/release-verify.sh
+. "$FC_DIR/../scripts/lib/release-verify.sh" || {
+  echo "[fc-agent] cannot source scripts/lib/release-verify.sh" >&2; exit 1
+}
+
 cmd="${1:-start}"
 public_ip() { curl -fsS ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}'; }
 
@@ -175,10 +182,18 @@ EOF
         | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' | head -n1 \
         | sed -E 's/.*"([^"]+)"$/\1/')
       [ -n "$TAG" ] || { echo "[orch] no release found; set ORCH_BIN_SRC=/path/to/orchestrator" >&2; exit 1; }
-      TGZ=$(mktemp); EXDIR=$(mktemp -d)
-      echo "[orch] downloading fuse_Linux_${ASSET_ARCH}.tar.gz ($TAG)"
-      curl -fsSL -o "$TGZ" "https://github.com/$REPO/releases/download/$TAG/fuse_Linux_${ASSET_ARCH}.tar.gz" \
+      TARBALL="fuse_Linux_${ASSET_ARCH}.tar.gz"
+      TGZ=$(mktemp); EXDIR=$(mktemp -d); SUMS=$(mktemp)
+      echo "[orch] downloading $TARBALL ($TAG)"
+      curl -fsSL -o "$TGZ" "https://github.com/$REPO/releases/download/$TAG/$TARBALL" \
         || { echo "[orch] download failed" >&2; exit 1; }
+      # Verify before extracting or installing; see scripts/lib/release-verify.sh.
+      fuse_fetch_checksums "$REPO" "$TAG" "$SUMS" \
+        || { rm -rf "$TGZ" "$EXDIR" "$SUMS"; echo "[orch] no checksums.txt for $TAG — refusing to install $TARBALL" >&2; exit 1; }
+      fuse_verify_asset "$TGZ" "$TARBALL" "$SUMS" \
+        || { rm -rf "$TGZ" "$EXDIR" "$SUMS"; echo "[orch] checksum verification failed for $TARBALL ($TAG)" >&2; exit 1; }
+      rm -f "$SUMS"
+      echo "[orch] verified $TARBALL against checksums.txt"
       tar -xzf "$TGZ" -C "$EXDIR" orchestrator
       sudo -n install -m0755 "$EXDIR/orchestrator" "$ORCH_BIN"
       rm -rf "$TGZ" "$EXDIR"

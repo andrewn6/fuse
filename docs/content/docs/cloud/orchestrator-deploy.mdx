@@ -139,6 +139,13 @@ orchestrator installed and listening on :8080
   fuse connect http://<this-host>:8080 --token <generated> --master
 ```
 
+When the binary comes from a GitHub release, the installer downloads
+`checksums.txt` for that exact tag and verifies the archive's SHA-256 before
+extracting or installing anything. `host-agent/fc-update.sh` and
+`fc-agent.sh install-orchestrator` do the same for every asset they fetch. A
+missing `checksums.txt`, a missing entry for the asset, or a mismatch aborts
+the install, leaving the existing binary in place and the service unrestarted.
+
 The default posture is a single-node, in-memory store with auth on, so it starts
 immediately. For a durable deploy, set `DATABASE_URL` in
 `/etc/fuse/orchestrator.env`, uncomment `ORCH_REQUIRE_AUTH=true`, and restart. This

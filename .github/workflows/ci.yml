@@ -91,6 +91,17 @@ jobs:
           version: "~> v2"
           args: check
 
+  # Release-asset checksum verification used by the installer/updater scripts.
+  # Pure bash, no network needed for the cases that matter, so it runs on every
+  # PR rather than only being exercised during a real install.
+  install-scripts:
+    name: Install scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: release-verify tests
+        run: ./scripts/lib/test-release-verify.sh
+
   # TypeScript SDK (sdks/typescript): lint, typecheck, test, and build. Runs in
   # parallel with the Go jobs and is independent of them.
   sdk-ts:

@@ -34,6 +34,13 @@ LISTEN="${ORCH_LISTEN:-:8080}"
 log() { echo "[install-orchestrator] $*"; }
 die() { echo "[install-orchestrator] error: $*" >&2; exit 1; }
 
+# SHA-256 verification for release downloads. Mandatory: this script installs
+# to /usr/local/bin as root, so an unverified archive is the worst thing it
+# could extract. A missing library is a hard failure, not a skipped check.
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=lib/release-verify.sh
+. "$SCRIPT_DIR/lib/release-verify.sh" || die "cannot source $SCRIPT_DIR/lib/release-verify.sh"
+
 [ "$(id -u)" -eq 0 ] || die "run as root (sudo $0)"
 command -v openssl >/dev/null 2>&1 || die "openssl is required (token generation)"
 command -v systemctl >/dev/null 2>&1 || die "systemctl is required (this installer targets systemd hosts)"
@@ -60,11 +67,19 @@ else
       | sed -E 's/.*"([^"]+)"$/\1/')
     [ -n "$TAG" ] || die "could not resolve latest release for $REPO; set VERSION or ORCH_BIN_SRC"
   fi
-  TGZ=$(mktemp); EXDIR=$(mktemp -d)
-  trap 'rm -rf "$TGZ" "$EXDIR"' EXIT
-  log "downloading fuse_Linux_${ASSET_ARCH}.tar.gz ($TAG)"
-  curl -fsSL -o "$TGZ" "https://github.com/$REPO/releases/download/$TAG/fuse_Linux_${ASSET_ARCH}.tar.gz" \
-    || die "download failed for $TAG (fuse_Linux_${ASSET_ARCH}.tar.gz)"
+  TARBALL="fuse_Linux_${ASSET_ARCH}.tar.gz"
+  TGZ=$(mktemp); EXDIR=$(mktemp -d); SUMS=$(mktemp)
+  trap 'rm -rf "$TGZ" "$EXDIR" "$SUMS"' EXIT
+  log "downloading $TARBALL ($TAG)"
+  curl -fsSL -o "$TGZ" "https://github.com/$REPO/releases/download/$TAG/$TARBALL" \
+    || die "download failed for $TAG ($TARBALL)"
+  # Verify before extracting or installing: this runs as root, so a corrupted
+  # or mismatched archive must never reach $BIN.
+  fuse_fetch_checksums "$REPO" "$TAG" "$SUMS" \
+    || die "no checksums.txt for release $TAG — refusing to install $TARBALL"
+  fuse_verify_asset "$TGZ" "$TARBALL" "$SUMS" \
+    || die "checksum verification failed for $TARBALL ($TAG)"
+  log "verified $TARBALL against checksums.txt"
   tar -xzf "$TGZ" -C "$EXDIR" orchestrator
   install -m0755 "$EXDIR/orchestrator" "$BIN"
   log "installed binary from release $TAG"
@@ -108,7 +123,6 @@ fi
 
 # 3. install the systemd unit (prefer the tracked deploy/ copy, fall back to
 #    an inline definition so a curl'd standalone script still works).
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 if [ -f "$SCRIPT_DIR/../deploy/fuse-orchestrator.service" ]; then
   install -m0644 "$SCRIPT_DIR/../deploy/fuse-orchestrator.service" "$UNIT"
 else
