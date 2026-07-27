@@ -117,6 +117,29 @@ archives:
       {{- else if eq .Arch "386" }}i386
       {{- else }}{{ .Arch }}{{ end }}
 
+# Developer ID signing + Apple notarization for the darwin CLI binaries.
+# `notarize.macos` is OSS (only the sibling `macos_native` key is Pro), and it
+# runs on linux: goreleaser signs with quill in pure Go and submits over the
+# App Store Connect REST API, so no macOS runner and no Xcode are needed.
+#
+# Inert until MACOS_SIGN_P12 is set, so forks and unsigned tags still release.
+# `ids` MUST be listed: it defaults to the project name (`fuse`), which is not
+# a build id here, and a mismatch skips signing with only a WARN.
+notarize:
+  macos:
+    - enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      ids:
+        - fuse-cli
+      sign:
+        certificate: "{{.Env.MACOS_SIGN_P12}}"
+        password: "{{.Env.MACOS_SIGN_PASSWORD}}"
+      notarize:
+        issuer_id: "{{.Env.MACOS_NOTARY_ISSUER_ID}}"
+        key_id: "{{.Env.MACOS_NOTARY_KEY_ID}}"
+        key: "{{.Env.MACOS_NOTARY_KEY}}"
+        wait: true
+        timeout: 20m
+
 checksum:
   name_template: checksums.txt
   algorithm: sha256
@@ -133,6 +156,18 @@ homebrew_casks:
       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
     homepage: "https://github.com/folsomintel/fuse"
     description: "Operator CLI for the Fuse microVM control plane"
+    # Go only ad-hoc/linker-signs the binary (Identifier=a.out, no team id), and
+    # brew stamps com.apple.quarantine on cask downloads, so Gatekeeper's
+    # first-launch check SIGKILLs it. Stripping the xattr is the stopgap until
+    # the notarize block above is live; delete this once a notarized tag ships.
+    # Must be `-dr`, not `-d`: xattr exits 1 when the attribute is absent and
+    # system_command runs with must_succeed, which would abort the install.
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/fuse"]
+          end
 
 snapshot:
   version_template: "{{ incpatch .Version }}-SNAPSHOT"
