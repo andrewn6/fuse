@@ -147,6 +147,25 @@ jobs:
       - name: Test
         run: uv run pytest
 
+  # QEMU host agent (host-agent/test_qemu_agent.py): a stdlib-only unittest
+  # suite that needs no VMs or virtualization, so it runs here and keeps the
+  # image path-containment regressions from silently rotting. Scoped to this
+  # file: test_fc_agent_attach.py drives a real pty/ssh relay and does not pass
+  # in a bare runner.
+  host-agent:
+    name: QEMU host agent
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: host-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Test
+        run: python -m unittest test_qemu_agent -v
+
   # Go SDK as a standalone module: builds with GOWORK=off so the workspace does
   # not mask a missing/extra dependency a real consumer would hit.
   sdk-go:

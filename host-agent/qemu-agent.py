@@ -124,6 +124,31 @@ def sanitize_name(name: str) -> str:
     return s or "vm"
 
 
+def resolve_image_path(image: str) -> Path:
+    """Resolve a caller-supplied image name to a path inside IMAGES_DIR.
+
+    image names the request into a filesystem path, so resolve it and confirm
+    it stays under IMAGES_DIR; "../agent-state/vms/<victim>/rootfs" would else
+    reach another vm's disk and get copied into the caller's guest. realpath
+    resolves symlinks too, so a link planted inside IMAGES_DIR that points out
+    of it is rejected as well. Raises HTTPError(400) on anything outside.
+    """
+    if not isinstance(image, str) or not image.strip():
+        raise HTTPError(400, f"invalid base image name: {image!r}")
+    # NUL and other control bytes never name a real image and would either
+    # raise deep inside os.path or truncate the path at the C boundary.
+    if any(ord(c) < 0x20 or c == "\x7f" for c in image):
+        raise HTTPError(400, f"invalid base image name: {image!r}")
+    if os.path.isabs(image) or image.startswith("~"):
+        raise HTTPError(400, f"base image name must be relative to IMAGES_DIR: {image!r}")
+
+    images_root = os.path.realpath(IMAGES_DIR)
+    resolved = os.path.realpath(os.path.join(images_root, f"{image}.qcow2"))
+    if not resolved.startswith(images_root.rstrip(os.sep) + os.sep):
+        raise HTTPError(400, f"invalid base image name: {image!r}")
+    return Path(resolved)
+
+
 def run(cmd: list[str], check: bool = True, input_bytes: bytes | None = None) -> subprocess.CompletedProcess:
     """Run a command, capturing output (thin wrapper over subprocess.run)."""
     return subprocess.run(cmd, capture_output=True, check=check, input=input_bytes)
@@ -776,17 +801,10 @@ def create_vm(req: dict) -> dict:
     name = req.get("name") or f"vm-{uuid.uuid4().hex[:8]}"
     vm_id = sanitize_name(name) 
     
+    # Resolve the source rootfs before any allocation, so a rejected or unknown
+    # image fails fast with no vm dir, tap, forward, or gpu claim to roll back.
     image = req.get("image") or ""
-    source_rootfs = BASE_ROOTFS 
-    if image:
-        # image names the request into a filesystem path, so resolve it and
-        # confirm it stays under IMAGES_DIR; "../../etc/shadow" would else
-        # reach a file outside it and get copied into the caller's guest.
-        images_root = os.path.realpath(IMAGES_DIR)
-        resolved = os.path.realpath(os.path.join(images_root, f"{image}.qcow2"))
-        if not resolved.startswith(images_root + os.sep):
-            raise HTTPError(400, f"invalid base image name: {image!r}")
-        source_rootfs = Path(resolved)
+    source_rootfs = resolve_image_path(image) if image else BASE_ROOTFS
 
     if not source_rootfs.exists():
         raise HTTPError(400, f"base image {image or 'default'!r} not found at {source_rootfs}; bake and place a rootfs there before use")
