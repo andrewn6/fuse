@@ -51,6 +51,28 @@ jobs:
       - name: Test
         run: go test ./... -race -count=1
 
+  # Blocking vulnerability scan. govulncheck reports only vulnerabilities on
+  # call paths the binaries actually reach, so a finding here is real and must
+  # be fixed (dependency bump, or a Go toolchain bump for stdlib findings)
+  # rather than triaged away. It reads the toolchain from go.mod, so the stdlib
+  # it scans is the stdlib we ship.
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Scan root module
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: Scan Go SDK module
+        working-directory: sdks/go
+        env:
+          GOWORK: "off"
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
   # Blocking lint. The repo is golangci-lint-clean under the pinned version +
   # .golangci.yml config; keep the version pinned so a new golangci-lint release
   # can't fail CI out from under a green PR.
@@ -161,7 +183,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: sdks/go/go.mod
+          # The repo toolchain from the root go.mod, not sdks/go's own `go`
+          # directive: that directive is the *floor* we promise consumers and
+          # deliberately stays low, but CI must not compile and test against a
+          # stdlib carrying known vulnerabilities.
+          go-version-file: go.mod
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./... -race -count=1
