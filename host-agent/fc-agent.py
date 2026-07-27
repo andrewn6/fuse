@@ -50,6 +50,17 @@ IMAGES_DIR = Path(os.environ.get("IMAGES_DIR", str(FC_DIR / "images")))
 SSH_KEY = FC_DIR / "ubuntu.id_rsa"
 TOKEN = os.environ.get("FC_AGENT_TOKEN")
 PORT = int(os.environ.get("FC_AGENT_PORT", "8090"))
+# Request body ceilings. Ordinary control-plane calls are a few short fields;
+# uploads carry a base64 file and get their own, larger, ceiling. Raise
+# FC_AGENT_MAX_UPLOAD_BYTES on a host that needs to push bigger payloads into
+# guests. Header and request-line sizes are already bounded by http.server
+# (64 KiB per line, 100 headers).
+MAX_BODY_BYTES = int(os.environ.get("FC_AGENT_MAX_BODY_BYTES", str(1 << 20)))       # 1 MiB
+MAX_UPLOAD_BYTES = int(os.environ.get("FC_AGENT_MAX_UPLOAD_BYTES", str(64 << 20)))  # 64 MiB
+# Socket timeout for an HTTP conversation. Bounds a client that opens a
+# connection and then dribbles (or never finishes) its request. Attach clears
+# it for its own socket, since an interactive session is idle by design.
+REQUEST_TIMEOUT = float(os.environ.get("FC_AGENT_REQUEST_TIMEOUT", "60"))
 FC_BIN = os.environ.get("FC_BIN", "/usr/local/bin/firecracker")
 # Port the in-guest agent listens on; per-VM host ports DNAT to this.
 FUSED_PORT = int(os.environ.get("FUSED_PORT", "9550"))
@@ -929,6 +940,10 @@ def do_attach(handler, vm_id: str, spec: dict) -> None:
     argv = attach_argv(meta["guest_ip"], spec["cmd"])
 
     conn = handler.connection
+    # An interactive session is idle whenever nobody is typing, so the
+    # request-level socket timeout must not apply to it. The selector loop
+    # below is what bounds this connection instead.
+    conn.settimeout(None)
     pending = drain_buffered(handler.rfile, conn)
 
     handler.wfile.write(
@@ -1076,6 +1091,10 @@ def host_capacity() -> dict:
 
 class Handler(BaseHTTPRequestHandler):
     server_version = "fc-agent/0.1"
+    # socketserver applies this to the connection, so a client that opens a
+    # socket and then stalls mid-request is dropped instead of holding a
+    # thread. do_attach clears it for its own socket.
+    timeout = REQUEST_TIMEOUT
 
     def _auth(self) -> bool:
         return hmac.compare_digest(
@@ -1098,9 +1117,34 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _read_json(self) -> dict:
-        n = int(self.headers.get("Content-Length", "0") or 0)
+    def _read_json(self, limit: int = MAX_BODY_BYTES) -> dict:
+        """Read and parse a bounded JSON request body.
+
+        The orchestrator is the only intended caller, but this agent listens on
+        a host port, so the body has to be bounded before it is read: a large
+        Content-Length would otherwise be believed and allocated.
+
+        Chunked bodies are rejected rather than read. Nothing Fuse sends uses
+        them, and the previous code silently treated a chunked body as empty --
+        which would also be a way past the limit.
+        """
+        if "chunked" in self.headers.get("Transfer-Encoding", "").lower():
+            raise HTTPError(411, "chunked request bodies are not supported; send Content-Length")
+
+        try:
+            n = int(self.headers.get("Content-Length", "0") or 0)
+        except ValueError:
+            raise HTTPError(400, "invalid Content-Length")
+        if n < 0:
+            raise HTTPError(400, "invalid Content-Length")
+        if n > limit:
+            raise HTTPError(413, f"request body of {n} bytes exceeds the {limit} byte limit")
+
         raw = self.rfile.read(n) if n else b"{}"
+        # A short read means the client declared more than it sent. Parsing the
+        # truncated remainder would be guessing at what it meant.
+        if len(raw) < n:
+            raise HTTPError(400, "request body shorter than Content-Length")
         try:
             return json.loads(raw or b"{}")
         except Exception as e:
@@ -1164,7 +1208,9 @@ class Handler(BaseHTTPRequestHandler):
 
                 with vm_lock(vm_id):
                     if action == "upload" and method == "POST":
-                        body = self._read_json()
+                        # Uploads carry a base64 file, so they get the larger
+                        # ceiling rather than the control-plane one.
+                        body = self._read_json(MAX_UPLOAD_BYTES)
                         do_upload(vm_id, body["path"], body["content_b64"])
                         return self._json(200, {"ok": True})
                     if action == "exec" and method == "POST":

@@ -99,6 +99,32 @@ than attempting a cross-origin setup. See
 [Authentication](/reference/auth#browser--session-auth) for the full
 cookie model.
 
+## Request size limits
+
+Every JSON endpoint decodes through a bounded reader, so no single request can
+make the orchestrator allocate without limit. Exceeding a limit returns `413`
+with the error code `payload_too_large`. The limits count bytes actually read,
+so they apply to chunked requests as well as ones that declare a
+`Content-Length`.
+
+| Endpoint | Limit |
+| --- | --- |
+| `POST /login` | 4 KiB |
+| `POST /v1/environments`, exec | 1 MiB |
+| all other JSON endpoints | 64 KiB |
+
+An inline manifest plus secrets plus a startup script must fit inside the 1 MiB
+ceiling. Reference a manifest instead of inlining it if you are near that.
+
+The host agents apply their own ceilings, configurable per host: 1 MiB for
+control-plane calls (`FC_AGENT_MAX_BODY_BYTES` / `QEMU_AGENT_MAX_BODY_BYTES`)
+and 64 MiB for guest file uploads (`FC_AGENT_MAX_UPLOAD_BYTES` /
+`QEMU_AGENT_MAX_UPLOAD_BYTES`). They reject chunked request bodies outright,
+which nothing in Fuse sends. `FC_AGENT_REQUEST_TIMEOUT` /
+`QEMU_AGENT_REQUEST_TIMEOUT` (60s) bound a client that opens a connection and
+then stalls; interactive attach sessions are exempt, since idling is what they
+are for.
+
 ## Host agent tokens are a separate concern
 
 `FIRECRACKER_TOKEN` (and `QEMU_AGENT_TOKEN` for GPU hosts) authenticate the

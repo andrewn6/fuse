@@ -22,6 +22,12 @@ const (
 	CodeUnauthorized    = "unauthorized"
 	CodeUnimplemented   = "unimplemented"
 
+	// CodePayloadTooLarge means the request body ran past the server's limit
+	// for that endpoint (HTTP 413). Distinct from CodeInvalidArgument: the
+	// body may be valid and simply too big, so the fix is to send less rather
+	// than to send something different.
+	CodePayloadTooLarge = "payload_too_large"
+
 	// CodeRouteNotFound means the URL doesn't match any route the server
 	// exposes — a wrong host/port, or a server that isn't the fuse
 	// orchestrator at all — as opposed to CodeNotFound's "route exists,

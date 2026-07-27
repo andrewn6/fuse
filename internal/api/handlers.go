@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -241,8 +240,7 @@ func (h *Handler) resolver() Resolver {
 //	@Router			/v1/environments [post]
 func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 	var req CreateEnvironmentRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, CodeInvalidArgument, "invalid JSON body: "+err.Error(), nil)
+	if !decodeJSON(w, r, MaxEnvironmentBodyBytes, &req) {
 		return
 	}
 	if req.TaskID == "" {
@@ -391,11 +389,8 @@ func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 	vmID := chi.URLParam(r, "vmId")
 
 	var req CreateSnapshotRequest
-	if r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, CodeInvalidArgument, "invalid JSON body: "+err.Error(), nil)
-			return
-		}
+	if !decodeOptionalJSON(w, r, MaxJSONBodyBytes, &req) {
+		return
 	}
 
 	var retentionUntil *time.Time
@@ -623,11 +618,8 @@ func (h *Handler) forkEnvironment(w http.ResponseWriter, r *http.Request) {
 	vmID := chi.URLParam(r, "vmId")
 
 	var req ForkEnvironmentRequest
-	if r.ContentLength > 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, CodeInvalidArgument, "invalid JSON body: "+err.Error(), nil)
-			return
-		}
+	if !decodeOptionalJSON(w, r, MaxJSONBodyBytes, &req) {
+		return
 	}
 
 	newID, err := h.Fleet.ForkEnvironment(r.Context(), vmID, orchestrator.ForkOptions{
@@ -700,8 +692,7 @@ func (h *Handler) registerHost(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req RegisterHostRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, CodeInvalidArgument, "invalid JSON body: "+err.Error(), nil)
+	if !decodeJSON(w, r, MaxJSONBodyBytes, &req) {
 		return
 	}
 	if req.ID == "" || req.URL == "" {

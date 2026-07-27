@@ -74,6 +74,7 @@ class ApiError(Exception):
 | `CODE_UNAVAILABLE` | `unavailable` | `503` |
 | `CODE_INTERNAL` | `internal` | `500` or `502` |
 | (none yet) | `unimplemented` | `501` |
+| (none yet) | `payload_too_large` | `413` |
 
 A `502` with code `unauthorized` is the one case that isn't about your own
 token: it means the host agent rejected the per-host token during
