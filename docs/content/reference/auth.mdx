@@ -56,7 +56,8 @@ For a browser-based frontend (Fuse's optional dashboard), the token is exchanged
 an HttpOnly session cookie so the browser's JS never holds the secret after login:
 
 - `POST /login` with `{"token": "..."}`: on success, sets an HttpOnly `fuse_session`
-  cookie (`SameSite=Lax`, `Secure` when serving TLS, 7-day max-age).
+  cookie (`SameSite=Lax`, `Secure` when serving TLS or when `ORCH_SECURE_COOKIES=true`,
+  7-day max-age).
 - `POST /logout`: clears the cookie.
 - `BearerAuth` accepts either the `Authorization` header or (if absent) the
   `fuse_session` cookie. The header always wins if both are present.

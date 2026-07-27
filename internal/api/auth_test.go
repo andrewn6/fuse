@@ -108,6 +108,73 @@ func TestLogin_SetsCookie(t *testing.T) {
 	}
 }
 
+// TestLogin_InsecureCookieWhenNotConfigured pins the other half of the
+// SecureCookies contract: without it the flag is absent, so a deployment that
+// forgets to set it is visibly wrong rather than silently downgraded.
+func TestLogin_InsecureCookieWhenNotConfigured(t *testing.T) {
+	h := &Handler{AuthToken: "secret"}
+	body, _ := json.Marshal(loginRequest{Token: "secret"})
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(string(body)))
+	rec := httptest.NewRecorder()
+
+	h.login(rec, req)
+
+	c := findCookie(rec, SessionCookieName)
+	if c == nil {
+		t.Fatal("login did not set session cookie")
+	}
+	if c.Secure {
+		t.Error("cookie must not be Secure when SecureCookies is unset")
+	}
+}
+
+// TestLogin_IgnoresForwardedProto verifies the Secure flag comes from
+// configuration only. X-Forwarded-Proto is caller-controlled on any hop that
+// is not a trusted proxy, so honouring it would let a client decide whether
+// the token cookie is protected.
+func TestLogin_IgnoresForwardedProto(t *testing.T) {
+	h := &Handler{AuthToken: "secret"}
+	body, _ := json.Marshal(loginRequest{Token: "secret"})
+	req := httptest.NewRequest(http.MethodPost, "/login", strings.NewReader(string(body)))
+	req.Header.Set("X-Forwarded-Proto", "https")
+	rec := httptest.NewRecorder()
+
+	h.login(rec, req)
+
+	c := findCookie(rec, SessionCookieName)
+	if c == nil {
+		t.Fatal("login did not set session cookie")
+	}
+	if c.Secure {
+		t.Error("X-Forwarded-Proto must not turn on the Secure flag")
+	}
+}
+
+// TestLogout_MatchesLoginCookieAttributes verifies the deletion cookie carries
+// the same Secure/Path attributes as the one login set. A browser ignores a
+// clearing cookie whose attributes do not match, which would leave the session
+// alive after logout.
+func TestLogout_MatchesLoginCookieAttributes(t *testing.T) {
+	h := &Handler{AuthToken: "secret", SecureCookies: true}
+	rec := httptest.NewRecorder()
+
+	h.logout(rec, httptest.NewRequest(http.MethodPost, "/logout", nil))
+
+	c := findCookie(rec, SessionCookieName)
+	if c == nil {
+		t.Fatal("logout did not set a clearing cookie")
+	}
+	if !c.Secure {
+		t.Error("clearing cookie must be Secure when SecureCookies is set")
+	}
+	if c.Path != "/" {
+		t.Errorf("clearing cookie Path: got %q, want %q", c.Path, "/")
+	}
+	if c.MaxAge >= 0 {
+		t.Errorf("clearing cookie MaxAge: got %d, want < 0", c.MaxAge)
+	}
+}
+
 // TestLogin_WrongToken verifies a bad token is rejected with 401 and no
 // cookie, and that the audit hook fires.
 func TestLogin_WrongToken(t *testing.T) {
