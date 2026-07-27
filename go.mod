@@ -1,6 +1,6 @@
 module github.com/folsomintel/fuse
 
-go 1.26.1
+go 1.26.5
 
 // sdks/go is its own module (github.com/folsomintel/fuse/sdks/go). The in-repo
 // operator CLI (./cli) imports it; this replace resolves it from the local tree
@@ -70,8 +70,8 @@ require (
 	github.com/spf13/pflag v1.0.9 // indirect
 	github.com/xo/terminfo v0.0.0-20220910002029-abceb7e1c41e // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
-	golang.org/x/sync v0.17.0 // indirect
+	golang.org/x/sync v0.21.0 // indirect
 	golang.org/x/sys v0.47.0 // indirect
-	golang.org/x/text v0.29.0 // indirect
+	golang.org/x/text v0.39.0 // indirect
 	google.golang.org/protobuf v1.36.8 // indirect
 )

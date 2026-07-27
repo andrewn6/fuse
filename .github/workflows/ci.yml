@@ -71,6 +71,33 @@ jobs:
         with:
           version: v2.12.2
 
+  # Blocking vulnerability scan. govulncheck only reports advisories that are
+  # reachable from this module's call graph, so a failure here is a real, callable
+  # vulnerability and not just a flagged dependency version. Covers both modules:
+  # the root module and the standalone sdks/go module (built with GOWORK=off so
+  # the workspace does not mask what a real consumer resolves).
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Scan root module
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+      - name: Scan sdks/go module
+        env:
+          GOWORK: "off"
+        working-directory: sdks/go
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
   # Validate the GoReleaser config on every PR so a CD-breaking change is caught
   # here instead of only when a release tag is pushed.
   release-config:
