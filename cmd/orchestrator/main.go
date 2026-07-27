@@ -136,6 +136,8 @@ func run() error {
 		prefix            string
 		readHeaderTimeout time.Duration
 		writeTimeout      time.Duration
+		idleTimeout       time.Duration
+		maxHeaderBytes    int
 		shutdownTimeout   time.Duration
 		fcBaseURL         string
 		fcToken           string
@@ -155,6 +157,10 @@ func run() error {
 		"max time to read request headers")
 	flag.DurationVar(&writeTimeout, "write-timeout", 60*time.Second,
 		"max time to write a response (including streaming handlers)")
+	flag.DurationVar(&idleTimeout, "idle-timeout", 120*time.Second,
+		"max time an idle keep-alive connection may stay open")
+	flag.IntVar(&maxHeaderBytes, "max-header-bytes", 64<<10,
+		"max size of request headers")
 	flag.DurationVar(&shutdownTimeout, "shutdown-timeout",
 		time.Duration(envInt("ORCH_SHUTDOWN_TIMEOUT_SECONDS", 30))*time.Second,
 		"graceful shutdown ceiling")
@@ -413,6 +419,18 @@ func run() error {
 		Handler:           mux,
 		ReadHeaderTimeout: readHeaderTimeout,
 		WriteTimeout:      writeTimeout,
+		// Bound how long an idle keep-alive connection may sit doing nothing,
+		// so a client cannot pin connections open indefinitely without ever
+		// sending a request. Note there is deliberately no ReadTimeout: it
+		// would arm a read deadline for the whole request, and Go reads its
+		// expiry as a dead client, which would cut off the SSE event stream
+		// and attach sessions that hold a connection open on purpose. Body
+		// reads are bounded per request in internal/api instead.
+		IdleTimeout: idleTimeout,
+		// Cap request headers well below Go's 1 MiB default. Nothing this API
+		// accepts needs more than a bearer token and a handful of standard
+		// headers.
+		MaxHeaderBytes: maxHeaderBytes,
 	}
 
 	// Signal handling + graceful shutdown.

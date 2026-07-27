@@ -2,7 +2,6 @@ package api
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"net/http"
 	"time"
@@ -71,13 +70,9 @@ func (h *Handler) createAPIKey(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req CreateAPIKeyRequest
-	// Body is optional; only reject genuinely malformed JSON.
-	if r.Body != nil && r.ContentLength != 0 {
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			writeError(w, http.StatusBadRequest, CodeInvalidArgument,
-				"invalid JSON body", nil)
-			return
-		}
+	// Body is optional; only reject genuinely malformed or oversized JSON.
+	if !decodeOptionalJSON(w, r, MaxJSONBodyBytes, &req) {
+		return
 	}
 
 	rec, rawKey, err := h.APIKeys.Create(r.Context(), req.Label, time.Now().UTC())
