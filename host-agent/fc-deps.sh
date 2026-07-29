@@ -12,7 +12,7 @@
 # Firecracker itself is fetched by fc-install.sh, not here.
 set -euo pipefail
 
-GO_VERSION="${GO_VERSION:-1.26.1}"   # keep in sync with go.mod
+GO_VERSION="${GO_VERSION:-1.26.5}"   # keep in sync with go.mod
 WITH_GO=0
 [ "${1:-}" = "--with-go" ] && WITH_GO=1
 

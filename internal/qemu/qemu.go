@@ -59,6 +59,11 @@ type Provider struct {
 }
 
 // New creates a QEMU provider.
+//
+// The default HTTP client comes from hostwire: dedicated dial, TLS,
+// response-header, and overall timeouts, and a redirect policy that refuses to
+// follow a host agent somewhere else. http.DefaultClient has no timeout, so an
+// unresponsive host would hold a provider call open indefinitely.
 func New(cfg Config) *Provider {
 	p := &Provider{
 		baseURL:     strings.TrimRight(cfg.BaseURL, "/"),
@@ -67,7 +72,7 @@ func New(cfg Config) *Provider {
 		downloadURL: cfg.DownloadURL,
 	}
 	if p.client == nil {
-		p.client = http.DefaultClient
+		p.client = hostwire.NewClient()
 	}
 	if cfg.UseStub || p.baseURL == "" {
 		p.stub = newStub()
@@ -453,8 +458,10 @@ func (p *Provider) doJSON(ctx context.Context, method, path string, reqBody any,
 	defer func() { _ = res.Body.Close() }()
 
 	if res.StatusCode >= 300 {
-		b, _ := io.ReadAll(res.Body)
-		return &orchestrator.HTTPStatusError{Code: res.StatusCode, Body: strings.TrimSpace(string(b))}
+		// Bounded: an agent error body is diagnostic text, and reading an
+		// unbounded one into an error string is a way to make the
+		// orchestrator allocate on someone else's terms.
+		return &orchestrator.HTTPStatusError{Code: res.StatusCode, Body: hostwire.ReadErrorBody(res.Body)}
 	}
 	if respBody == nil {
 		return nil

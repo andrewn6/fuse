@@ -51,6 +51,28 @@ jobs:
       - name: Test
         run: go test ./... -race -count=1
 
+  # Blocking vulnerability scan. govulncheck reports only vulnerabilities on
+  # call paths the binaries actually reach, so a finding here is real and must
+  # be fixed (dependency bump, or a Go toolchain bump for stdlib findings)
+  # rather than triaged away. It reads the toolchain from go.mod, so the stdlib
+  # it scans is the stdlib we ship.
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Scan root module
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+      - name: Scan Go SDK module
+        working-directory: sdks/go
+        env:
+          GOWORK: "off"
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
   # Blocking lint. The repo is golangci-lint-clean under the pinned version +
   # .golangci.yml config; keep the version pinned so a new golangci-lint release
   # can't fail CI out from under a green PR.
@@ -81,6 +103,45 @@ jobs:
       - uses: actions/checkout@v4
       - name: install-fuse tests
         run: ./scripts/test-install-fuse.sh
+  # Blocking vulnerability scan. govulncheck only reports advisories that are
+  # reachable from this module's call graph, so a failure here is a real, callable
+  # vulnerability and not just a flagged dependency version. Covers both modules:
+  # the root module and the standalone sdks/go module (built with GOWORK=off so
+  # the workspace does not mask what a real consumer resolves).
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Scan root module
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+      - name: Scan sdks/go module
+        env:
+          GOWORK: "off"
+        working-directory: sdks/go
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # Installer/updater shell tests. The release-asset checksum helper is embedded
+  # in two standalone scripts rather than sourced, so this job is what keeps the
+  # copies from drifting apart.
+  installer-tests:
+    name: Installer tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checksum verification tests
+        run: ./host-agent/test-verify-checksum.sh
 
   # Validate the GoReleaser config on every PR so a CD-breaking change is caught
   # here instead of only when a release tag is pushed.
@@ -158,6 +219,25 @@ jobs:
       - name: Test
         run: uv run pytest
 
+  # QEMU host agent (host-agent/test_qemu_agent.py): a stdlib-only unittest
+  # suite that needs no VMs or virtualization, so it runs here and keeps the
+  # image path-containment regressions from silently rotting. Scoped to this
+  # file: test_fc_agent_attach.py drives a real pty/ssh relay and does not pass
+  # in a bare runner.
+  host-agent:
+    name: QEMU host agent
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: host-agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Test
+        run: python -m unittest test_qemu_agent -v
+
   # Go SDK as a standalone module: builds with GOWORK=off so the workspace does
   # not mask a missing/extra dependency a real consumer would hit.
   sdk-go:
@@ -172,7 +252,11 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version-file: sdks/go/go.mod
+          # The repo toolchain from the root go.mod, not sdks/go's own `go`
+          # directive: that directive is the *floor* we promise consumers and
+          # deliberately stays low, but CI must not compile and test against a
+          # stdlib carrying known vulnerabilities.
+          go-version-file: go.mod
       - run: go build ./...
       - run: go vet ./...
       - run: go test ./... -race -count=1

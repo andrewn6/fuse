@@ -34,6 +34,60 @@ LISTEN="${ORCH_LISTEN:-:8080}"
 log() { echo "[install-orchestrator] $*"; }
 die() { echo "[install-orchestrator] error: $*" >&2; exit 1; }
 
+# >>> fuse release-asset checksum verification >>>
+# This block is embedded, not sourced: scripts/install-orchestrator.sh is
+# documented as curl-able and run standalone on a fresh host, so a sibling
+# library file is not guaranteed to exist on disk. Keep the copies in
+# host-agent/fc-update.sh and scripts/install-orchestrator.sh byte-identical;
+# host-agent/test-verify-checksum.sh asserts that and exercises the helper.
+
+# sha256_of <file> - print the file's lowercase sha256, or fail if no tool.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | cut -d' ' -f1
+  else
+    return 1
+  fi
+}
+
+# verify_asset <file> <asset-name> <checksums-file>
+# Fails closed. A missing checksum tool, a missing or empty checksums file, a
+# missing entry for this exact asset name, or a digest mismatch all return
+# non-zero, so the caller must not install, extract, or execute the asset.
+verify_asset() {
+  local file="$1" name="$2" sums="$3" want="" got="" sum path
+  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    echo "checksum verification needs sha256sum or shasum; refusing $name" >&2
+    return 1
+  fi
+  if [ ! -f "$file" ]; then
+    echo "asset $name is missing; nothing to verify" >&2
+    return 1
+  fi
+  if [ ! -s "$sums" ]; then
+    echo "checksums.txt is missing or empty; refusing $name" >&2
+    return 1
+  fi
+  # goreleaser writes "<sha256>  <asset>"; binary-mode tools prefix the name "*".
+  while read -r sum path; do
+    case "$path" in
+      "$name"|"*$name") want="$sum"; break ;;
+    esac
+  done < "$sums"
+  if [ -z "$want" ]; then
+    echo "no checksum entry for $name in checksums.txt; refusing it" >&2
+    return 1
+  fi
+  got="$(sha256_of "$file")" || return 1
+  if [ "$want" != "$got" ]; then
+    echo "checksum mismatch for $name: want $want, got $got" >&2
+    return 1
+  fi
+}
+# <<< fuse release-asset checksum verification <<<
+
 [ "$(id -u)" -eq 0 ] || die "run as root (sudo $0)"
 command -v openssl >/dev/null 2>&1 || die "openssl is required (token generation)"
 command -v systemctl >/dev/null 2>&1 || die "systemctl is required (this installer targets systemd hosts)"
@@ -60,11 +114,17 @@ else
       | sed -E 's/.*"([^"]+)"$/\1/')
     [ -n "$TAG" ] || die "could not resolve latest release for $REPO; set VERSION or ORCH_BIN_SRC"
   fi
-  TGZ=$(mktemp); EXDIR=$(mktemp -d)
-  trap 'rm -rf "$TGZ" "$EXDIR"' EXIT
-  log "downloading fuse_Linux_${ASSET_ARCH}.tar.gz ($TAG)"
-  curl -fsSL -o "$TGZ" "https://github.com/$REPO/releases/download/$TAG/fuse_Linux_${ASSET_ARCH}.tar.gz" \
-    || die "download failed for $TAG (fuse_Linux_${ASSET_ARCH}.tar.gz)"
+  ASSET="fuse_Linux_${ASSET_ARCH}.tar.gz"
+  TGZ=$(mktemp); EXDIR=$(mktemp -d); SUMS=$(mktemp)
+  trap 'rm -rf "$TGZ" "$EXDIR" "$SUMS"' EXIT
+  log "downloading $ASSET ($TAG)"
+  curl -fsSL -o "$TGZ" "https://github.com/$REPO/releases/download/$TAG/$ASSET" \
+    || die "download failed for $TAG ($ASSET)"
+  # Checksums for this exact tag, then verify before extracting or installing.
+  curl -fsSL -o "$SUMS" "https://github.com/$REPO/releases/download/$TAG/checksums.txt" \
+    || die "release $TAG publishes no checksums.txt - refusing to install unverified assets"
+  verify_asset "$TGZ" "$ASSET" "$SUMS" || die "checksum verification failed for $ASSET ($TAG)"
+  log "sha256 verified: $ASSET"
   tar -xzf "$TGZ" -C "$EXDIR" orchestrator
   install -m0755 "$EXDIR/orchestrator" "$BIN"
   log "installed binary from release $TAG"

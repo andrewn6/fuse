@@ -46,9 +46,35 @@ fuse connect http://orchestrator:8080 --token <master-token> --master
 
 Keys are shown once at creation (`fuse apikeys create` prints the raw secret) and
 are unrecoverable afterward; they're stored hashed. Both the master token and any
-API key are accepted interchangeably as a bearer token on every `/v1/*` route
-except `/v1/api-keys`, which returns `403` for an API-key principal, key
-management is master-only.
+API key are accepted interchangeably as a bearer token on most `/v1/*` routes.
+
+### Master-token-only operations
+
+These return `403` for an API-key principal:
+
+| Operation | Route |
+| --- | --- |
+| Key management | `/v1/api-keys` (all methods) |
+| Exec in a guest | `POST /v1/environments/{id}?action=exec` |
+| Attach to a guest | `GET /v1/environments/{id}/attach` |
+| Register or update a host | `POST /v1/hosts` |
+| Cordon / uncordon a host | `POST /v1/hosts/{id}?action=cordon\|uncordon` |
+| Remove a host | `DELETE /v1/hosts/{id}` |
+
+API keys carry no scopes today, so these are the operations where a key would
+otherwise be equivalent to the master token. Host registration takes a
+caller-supplied agent URL and token and can replace the provider details of an
+existing host id, which decides where the orchestrator sends every subsequent
+VM operation.
+
+Host *reads* (`GET /v1/hosts`, `GET /v1/hosts/{id}`) stay open to any
+authenticated caller. They return topology and capacity, never a host's agent
+token.
+
+Registration also validates the agent URL before anything is dialled: `http` or
+`https` only, no embedded credentials, no query string, no fragment. Redirects
+from a host agent are never followed, so a compromised or misconfigured agent
+cannot forward the orchestrator (and the token it carries) to another origin.
 
 ## Browser / session auth
 

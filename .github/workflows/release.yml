@@ -123,6 +123,8 @@ jobs:
       - run: go vet ./...
       - run: go build ./...
       - run: go test ./... -race -count=1
+      - name: govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
       - uses: golangci/golangci-lint-action@v7
         with:
           version: v2.12.2
@@ -150,6 +152,7 @@ jobs:
           go build ./...
           go vet ./...
           go test ./... -race -count=1
+          go run golang.org/x/vuln/cmd/govulncheck@latest ./...
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: "3.13"
@@ -260,7 +263,9 @@ jobs:
           git push origin "sdks/go/v${V}"
       - uses: actions/setup-go@v5
         with:
-          go-version-file: sdks/go/go.mod
+          # Repo toolchain, not sdks/go's consumer floor. See the sdk-go job in
+          # ci.yml for why.
+          go-version-file: go.mod
       - name: Warm the module proxy
         env:
           REF_NAME: ${{ github.ref_name }}
