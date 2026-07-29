@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/folsomintel/fuse/internal/fusefile"
+	"github.com/folsomintel/fuse/internal/hostwire"
 	"github.com/folsomintel/fuse/internal/orchestrator"
 	"github.com/folsomintel/fuse/internal/secrets"
 	"github.com/go-chi/chi/v5"
@@ -653,7 +654,7 @@ func (h *Handler) forkEnvironment(w http.ResponseWriter, r *http.Request) {
 // hostAction dispatches an action on a host via ?action= query param.
 //
 //	@Summary		Host action
-//	@Description	Perform an action on a host. Supports: cordon (mark unschedulable), uncordon (return to scheduling).
+//	@Description	Perform an action on a host. Supports: cordon (mark unschedulable), uncordon (return to scheduling). Requires the master token.
 //	@Tags			hosts
 //	@Param			hostId	path	string	true	"Host identifier"
 //	@Param			action	query	string	true	"Action to perform"	Enums(cordon, uncordon)
@@ -664,6 +665,9 @@ func (h *Handler) forkEnvironment(w http.ResponseWriter, r *http.Request) {
 //	@Security		BearerAuth
 //	@Router			/v1/hosts/{hostId} [post]
 func (h *Handler) hostAction(w http.ResponseWriter, r *http.Request) {
+	if !h.requireMasterToken(w, r, "host mutations require the master token") {
+		return
+	}
 	switch r.URL.Query().Get("action") {
 	case "cordon":
 		h.cordonHost(w, r)
@@ -682,6 +686,7 @@ func (h *Handler) hostAction(w http.ResponseWriter, r *http.Request) {
 // vm_count is scheduling policy and is never probed.
 //
 //	@Summary	Register host
+//	@Description	Registers or updates a host. Requires the master token.
 //	@Tags		hosts
 //	@Accept		json
 //	@Produce	json
@@ -693,6 +698,14 @@ func (h *Handler) hostAction(w http.ResponseWriter, r *http.Request) {
 //	@Security	BearerAuth
 //	@Router		/v1/hosts [post]
 func (h *Handler) registerHost(w http.ResponseWriter, r *http.Request) {
+	// Registration takes a caller-supplied URL and token and can replace the
+	// provider details of an existing host id, so it decides where the
+	// orchestrator sends every subsequent VM operation. API keys carry no
+	// scopes, so anything short of the master token would make every issued
+	// key able to redirect the control plane.
+	if !h.requireMasterToken(w, r, "host registration requires the master token") {
+		return
+	}
 	if h.NewProvider == nil {
 		writeError(w, http.StatusNotImplemented, CodeInternal,
 			"host registration is disabled (no provider factory configured)", nil)
@@ -706,6 +719,12 @@ func (h *Handler) registerHost(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.ID == "" || req.URL == "" {
 		writeError(w, http.StatusBadRequest, CodeInvalidArgument, "id and url are required", nil)
+		return
+	}
+	// Validate the destination before anything is constructed from it, so a
+	// rejected URL is never dialled, probed, or persisted.
+	if err := hostwire.ValidateAgentURL(req.URL); err != nil {
+		writeError(w, http.StatusBadRequest, CodeInvalidArgument, err.Error(), nil)
 		return
 	}
 
@@ -897,6 +916,12 @@ func isAgentUnauthorized(err error) bool {
 
 // listHosts returns all registered hosts.
 //
+// Reads are deliberately available to any authenticated caller, master token
+// or API key: the response carries fleet topology and capacity but never a
+// host's agent token (see toAPIHost), and a caller that can create
+// environments already learns which hosts exist from where they land. Every
+// host *mutation* is master-token only.
+//
 //	@Summary	List hosts
 //	@Tags		hosts
 //	@Produce	json
@@ -912,7 +937,8 @@ func (h *Handler) listHosts(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
-// getHost fetches a single host by ID.
+// getHost fetches a single host by ID. Readable by any authenticated caller,
+// for the same reason as listHosts.
 //
 //	@Summary	Get host
 //	@Tags		hosts
@@ -953,15 +979,20 @@ func (h *Handler) uncordonHost(w http.ResponseWriter, r *http.Request) {
 // removeHost removes a host from the scheduler.
 //
 //	@Summary	Remove host
+//	@Description	Removes a host from the scheduler. Requires the master token.
 //	@Tags		hosts
 //	@Param		hostId	path	string	true	"Host identifier"
 //	@Success	204		"Host removed"
+//	@Failure	403		{object}	Error
 //	@Failure	404		{object}	Error
 //	@Failure	409		{object}	Error
 //	@Failure	500		{object}	Error
 //	@Security	BearerAuth
 //	@Router		/v1/hosts/{hostId} [delete]
 func (h *Handler) removeHost(w http.ResponseWriter, r *http.Request) {
+	if !h.requireMasterToken(w, r, "host removal requires the master token") {
+		return
+	}
 	hostID := chi.URLParam(r, "hostId")
 	if err := h.Fleet.RemoveHost(r.Context(), hostID); err != nil {
 		writeFleetError(w, err)
