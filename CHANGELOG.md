@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.9.2](https://github.com/folsomintel/fuse/compare/v0.9.1...v0.9.2) (2026-07-29)
+
+
+### Bug Fixes
+
+* bound request bodies and slow clients across orchestrator and host agents ([#119](https://github.com/folsomintel/fuse/issues/119)) ([70387d8](https://github.com/folsomintel/fuse/commit/70387d81bd4c82f7a2006ce463bfd32054e249e3))
+* clear dependabot and CodeQL security alerts ([#88](https://github.com/folsomintel/fuse/issues/88)) ([bac883a](https://github.com/folsomintel/fuse/commit/bac883a35390671a2d6fe6e642bcf04d8c6704fa))
+* contain qemu image paths to prevent cross-vm rootfs reads ([#117](https://github.com/folsomintel/fuse/issues/117)) ([c91dd27](https://github.com/folsomintel/fuse/commit/c91dd273cc34b450397cc63247f24712302f509f))
+* patch reachable go vulnerabilities and gate ci on govulncheck ([#118](https://github.com/folsomintel/fuse/issues/118)) ([f0d43ca](https://github.com/folsomintel/fuse/commit/f0d43cab7e0564a06b72fdae2c0035fd285ea18d))
+* preserve secure session cookies behind tls proxies and fail closed on partial tls config ([#120](https://github.com/folsomintel/fuse/issues/120)) ([5a24a58](https://github.com/folsomintel/fuse/commit/5a24a5836f52f3dde11a598b1e26bf33d97307d7))
+* remove the duplicate govulncheck job that made ci.yml unparseable ([#124](https://github.com/folsomintel/fuse/issues/124)) ([4ad3d7e](https://github.com/folsomintel/fuse/commit/4ad3d7ec927409436007060e493e462287a7ff84))
+* restrict host mutations and harden provider egress ([#121](https://github.com/folsomintel/fuse/issues/121)) ([6d96522](https://github.com/folsomintel/fuse/commit/6d9652265dba44116d2de53e0f89a555dc961c31))
+* **security:** patch reachable go vulns and verify release asset checksums ([#110](https://github.com/folsomintel/fuse/issues/110)) ([7198070](https://github.com/folsomintel/fuse/commit/719807072099ae99dd41408b1de674cc526b592e))
+* stop gatekeeper blocking the brew-installed cli on macos ([#123](https://github.com/folsomintel/fuse/issues/123)) ([f399b9e](https://github.com/folsomintel/fuse/commit/f399b9eed2eb8ec0bbc5d2a07e0feb35325715ee))
+* verify goreleaser checksums before installing release assets ([#122](https://github.com/folsomintel/fuse/issues/122)) ([48a3062](https://github.com/folsomintel/fuse/commit/48a30622ac1f3ef78a81a3cae4bf09c48fa01e6e))
+
 ## [0.9.1](https://github.com/folsomintel/fuse/compare/v0.9.0...v0.9.1) (2026-07-22)
 
 
