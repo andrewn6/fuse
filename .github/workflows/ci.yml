@@ -71,6 +71,46 @@ jobs:
         with:
           version: v2.12.2
 
+  # Blocking vulnerability scan. govulncheck only reports advisories that are
+  # reachable from this module's call graph, so a failure here is a real, callable
+  # vulnerability and not just a flagged dependency version. Covers both modules:
+  # the root module and the standalone sdks/go module (built with GOWORK=off so
+  # the workspace does not mask what a real consumer resolves).
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Scan root module
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+      - name: Scan sdks/go module
+        env:
+          GOWORK: "off"
+        working-directory: sdks/go
+        run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
+
+  # Installer/updater shell tests. The release-asset checksum helper is embedded
+  # in two standalone scripts rather than sourced, so this job is what keeps the
+  # copies from drifting apart.
+  installer-tests:
+    name: Installer tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checksum verification tests
+        run: ./host-agent/test-verify-checksum.sh
+
   # Validate the GoReleaser config on every PR so a CD-breaking change is caught
   # here instead of only when a release tag is pushed.
   release-config:
@@ -90,17 +130,6 @@ jobs:
         with:
           version: "~> v2"
           args: check
-
-  # Release-asset checksum verification used by the installer/updater scripts.
-  # Pure bash, no network needed for the cases that matter, so it runs on every
-  # PR rather than only being exercised during a real install.
-  install-scripts:
-    name: Install scripts
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: release-verify tests
-        run: ./scripts/lib/test-release-verify.sh
 
   # TypeScript SDK (sdks/typescript): lint, typecheck, test, and build. Runs in
   # parallel with the Go jobs and is independent of them.

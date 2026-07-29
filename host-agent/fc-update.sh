@@ -26,15 +26,6 @@ FC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO="${FUSE_REPO:-folsomintel/fuse}"
 MARKER="$FC_DIR/.fc-version"
 
-# SHA-256 verification for every release asset this script installs. Sourcing
-# it is mandatory: without the helpers there is no way to check a download, so
-# a missing library is a hard failure rather than a silent skip.
-# shellcheck source=../scripts/lib/release-verify.sh
-. "$FC_DIR/../scripts/lib/release-verify.sh" || {
-  printf '\033[1;31m  ✗ %s\033[0m\n' "cannot source scripts/lib/release-verify.sh" >&2
-  exit 1
-}
-
 log()  { printf '\033[1;36m[update] %s\033[0m\n' "$*"; }
 ok()   { printf '\033[1;32m  ✓ %s\033[0m\n' "$*"; }
 warn() { printf '\033[1;33m  ! %s\033[0m\n' "$*" >&2; }
@@ -57,6 +48,78 @@ curl_dl() {
   else
     curl -fsSL "$@"
   fi
+}
+
+# >>> fuse release-asset checksum verification >>>
+# This block is embedded, not sourced: scripts/install-orchestrator.sh is
+# documented as curl-able and run standalone on a fresh host, so a sibling
+# library file is not guaranteed to exist on disk. Keep the copies in
+# host-agent/fc-update.sh, host-agent/fc-agent.sh and
+# scripts/install-orchestrator.sh byte-identical;
+# host-agent/test-verify-checksum.sh asserts that and exercises the helper.
+
+# sha256_of <file> - print the file's lowercase sha256, or fail if no tool.
+sha256_of() {
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | cut -d' ' -f1
+  else
+    return 1
+  fi
+}
+
+# verify_asset <file> <asset-name> <checksums-file>
+# Fails closed. A missing checksum tool, a missing or empty checksums file, a
+# missing entry for this exact asset name, or a digest mismatch all return
+# non-zero, so the caller must not install, extract, or execute the asset.
+verify_asset() {
+  local file="$1" name="$2" sums="$3" want="" got="" sum path
+  if ! command -v sha256sum >/dev/null 2>&1 && ! command -v shasum >/dev/null 2>&1; then
+    echo "checksum verification needs sha256sum or shasum; refusing $name" >&2
+    return 1
+  fi
+  if [ ! -f "$file" ]; then
+    echo "asset $name is missing; nothing to verify" >&2
+    return 1
+  fi
+  if [ ! -s "$sums" ]; then
+    echo "checksums.txt is missing or empty; refusing $name" >&2
+    return 1
+  fi
+  # goreleaser writes "<sha256>  <asset>"; binary-mode tools prefix the name "*".
+  while read -r sum path; do
+    case "$path" in
+      "$name"|"*$name") want="$sum"; break ;;
+    esac
+  done < "$sums"
+  if [ -z "$want" ]; then
+    echo "no checksum entry for $name in checksums.txt; refusing it" >&2
+    return 1
+  fi
+  got="$(sha256_of "$file")" || return 1
+  if [ "$want" != "$got" ]; then
+    echo "checksum mismatch for $name: want $want, got $got" >&2
+    return 1
+  fi
+}
+# <<< fuse release-asset checksum verification <<<
+
+# One temp dir for every download this run makes, removed on any exit so a
+# rejected asset is never left lying around next to the real binary.
+FC_TMP="$(mktemp -d)"
+trap 'rm -rf "$FC_TMP"' EXIT
+CHECKSUMS=""
+
+# fetch_checksums <tag> - download checksums.txt for that exact release tag,
+# once per run. Fatal if absent: without it nothing from the release can be
+# verified, and installing unverified assets is what this guards against.
+fetch_checksums() {
+  if [ -n "$CHECKSUMS" ]; then return 0; fi
+  local dest="$FC_TMP/checksums.txt"
+  curl_dl -o "$dest" "https://github.com/$REPO/releases/download/$1/checksums.txt" \
+    || die "release $1 publishes no checksums.txt - refusing to install unverified assets"
+  CHECKSUMS="$dest"
 }
 
 case "$(uname -m)" in
@@ -98,19 +161,13 @@ fi
 if [ -n "$LATEST" ]; then
   ASSET="fused_Linux_${ASSET_ARCH}"
   log "downloading $ASSET ($LATEST)"
-  TMP="$(mktemp)"
+  TMP="$FC_TMP/$ASSET"
   if curl_dl -o "$TMP" "https://github.com/$REPO/releases/download/$LATEST/$ASSET"; then
-    # Verify before chmod +x and before running --version: an unverified
-    # binary must never be executed, and the installed fused must stay
-    # untouched if the check fails.
-    SUMS="$(mktemp)"
-    fuse_fetch_checksums "$REPO" "$LATEST" "$SUMS" \
-      || { rm -f "$TMP" "$SUMS"; die "no checksums.txt for release $LATEST — refusing to install $ASSET"; }
-    fuse_verify_asset "$TMP" "$ASSET" "$SUMS" \
-      || { rm -f "$TMP" "$SUMS"; die "checksum verification failed for $ASSET ($LATEST)"; }
-    rm -f "$SUMS"
-    ok "verified $ASSET against checksums.txt"
-
+    # Verify before chmod/exec/mv: a truncated or tampered asset must never
+    # become executable or replace the installed agent.
+    fetch_checksums "$LATEST"
+    verify_asset "$TMP" "$ASSET" "$CHECKSUMS" || die "checksum verification failed for $ASSET ($LATEST)"
+    ok "sha256 verified: $ASSET"
     chmod +x "$TMP"
     "$TMP" --version >/dev/null 2>&1 || die "downloaded fused is not runnable on this host (arch mismatch?)"
     mv "$TMP" "$FC_DIR/fused"
@@ -152,19 +209,15 @@ if [ -n "${FUSE_ORCH_SERVICE:-}" ]; then
   if [ -n "$LATEST" ]; then
     log "updating orchestrator -> $FUSE_ORCH_BIN"
     TARBALL="fuse_Linux_${ASSET_ARCH}.tar.gz"
-    TGZ="$(mktemp)"; EXDIR="$(mktemp -d)"; SUMS="$(mktemp)"
+    TGZ="$FC_TMP/$TARBALL"; EXDIR="$FC_TMP/orchestrator-extract"; mkdir -p "$EXDIR"
     curl_dl -o "$TGZ" "https://github.com/$REPO/releases/download/$LATEST/$TARBALL" || die "orchestrator download failed"
-    # Verify before extracting: a bad archive must not reach the filesystem,
-    # and the running orchestrator must not be replaced or restarted.
-    fuse_fetch_checksums "$REPO" "$LATEST" "$SUMS" \
-      || { rm -rf "$TGZ" "$EXDIR" "$SUMS"; die "no checksums.txt for release $LATEST — refusing to install $TARBALL"; }
-    fuse_verify_asset "$TGZ" "$TARBALL" "$SUMS" \
-      || { rm -rf "$TGZ" "$EXDIR" "$SUMS"; die "checksum verification failed for $TARBALL ($LATEST)"; }
-    rm -f "$SUMS"
-    ok "verified $TARBALL against checksums.txt"
+    # Verify before extract/install/restart: on failure die here, leaving the
+    # running orchestrator binary and its service untouched.
+    fetch_checksums "$LATEST"
+    verify_asset "$TGZ" "$TARBALL" "$CHECKSUMS" || die "checksum verification failed for $TARBALL ($LATEST)"
+    ok "sha256 verified: $TARBALL"
     tar -xzf "$TGZ" -C "$EXDIR" orchestrator
     sudo -n install -m 0755 "$EXDIR/orchestrator" "$FUSE_ORCH_BIN"
-    rm -rf "$TGZ" "$EXDIR"
     sudo -n systemctl restart "$FUSE_ORCH_SERVICE"
     ok "orchestrator updated + restarted ($("$FUSE_ORCH_BIN" --version 2>/dev/null || echo '?'))"
   elif command -v go >/dev/null 2>&1; then
