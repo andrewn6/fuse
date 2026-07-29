@@ -68,6 +68,70 @@ class QEMUAgentTest(unittest.TestCase):
         self.assertEqual(meta["image"], "cuda")
         self.assertEqual(Path(meta["rootfs"]).read_bytes(), b"named")
 
+    def assert_image_rejected(self, image):
+        """create_vm must 400 on image before it allocates anything."""
+        with (
+            mock.patch.object(qemu_agent, "setup_tap") as setup_tap,
+            mock.patch.object(qemu_agent, "pick_gpu_slots") as pick_gpu_slots,
+            mock.patch.object(qemu_agent, "add_agent_forward") as add_agent_forward,
+        ):
+            with self.assertRaises(qemu_agent.HTTPError) as raised:
+                qemu_agent.create_vm({"name": "escape-vm", "image": image})
+
+        self.assertEqual(raised.exception.code, 400, image)
+        setup_tap.assert_not_called()
+        pick_gpu_slots.assert_not_called()
+        add_agent_forward.assert_not_called()
+        self.assertFalse((qemu_agent.VMS_DIR / "escape-vm").exists())
+
+    def test_create_rejects_traversal_image_names(self):
+        victim = qemu_agent.VMS_DIR / "victim"
+        victim.mkdir(parents=True)
+        (victim / "rootfs.qcow2").write_bytes(b"victim-secrets")
+
+        for image in (
+            "../agent-state/vms/victim/rootfs",
+            "../../etc/shadow",
+            "sub/../../escape",
+            "./../escape",
+        ):
+            self.assert_image_rejected(image)
+
+    def test_create_rejects_absolute_image_names(self):
+        outside = self.root / "outside.qcow2"
+        outside.write_bytes(b"outside")
+
+        self.assert_image_rejected(str(self.root / "outside"))
+        self.assert_image_rejected("/etc/passwd")
+
+    def test_create_rejects_symlink_escaping_images_dir(self):
+        outside = self.root / "outside.qcow2"
+        outside.write_bytes(b"outside")
+        (qemu_agent.IMAGES_DIR / "linked.qcow2").symlink_to(outside)
+
+        self.assert_image_rejected("linked")
+
+    def test_create_rejects_symlinked_parent_escaping_images_dir(self):
+        elsewhere = self.root / "elsewhere"
+        elsewhere.mkdir()
+        (elsewhere / "cuda.qcow2").write_bytes(b"outside")
+        (qemu_agent.IMAGES_DIR / "nested").symlink_to(elsewhere)
+
+        self.assert_image_rejected("nested/cuda")
+
+    def test_create_rejects_control_characters_in_image_name(self):
+        self.assert_image_rejected("cuda\x00/../../etc/shadow")
+        self.assert_image_rejected("   ")
+
+    def test_create_allows_nested_image_inside_images_dir(self):
+        nested = qemu_agent.IMAGES_DIR / "gpu"
+        nested.mkdir()
+        (nested / "cuda.qcow2").write_bytes(b"nested")
+
+        meta = self.create_without_hardware({"name": "nested-vm", "image": "gpu/cuda"})
+
+        self.assertEqual(Path(meta["rootfs"]).read_bytes(), b"nested")
+
     def test_create_rejects_missing_rootfs_before_network_setup(self):
         with mock.patch.object(qemu_agent, "setup_tap") as setup_tap:
             with self.assertRaises(qemu_agent.HTTPError) as raised:
