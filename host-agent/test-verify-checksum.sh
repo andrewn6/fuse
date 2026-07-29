@@ -2,8 +2,8 @@
 # Unit test for the release-asset checksum verification helper that guards the
 # installer/updater download paths.
 #
-# The helper is embedded (not sourced) in two scripts, so this test extracts the
-# block from each, asserts the copies have not drifted, and then exercises the
+# The helper is embedded (not sourced) in three scripts, so this test extracts
+# the block from each, asserts the copies have not drifted, and then exercises the
 # helper against the cases that matter: a good asset, a tampered one, a
 # truncated one, a missing checksums file, an empty one, a missing entry, and a
 # host with no checksum tool on PATH.
@@ -38,11 +38,15 @@ extract() { awk -v b="$BEGIN" -v e="$END" '$0==b{f=1} f{print} $0==e{f=0}' "$1";
 printf '\n== helper copies are in sync ==\n'
 A="$ROOT/host-agent/fc-update.sh"
 B="$ROOT/scripts/install-orchestrator.sh"
+C="$ROOT/host-agent/fc-agent.sh"
 extract "$A" > "$WORK/a.sh"
 extract "$B" > "$WORK/b.sh"
+extract "$C" > "$WORK/c.sh"
 [ -s "$WORK/a.sh" ] || { echo "  FAIL  no helper block found in $A"; exit 1; }
 [ -s "$WORK/b.sh" ] || { echo "  FAIL  no helper block found in $B"; exit 1; }
+[ -s "$WORK/c.sh" ] || { echo "  FAIL  no helper block found in $C"; exit 1; }
 check "fc-update.sh and install-orchestrator.sh carry the same helper" 0 "$(rc cmp -s "$WORK/a.sh" "$WORK/b.sh")"
+check "fc-agent.sh carries the same helper" 0 "$(rc cmp -s "$WORK/a.sh" "$WORK/c.sh")"
 
 # shellcheck source=/dev/null
 source "$WORK/a.sh"
