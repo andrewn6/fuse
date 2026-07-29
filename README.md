@@ -18,11 +18,19 @@ You bring the hosts. State lives in Postgres and on your disks, nowhere else.
 brew install --cask folsomintel/fuse/fuse
 ```
 
-Upgrade with `brew upgrade --cask fuse`, check with `fuse --version`. On Linux, grab the
-`fuse-cli_Linux_*.tar.gz` archive from the
-[latest release](https://github.com/folsomintel/fuse/releases/latest), or build from a
-checkout with `go build -o bin/fuse ./cli`. Mind the naming: the `fuse_*` archives are the
-orchestrator, `fuse-cli_*` is the CLI.
+Or without Homebrew, on macOS and Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/folsomintel/fuse/main/scripts/install-fuse.sh | bash
+```
+
+The script verifies the release archive against the release's `checksums.txt` before
+installing, and puts the binary in `/usr/local/bin` (or `~/.local/bin` if that is not
+writable). Set `VERSION=vX.Y.Z` to pin a release, `FUSE_INSTALL_DIR` to choose where.
+
+Upgrade with `brew upgrade --cask fuse`, check with `fuse --version`. You can also build
+from a checkout with `go build -o bin/fuse ./cli`. Mind the naming: the `fuse_*` archives
+are the orchestrator, `fuse-cli_*` is the CLI.
 
 ## First run
 

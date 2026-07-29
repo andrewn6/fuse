@@ -33,7 +33,27 @@ project, not this CLI, even once you have tapped `folsomintel/fuse`. Qualify it 
 `folsomintel/fuse/fuse` every time, or an install silently stops receiving updates.
 :::
 
-For Linux without Homebrew, grab the `fuse-cli_Linux_*.tar.gz` archive from the
+### Without Homebrew
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/folsomintel/fuse/main/scripts/install-fuse.sh | bash
+```
+
+Works on macOS and Linux. The script resolves the latest release for your platform,
+verifies the archive against that release's `checksums.txt` before extracting anything,
+and installs to `/usr/local/bin` (falling back to `~/.local/bin` when that is not
+writable). `VERSION=vX.Y.Z` pins a release; `FUSE_INSTALL_DIR=/path` chooses the target.
+
+On macOS this is also the path that avoids Gatekeeper entirely: `curl` does not set the
+`com.apple.quarantine` attribute that a browser download or a Homebrew cask does, so the
+first-launch check never runs. If you did download the archive through a browser and macOS
+refuses to open the binary, clear the attribute:
+
+```bash
+xattr -dr com.apple.quarantine ./fuse
+```
+
+Or grab the `fuse-cli_*` archive for your platform straight from the
 [latest release](https://github.com/folsomintel/fuse/releases/latest).
 
 ## 2. Set up
