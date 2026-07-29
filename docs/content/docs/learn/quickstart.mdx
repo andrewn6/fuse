@@ -80,6 +80,11 @@ This writes a fully commented example `Fusefile` to the current directory. Open 
 adjust `resources`, `run`, and any `services` you need. See
 [Fusefile](/docs/concepts/fusefile) for the full field reference.
 
+The scaffold is deliberately maximal, it names every field. For the opposite end of the
+range, the fewest lines that actually boot, see
+[Your first Fusefile](/docs/learn/first-fusefile). That version needs no `--secret` in
+step 4.
+
 ## 4. Bring it up
 
 ```bash
@@ -113,6 +118,7 @@ fuse environment exec <id> -- echo hello
 
 ## Next steps
 
+- Start from the smallest working file: [Your first Fusefile](/docs/learn/first-fusefile)
 - Learn what each Fusefile field does: [Fusefile](/docs/concepts/fusefile)
 - Understand the VM lifecycle: [Environments](/docs/concepts/environments)
 - Run fractional GPUs with MIG: [GPU host setup](/docs/cloud/gpu-host-setup)

@@ -1,0 +1,94 @@
+---
+title: Your first Fusefile
+sidebar:
+  icon: file-plus
+description: The smallest Fusefile that boots, explained line by line
+---
+
+`fuse init` writes a Fusefile that names every field. That is useful as a
+reference, but it is not the smallest thing that runs: it declares a secret you
+have to supply, and it points `image` at an OCI ref that no host agent can
+resolve. This page is the other end of the range — the fewest lines that
+actually boot.
+
+```yaml
+version: 1
+
+resources:
+  cpus: 2
+  memory: 2GB
+
+run: echo "hello from $(hostname)" > hello.txt
+```
+
+Save that as `./Fusefile` and bring it up with no flags at all:
+
+```bash
+fuse up
+fuse environment exec <id> -- cat /workspace/hello.txt
+```
+
+:::warning[This assumes a Firecracker host with the baked base rootfs]
+The example requests no GPU, so the scheduler will not route it to a QEMU
+backend. It runs on a host set up by
+[Firecracker host setup](/docs/cloud/firecracker-host-setup), which bakes the
+base rootfs the omitted `image` field falls back to.
+:::
+
+## Line by line
+
+| Line | Why it is here | What happens if you drop it |
+| --- | --- | --- |
+| `version: 1` | The only strictly required key. | `Parse` fails with `version: must be 1`. |
+| `resources.cpus`, `resources.memory` | Sizes the guest. `memory` takes an `MB`/`GB` suffix and compiles to `ram_mb`. | The wire ships `cpus: 0, ram_mb: 0` and the host agent silently substitutes 1 vCPU and 512MB. Nothing errors; you get a box a quarter the size you expected. |
+| `run` | The entrypoint. Compiles into `startup_script`, after the strict-mode prelude and any `setup` lines. | With neither `setup` nor `run`, the compiled startup script is empty and the VM boots idle, with no error to tell you so. |
+
+The compiled startup script for the file above is:
+
+```sh
+set -eu
+if (set -o pipefail) 2>/dev/null; then set -o pipefail; fi
+mkdir -p '/workspace'
+cd '/workspace'
+echo "hello from $(hostname)" > hello.txt
+```
+
+## What is deliberately absent
+
+- **`image`** — omitted, so the environment uses the host's baked base rootfs.
+  This is the single change that makes this example runnable where the `fuse
+  init` scaffold's placeholder is not.
+- **`workspace`** — omitted, defaults to `/workspace`. The compiler emits
+  `mkdir -p '/workspace'` then `cd '/workspace'`, which is why `run` can write
+  to a relative path.
+- **`secrets`** — omitted, so `fuse up` needs no `--secret`. Any name listed
+  there is a hard precondition, checked before the first network call.
+- **`storage`** — omitted. It is scheduling accounting only: neither host agent
+  resizes a disk, fc-agent just records the value in the VM's metadata.
+- **`setup`** — commands run once at boot, before `run`. See
+  [Fusefile](/docs/concepts/fusefile).
+- **`services`** — sidecar containers brought up inside the VM. See
+  [Fusefile](/docs/concepts/fusefile).
+- **`expose`** — guest ports published externally. See
+  [Fusefile](/docs/concepts/fusefile).
+- **`max_runtime`** — a Go duration ceiling on the environment's lifetime. See
+  [Fusefile](/docs/concepts/fusefile).
+
+## Two things that surprise people
+
+**There is no `task_id` key.** The CLI derives the task id from the Fusefile's
+parent directory name, falling back to `fuse-env` for degenerate paths. A
+Fusefile in `~/work/hello/Fusefile` shows up as task `hello` in
+`fuse environment list`.
+
+**`run` must terminate.** The startup script runs synchronously while the
+environment is being created, under a 30 second ceiling. A one-line `run` is
+exactly where someone first tries `python -m http.server`, and that fails the
+create rather than leaving you with a running box. Background anything
+long-lived, or declare it under `services` instead.
+
+## Where to go next
+
+- Every field, with the GPU and MIG rules: [Fusefile](/docs/concepts/fusefile)
+- The VM lifecycle around it: [Environments](/docs/concepts/environments)
+- The full first-run path: [Quickstart](/docs/learn/quickstart)
