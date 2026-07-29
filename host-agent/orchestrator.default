@@ -31,8 +31,15 @@ TOKEN_ENCRYPTION_KEY=
 
 # --- TLS: terminate at a reverse proxy (recommended). To terminate in the   ---
 # --- orchestrator itself instead, uncomment both and point at your cert/key. ---
+# --- Setting only one of the two fails at startup.                          ---
 # ORCH_TLS_CERT=/etc/fuse/tls/orchestrator.crt
 # ORCH_TLS_KEY=/etc/fuse/tls/orchestrator.key
+
+# --- Session cookies. The login cookie carries the master token, so it needs ---
+# --- the Secure flag whenever a browser reaches this API over HTTPS. With a  ---
+# --- TLS-terminating proxy in front the orchestrator only ever sees plain    ---
+# --- HTTP and cannot infer that, so say so explicitly here.                  ---
+ORCH_SECURE_COOKIES=true
 
 # --- Optional: restrict the source networks that may reach the API ---
 # ORCH_ALLOWED_CIDRS=10.0.0.0/8,100.64.0.0/10

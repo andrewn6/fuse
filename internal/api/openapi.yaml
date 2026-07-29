@@ -198,7 +198,8 @@ paths:
       description: |
         Exchanges the shared operator token (`ORCH_AUTH_TOKEN`) for an
         HttpOnly `fuse_session` cookie (`SameSite=Lax`, `Secure` when the
-        server serves TLS, 7-day Max-Age) so browser callers never store
+        server serves TLS or `ORCH_SECURE_COOKIES=true`, 7-day Max-Age)
+        so browser callers never store
         the token in JavaScript-readable storage. Only the master token is
         accepted here — not revocable API keys. Mounted outside bearer
         auth (but behind the CIDR allowlist). When the orchestrator runs

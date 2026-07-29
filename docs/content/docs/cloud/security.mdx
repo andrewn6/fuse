@@ -20,13 +20,38 @@ export ORCH_TLS_KEY=/path/to/key.pem
 Both unset (the default) serves plain HTTP. Setting both switches to HTTPS and
 flips the session cookie's `Secure` attribute on, an HttpOnly cookie without
 `Secure` would otherwise be sendable over an accidental plaintext connection.
-Setting only one of the two is treated as **unset**: the orchestrator serves
-plain HTTP and the session cookie loses its `Secure` attribute, with no startup
-error. Confirm the `scheme=https` field on the listening line the orchestrator
-logs at boot rather than assuming TLS came up.
+Setting only one of the two **fails at startup** with a message naming the
+missing variable, so a half-configured deployment can never quietly serve
+plaintext while you believe TLS is on. Confirm the `scheme=https` field on the
+listening line the orchestrator logs at boot rather than assuming TLS came up.
 There is no built-in certificate rotation, mutual TLS, or cipher-suite
 configuration, terminate TLS at a reverse proxy in front of the orchestrator
 if you need any of that.
+
+## Session cookies behind a TLS proxy
+
+```bash
+export ORCH_SECURE_COOKIES=true
+```
+
+When a reverse proxy terminates TLS (the topology recommended above), the
+orchestrator itself speaks plain HTTP and cannot tell that the browser's
+connection was encrypted. Set `ORCH_SECURE_COOKIES=true` so the session cookie,
+which carries the master token for seven days, still gets its `Secure`
+attribute. Without it that cookie is sendable over any plaintext hop.
+
+The orchestrator deliberately ignores `X-Forwarded-Proto` and friends: any
+client can send those headers, so trusting them would let a caller decide
+whether their own session cookie is protected.
+
+| `ORCH_SECURE_COOKIES` | Result                                                          |
+| --------------------- | --------------------------------------------------------------- |
+| unset (default)       | `Secure` when the orchestrator terminates TLS itself, else off   |
+| `true`                | always `Secure`, for TLS-terminating proxy deployments           |
+| `false`               | never `Secure`, for plaintext local development only             |
+
+Any other value fails at startup. Running plaintext without an explicit setting
+logs a warning at boot naming this variable.
 
 ## CIDR allowlisting
 

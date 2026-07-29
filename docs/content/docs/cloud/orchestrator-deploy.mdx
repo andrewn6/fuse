@@ -58,7 +58,8 @@ range covers the fleet.
 | `DATABASE_URL` | `--database-url` | empty → in-memory | Postgres state store connection string. |
 | `TOKEN_ENCRYPTION_KEY` | | | Hex-encoded 32-byte AES key for per-VM token encryption at rest. |
 | `AGENT_DOWNLOAD_URL` | | | URL to fetch the guest agent binary at boot (alternative to baking it in). |
-| `ORCH_TLS_CERT` / `ORCH_TLS_KEY` | `--tls-cert` / `--tls-key` | | Serve the API over TLS. |
+| `ORCH_TLS_CERT` / `ORCH_TLS_KEY` | `--tls-cert` / `--tls-key` | | Serve the API over TLS. Setting only one fails at startup. |
+| `ORCH_SECURE_COOKIES` | `--secure-cookies` | empty → derived from TLS | Force the `Secure` flag on session cookies. Set to `true` when a proxy terminates TLS. See [Security hardening](/docs/cloud/security). |
 | `ORCH_REQUIRE_AUTH` | | `false` | Fail-closed strict mode: refuses to boot unless `ORCH_AUTH_TOKEN`, `TOKEN_ENCRYPTION_KEY`, and `DATABASE_URL` are all set. |
 | `ORCH_AUTH_TOKEN` | `--auth-token` | empty → no auth | Static bearer/master token. See [Authentication](/reference/auth). |
 | `ORCH_ALLOWED_CIDRS` | `--allowed-cidrs` | empty → open | Comma-separated CIDR allowlist. |

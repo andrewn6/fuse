@@ -22,6 +22,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/hex"
+	"errors"
 	"flag"
 	"fmt"
 	"log/slog"
@@ -87,6 +88,48 @@ func envInt(name string, fallback int) int {
 	return n
 }
 
+// resolveTLS reports whether the orchestrator terminates TLS itself. Exactly
+// one of cert/key is always a misconfiguration: the old behaviour silently
+// fell back to plaintext HTTP, which is the worst outcome for an operator who
+// believed they had enabled TLS.
+func resolveTLS(tlsCert, tlsKey string) (bool, error) {
+	switch {
+	case tlsCert != "" && tlsKey != "":
+		return true, nil
+	case tlsCert != "":
+		return false, errors.New("ORCH_TLS_CERT is set but ORCH_TLS_KEY is not; set both to serve TLS, or neither to serve plaintext HTTP")
+	case tlsKey != "":
+		return false, errors.New("ORCH_TLS_KEY is set but ORCH_TLS_CERT is not; set both to serve TLS, or neither to serve plaintext HTTP")
+	default:
+		return false, nil
+	}
+}
+
+// resolveSecureCookies decides whether session cookies get the Secure flag.
+//
+// The session cookie carries the master token, so "is this connection
+// encrypted?" has to be answered by configuration, not by the request. In the
+// documented reverse-proxy topology the orchestrator itself speaks plaintext
+// HTTP and only the proxy sees TLS, so deriving the flag from the listener
+// alone drops Secure on exactly the deployments that most need it. Forwarded
+// headers are deliberately not consulted: any client can send
+// X-Forwarded-Proto, so trusting it would let a caller talk the orchestrator
+// into either setting or dropping the flag.
+//
+// setting is the raw ORCH_SECURE_COOKIES value: empty derives from useTLS.
+func resolveSecureCookies(setting string, useTLS bool) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(setting)) {
+	case "":
+		return useTLS, nil
+	case "true", "1", "yes":
+		return true, nil
+	case "false", "0", "no":
+		return false, nil
+	default:
+		return false, fmt.Errorf("ORCH_SECURE_COOKIES: want true, false, or empty; got %q", setting)
+	}
+}
+
 func run() error {
 	var (
 		listenAddr        string
@@ -101,6 +144,7 @@ func run() error {
 		tlsKey            string
 		authToken         string
 		allowedCIDRs      string
+		secureCookies     string
 	)
 
 	flag.StringVar(&listenAddr, "listen", env("ORCH_LISTEN", ":8080"),
@@ -128,6 +172,9 @@ func run() error {
 		"static Bearer token for API auth (empty = no auth)")
 	flag.StringVar(&allowedCIDRs, "allowed-cidrs", env("ORCH_ALLOWED_CIDRS", ""),
 		"comma-separated CIDR allowlist (empty = open access)")
+	flag.StringVar(&secureCookies, "secure-cookies", env("ORCH_SECURE_COOKIES", ""),
+		`force the Secure flag on session cookies: "true" behind a TLS-terminating `+
+			`proxy, "false" for plaintext local development, empty = derive from -tls-cert/-tls-key`)
 
 	var showVersion bool
 	flag.BoolVar(&showVersion, "version", false, "print version and exit")
@@ -179,7 +226,28 @@ func run() error {
 		}
 	}
 
+	// TLS and cookie policy, resolved before anything binds a socket so a
+	// half-configured deployment fails at startup rather than serving
+	// plaintext with a sensitive cookie on it.
+	useTLS, err := resolveTLS(tlsCert, tlsKey)
+	if err != nil {
+		return err
+	}
+	useSecureCookies, err := resolveSecureCookies(secureCookies, useTLS)
+	if err != nil {
+		return err
+	}
+
 	logger := slog.New(slog.NewTextHandler(os.Stderr, nil))
+
+	if !useTLS && useSecureCookies {
+		logger.Info("serving plaintext HTTP with Secure session cookies; " +
+			"this is only correct behind a TLS-terminating proxy")
+	}
+	if !useTLS && !useSecureCookies {
+		logger.Warn("session cookies are not marked Secure; " +
+			"set ORCH_SECURE_COOKIES=true when a proxy terminates TLS in front of this listener")
+	}
 
 	// Firecracker is the only backend. Empty FIRECRACKER_BASE_URL falls back
 	// to an in-memory stub inside the firecracker package — that's the dev
@@ -308,15 +376,13 @@ func run() error {
 		)
 	}
 
-	useTLS := tlsCert != "" && tlsKey != ""
-
 	handler := &api.Handler{
 		Fleet:                   fm,
 		NewProvider:             hostProviderFactory,
 		AuthToken:               authToken,
 		APIKeys:                 apiKeyStoreOrNil(apiKeyStore),
 		AllowedCIDRs:            cidrList,
-		SecureCookies:           useTLS,
+		SecureCookies:           useSecureCookies,
 		OnAuthFailure:           auditAuthFail,
 		OnIPReject:              auditIPReject,
 		Version:                 version,
