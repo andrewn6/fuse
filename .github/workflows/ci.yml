@@ -71,6 +71,17 @@ jobs:
         with:
           version: v2.12.2
 
+  # CLI installer script. Runs against a fake release served by a stubbed curl,
+  # so it needs no network and no published tag: it covers the platform ->
+  # goreleaser-asset-name mapping and the fail-closed checksum handling.
+  install-script:
+    name: Install script
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: install-fuse tests
+        run: ./scripts/test-install-fuse.sh
+
   # Validate the GoReleaser config on every PR so a CD-breaking change is caught
   # here instead of only when a release tag is pushed.
   release-config:
