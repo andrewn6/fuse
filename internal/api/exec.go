@@ -1,7 +1,6 @@
 package api
 
 import (
-	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -34,8 +33,7 @@ func (h *Handler) execEnvironment(w http.ResponseWriter, r *http.Request) {
 	vmID := chi.URLParam(r, "vmId")
 
 	var req ExecEnvironmentRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, CodeInvalidArgument, "invalid JSON body: "+err.Error(), nil)
+	if !decodeJSON(w, r, MaxEnvironmentBodyBytes, &req) {
 		return
 	}
 

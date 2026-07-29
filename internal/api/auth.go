@@ -2,7 +2,6 @@ package api
 
 import (
 	"crypto/subtle"
-	"encoding/json"
 	"net/http"
 	"time"
 )
@@ -46,10 +45,11 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Tightly bounded: this is the only body-carrying route reachable
+	// without credentials, so it is the one an anonymous caller could use to
+	// make the server allocate.
 	var req loginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, http.StatusBadRequest, CodeInvalidArgument,
-			"invalid JSON body", nil)
+	if !decodeJSON(w, r, MaxLoginBodyBytes, &req) {
 		return
 	}
 

@@ -158,6 +158,12 @@ const (
 	CodeUnauthorized    = "unauthorized"
 	CodeUnimplemented   = "unimplemented"
 
+	// CodePayloadTooLarge marks a request body that ran past the endpoint's
+	// size limit. Distinct from CodeInvalidArgument because the body may be
+	// perfectly valid JSON and simply too big, which a client can fix by
+	// sending less rather than by sending something different.
+	CodePayloadTooLarge = "payload_too_large"
+
 	// CodeRouteNotFound distinguishes "this URL isn't a route this server
 	// exposes" (wrong host, wrong port, not the orchestrator at all) from
 	// CodeNotFound's "route exists, resource doesn't" (e.g. an unknown vm
