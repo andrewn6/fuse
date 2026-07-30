@@ -43,6 +43,12 @@ func newUpCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("%s: %w", path, err)
 			}
+			// `files` entries name sources relative to the Fusefile, not the
+			// working directory, so `fuse up -f ../other/Fusefile` reads the
+			// same files it would from that directory.
+			if err := fusefile.ResolveFiles(f, filepath.Dir(path)); err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
 			// --from-build boots a rootfs that already has the setup phase
 			// baked in, so this boot runs no setup steps at all. the layer
 			// cache is a property of running them, so both flags that govern
@@ -130,11 +136,12 @@ func newUpCmd() *cobra.Command {
 					HostID:             c.Spec.HostID,
 					Labels:             c.Spec.Labels,
 				},
-				ManifestInline: manifestInline,
-				Secrets:        secretMap,
-				StartupScript:  startupScript,
-				Expose:         toSDKExpose(c.Expose),
-				SeedSnapshotID: fromBuild,
+				ManifestInline:              manifestInline,
+				Secrets:                     secretMap,
+				StartupScript:               startupScript,
+				StartupScriptTimeoutSeconds: c.StartupTimeoutSeconds,
+				Expose:                      toSDKExpose(c.Expose),
+				SeedSnapshotID:              fromBuild,
 			})
 			if err != nil {
 				return friendly(err)

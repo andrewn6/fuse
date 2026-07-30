@@ -1469,6 +1469,16 @@ components:
         startup_script:
           type: string
           description: Optional script run inside the guest at boot.
+        startup_script_timeout_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Bound on `startup_script`. Omit or send 0 for the
+            orchestrator's default (30s). The script runs synchronously
+            inside this request, so a value above the orchestrator's
+            configured maximum (`-max-startup-script-timeout`, 55s by
+            default) is rejected with 400 rather than clamped.
         gateway_url:
           type: string
         gateway_token:

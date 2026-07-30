@@ -91,6 +91,14 @@ var (
 	// caller saw an opaque 500. Long-lived processes belong in `services`,
 	// or must be backgrounded by the script itself.
 	ErrStartupScriptTimeout = errors.New("startup script did not complete in time")
+
+	// ErrStartupScriptTimeoutTooLarge is returned by ProvisionAndAssign when
+	// the caller asks for a startup script bound above the fleet's ceiling.
+	// The request is refused rather than clamped: a caller that silently got
+	// 55s when it asked for 10m would read the resulting
+	// ErrStartupScriptTimeout as "my script is slow" instead of "my bound was
+	// never honored".
+	ErrStartupScriptTimeoutTooLarge = errors.New("startup script timeout exceeds the configured maximum")
 )
 
 // VMState represents the lifecycle state of a managed VM.
@@ -233,6 +241,13 @@ type FleetConfig struct {
 	// a create that trips it still returns a classified error.
 	StartupScriptTimeout time.Duration
 
+	// MaxStartupScriptTimeout is the largest bound a caller may request via
+	// BootOptions.StartupScriptTimeout. Default
+	// DefaultMaxStartupScriptTimeout. A request above it is refused with
+	// ErrStartupScriptTimeoutTooLarge. Keep it under the HTTP write timeout
+	// for the same reason StartupScriptTimeout is kept under it.
+	MaxStartupScriptTimeout time.Duration
+
 	// DefaultSnapshotRetention applies to snapshots created without an
 	// explicit retention window. Zero leaves snapshots unbounded until
 	// explicitly deleted.
@@ -277,7 +292,8 @@ type FleetManager struct {
 	logger   *slog.Logger
 	metrics  ReconcileMetrics
 
-	startupScriptTimeout time.Duration
+	startupScriptTimeout    time.Duration
+	maxStartupScriptTimeout time.Duration
 
 	reconcileInterval time.Duration
 
@@ -361,6 +377,15 @@ func NewFleetManager(cfg FleetConfig) *FleetManager {
 	if cfg.StartupScriptTimeout <= 0 {
 		cfg.StartupScriptTimeout = DefaultStartupScriptTimeout
 	}
+	if cfg.MaxStartupScriptTimeout <= 0 {
+		cfg.MaxStartupScriptTimeout = DefaultMaxStartupScriptTimeout
+	}
+	// A ceiling below the default would make the default itself unrequestable
+	// and, worse, silently unreachable for callers that set nothing. Raise it
+	// to the default rather than starting in a state where the two disagree.
+	if cfg.MaxStartupScriptTimeout < cfg.StartupScriptTimeout {
+		cfg.MaxStartupScriptTimeout = cfg.StartupScriptTimeout
+	}
 
 	return &FleetManager{
 		provider:                 cfg.Provider,
@@ -370,6 +395,7 @@ func NewFleetManager(cfg FleetConfig) *FleetManager {
 		logger:                   cfg.Logger,
 		metrics:                  cfg.Metrics,
 		startupScriptTimeout:     cfg.StartupScriptTimeout,
+		maxStartupScriptTimeout:  cfg.MaxStartupScriptTimeout,
 		reconcileInterval:        cfg.ReconcileInterval,
 		taskStuckTimeout:         cfg.TaskStuckTimeout,
 		defaultIdleTimeout:       cfg.DefaultIdleTimeout,
@@ -508,9 +534,14 @@ func (fm *FleetManager) Stop() {
 // Blocks until the VM is ready or an error occurs.
 func (fm *FleetManager) ProvisionAndAssign(ctx context.Context, taskID string, spec Spec, manifest []byte, secretMap map[string]string, opts BootOptions) (*VMInfo, error) {
 	// Callers that do not pick their own bound inherit the fleet's, so a
-	// startup script can never hang a create indefinitely.
+	// startup script can never hang a create indefinitely. A caller that does
+	// pick one is held to the fleet's ceiling, since the bound is really a
+	// hold on the create connection.
 	if opts.StartupScriptTimeout <= 0 {
 		opts.StartupScriptTimeout = fm.startupScriptTimeout
+	} else if opts.StartupScriptTimeout > fm.maxStartupScriptTimeout {
+		return nil, fmt.Errorf("%w: requested %s, maximum is %s",
+			ErrStartupScriptTimeoutTooLarge, opts.StartupScriptTimeout, fm.maxStartupScriptTimeout)
 	}
 
 	// Check for duplicate task.

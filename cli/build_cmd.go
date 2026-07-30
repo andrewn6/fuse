@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -49,6 +50,9 @@ func newBuildCmd() *cobra.Command {
 			}
 			f, err := fusefile.Parse(data)
 			if err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+			if err := fusefile.ResolveFiles(f, filepath.Dir(path)); err != nil {
 				return fmt.Errorf("%s: %w", path, err)
 			}
 			if noCache {

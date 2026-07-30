@@ -126,6 +126,18 @@ func validate(f *Fusefile) error {
 		}
 	}
 
+	// Which body a file carries is checked here rather than at compile time:
+	// ResolveFiles folds Source into Content in between, after which the two
+	// cases are indistinguishable.
+	for i, file := range f.Files {
+		switch {
+		case file.Source != "" && file.Content != "":
+			errs = append(errs, fmt.Errorf("files[%d]: source and content are mutually exclusive", i))
+		case file.Source == "" && file.Content == "":
+			errs = append(errs, fmt.Errorf("files[%d]: source or content is required", i))
+		}
+	}
+
 	for i, exp := range f.Expose {
 		if exp.Port < 1 || exp.Port > 65535 {
 			errs = append(errs, fmt.Errorf("expose[%d].port: must be between 1 and 65535", i))

@@ -75,6 +75,12 @@ type CreateEnvironmentRequest struct {
 	GatewayToken   string            `json:"gateway_token,omitempty"`
 	Expose         []ExposeSpec      `json:"expose,omitempty"`
 
+	// StartupScriptTimeoutSeconds bounds StartupScript. Zero uses the
+	// orchestrator's default. A value above the orchestrator's configured
+	// maximum is rejected with 400 rather than clamped, so a caller is never
+	// left thinking it got a bound it did not get.
+	StartupScriptTimeoutSeconds int64 `json:"startup_script_timeout_seconds,omitempty"`
+
 	// SeedSnapshotID boots the environment from an existing snapshot artifact
 	// (see `fuse build`) rather than from spec.image, which it is mutually
 	// exclusive with. The artifact is host-local and there is no object

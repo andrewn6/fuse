@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -627,5 +628,52 @@ func TestProvisionAndAssign_noPlacementOnNoHostsPathUnchanged(t *testing.T) {
 	}
 	if info.State != VMStateRunning {
 		t.Errorf("state = %q, want running", info.State)
+	}
+}
+
+// A caller-supplied startup script bound above the fleet's ceiling is refused
+// rather than clamped, so the caller can tell "my script is slow" apart from
+// "my bound was never honored".
+func TestProvisionAndAssignStartupScriptTimeoutCeiling(t *testing.T) {
+	fm := NewFleetManager(FleetConfig{
+		Provider:                newMockProvider(),
+		Prefix:                  "fuse-",
+		MaxStartupScriptTimeout: 45 * time.Second,
+	})
+
+	_, err := fm.ProvisionAndAssign(context.Background(), "task-1", Spec{}, []byte(`{}`), nil,
+		BootOptions{StartupScriptTimeout: 10 * time.Minute})
+	if !errors.Is(err, ErrStartupScriptTimeoutTooLarge) {
+		t.Fatalf("err = %v, want ErrStartupScriptTimeoutTooLarge", err)
+	}
+	if !strings.Contains(err.Error(), "45s") {
+		t.Errorf("error %q does not name the ceiling the caller must fit under", err)
+	}
+}
+
+func TestProvisionAndAssignStartupScriptTimeoutWithinCeiling(t *testing.T) {
+	fm := NewFleetManager(FleetConfig{
+		Provider:                newMockProvider(),
+		Prefix:                  "fuse-",
+		MaxStartupScriptTimeout: 45 * time.Second,
+	})
+
+	if _, err := fm.ProvisionAndAssign(context.Background(), "task-1", Spec{}, []byte(`{}`), nil,
+		BootOptions{StartupScriptTimeout: 40 * time.Second}); err != nil {
+		t.Fatalf("provision with an in-range timeout: %v", err)
+	}
+}
+
+// A ceiling below the default would leave the default itself unrequestable, so
+// NewFleetManager raises it instead of starting in a self-contradictory state.
+func TestNewFleetManagerCeilingNeverBelowDefault(t *testing.T) {
+	fm := NewFleetManager(FleetConfig{
+		Provider:                newMockProvider(),
+		StartupScriptTimeout:    30 * time.Second,
+		MaxStartupScriptTimeout: 5 * time.Second,
+	})
+	if fm.maxStartupScriptTimeout != 30*time.Second {
+		t.Errorf("maxStartupScriptTimeout = %s, want it raised to the default bound (30s)",
+			fm.maxStartupScriptTimeout)
 	}
 }
