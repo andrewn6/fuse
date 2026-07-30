@@ -131,12 +131,13 @@ func newBuildCmd() *cobra.Command {
 				return friendly(err)
 			}
 			// unlike the startup-script path, build output is surfaced. a build
-			// that fails silently is not debuggable.
+			// that fails silently is not debuggable. guest stdout/stderr keep
+			// their own streams so a caller can separate them.
 			if res.Stdout != "" {
-				fmt.Fprint(cmd.OutOrStdout(), res.Stdout)
+				fmt.Print(res.Stdout)
 			}
 			if res.Stderr != "" {
-				fmt.Fprint(cmd.ErrOrStderr(), res.Stderr)
+				fmt.Fprint(os.Stderr, res.Stderr)
 			}
 			if res.ExitCode != 0 {
 				destroy()
@@ -163,7 +164,7 @@ func newBuildCmd() *cobra.Command {
 			successf("built %s", snap.ID)
 			// the id goes to stdout so `fuse up --from-build "$(fuse build)"`
 			// works; all other chatter is on stderr.
-			fmt.Fprintln(cmd.OutOrStdout(), snap.ID)
+			fmt.Println(snap.ID)
 			return nil
 		},
 	}
