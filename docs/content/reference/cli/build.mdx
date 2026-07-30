@@ -65,6 +65,8 @@ accumulate on the host with no ceiling. Delete them yourself with
 | `--secret` | Secret as `key=value`. Repeatable. Overrides `--secrets-file` on key collision. |
 | `--secrets-file` | Path to a file of `KEY=VALUE` secret lines. |
 | `--keep` | Leave the builder environment running instead of destroying it. For debugging a failed build. |
+| `--plan` | Print the derived [setup layer cache](/docs/concepts/fusefile#the-setup-layer-cache) plan and exit without building anything. |
+| `--no-cache` | Ignore the Fusefile's `cache` block and run every setup step. |
 
 Path resolution matches [`fuse up`](/reference/cli/up): `-f/--file`, then a
 positional argument, then `./Fusefile`.
@@ -86,8 +88,26 @@ never starts your application. On a later `fuse up --from-build`, `setup:` is
 skipped and only `run:` executes, since the setup result is already baked into
 the artifact's rootfs.
 
-A Fusefile with no `setup:` lines has nothing to build and `fuse build` exits
+A Fusefile with no `setup:` steps has nothing to build and `fuse build` exits
 non-zero rather than producing an empty artifact.
+
+## The layer cache
+
+`build` is where the `setup:` phase actually runs, so the
+[setup layer cache](/docs/concepts/fusefile#the-setup-layer-cache) describes
+exactly this command's work. `--plan` prints the derived keys and exits, and
+`--no-cache` ignores the Fusefile's `cache` block for one run. The plan is the
+same one [`fuse up --plan`](/reference/cli/up) prints for the same Fusefile:
+there is one key derivation, not one per command.
+
+```bash
+fuse build --plan
+fuse build --plan -o json
+```
+
+When caching is enabled, the plan is also derived before the builder boots, so a
+`setup[].inputs` entry that matches no files fails immediately rather than after
+a VM is up and holding host capacity.
 
 `--from-build` and a Fusefile `image:` are mutually exclusive: both name the
 rootfs to boot from.

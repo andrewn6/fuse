@@ -75,7 +75,7 @@ secrets:
 	if f.Workspace != "/workspace" {
 		t.Errorf("workspace: got %q, want %q", f.Workspace, "/workspace")
 	}
-	if len(f.Setup) != 1 || f.Setup[0] != "echo hi" {
+	if len(f.Setup) != 1 || f.Setup[0].Run != "echo hi" {
 		t.Errorf("setup: got %v, want [echo hi]", f.Setup)
 	}
 }
@@ -307,5 +307,138 @@ placement:
 	}
 	if got := strings.Index(msg, "bad key"); got > strings.Index(msg, "bad value") {
 		t.Errorf("error %q: want the sorted key order (disk after the bad key)", msg)
+	}
+}
+
+func TestParseSetupStepForms(t *testing.T) {
+	src := `version: 1
+cache:
+  enabled: true
+setup:
+  - apt-get update -qq
+  - run: npm ci
+    inputs:
+      - package.json
+      - package-lock.json
+  - run: ./scripts/register.sh
+    cache: false
+`
+	f, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !f.Cache.Enabled {
+		t.Errorf("cache.enabled: got false, want true")
+	}
+	if len(f.Setup) != 3 {
+		t.Fatalf("setup: got %d steps, want 3", len(f.Setup))
+	}
+
+	// the bare scalar form keeps working and carries no extra fields.
+	if f.Setup[0].Run != "apt-get update -qq" {
+		t.Errorf("setup[0].run: got %q", f.Setup[0].Run)
+	}
+	if f.Setup[0].Inputs != nil || f.Setup[0].Cache != nil {
+		t.Errorf("setup[0]: bare scalar picked up extra fields: %+v", f.Setup[0])
+	}
+
+	if f.Setup[1].Run != "npm ci" {
+		t.Errorf("setup[1].run: got %q", f.Setup[1].Run)
+	}
+	if len(f.Setup[1].Inputs) != 2 || f.Setup[1].Inputs[0] != "package.json" {
+		t.Errorf("setup[1].inputs: got %v", f.Setup[1].Inputs)
+	}
+	if f.Setup[1].Cache != nil {
+		t.Errorf("setup[1].cache: got %v, want unset", *f.Setup[1].Cache)
+	}
+
+	if f.Setup[2].Cache == nil || *f.Setup[2].Cache {
+		t.Errorf("setup[2].cache: got %v, want an explicit false", f.Setup[2].Cache)
+	}
+}
+
+// a custom UnmarshalYAML does not inherit the decoder's KnownFields(true), so
+// the step mapping needs its own unknown-key check or a typo parses as an
+// empty step.
+func TestParseRejectsUnknownStepField(t *testing.T) {
+	_, err := Parse([]byte("version: 1\nsetup:\n  - ruh: npm ci\n"))
+	if err == nil {
+		t.Fatalf("expected an error for an unknown step field")
+	}
+	if !strings.Contains(err.Error(), "ruh") {
+		t.Errorf("error %q does not name the unknown field", err.Error())
+	}
+}
+
+func TestParseRejectsBadSetupSteps(t *testing.T) {
+	cases := []struct {
+		name        string
+		src         string
+		wantContain string
+	}{
+		{
+			name:        "empty run",
+			src:         "version: 1\nsetup:\n  - run: \"\"\n",
+			wantContain: "setup[0].run: is required",
+		},
+		{
+			name:        "blank scalar step",
+			src:         "version: 1\nsetup:\n  - \"   \"\n",
+			wantContain: "setup[0].run: is required",
+		},
+		{
+			name:        "inputs on an uncacheable step",
+			src:         "version: 1\nsetup:\n  - run: x\n    cache: false\n    inputs: [a]\n",
+			wantContain: "setup[0].inputs: not allowed on a step with cache: false",
+		},
+		{
+			name:        "absolute input",
+			src:         "version: 1\nsetup:\n  - run: x\n    inputs: [/etc/passwd]\n",
+			wantContain: "setup[0].inputs[0]: must be relative",
+		},
+		{
+			name:        "traversing input",
+			src:         "version: 1\nsetup:\n  - run: x\n    inputs: [\"../../etc/passwd\"]\n",
+			wantContain: "setup[0].inputs[0]: must not traverse outside",
+		},
+		{
+			name:        "traversing input via a subdirectory",
+			src:         "version: 1\nsetup:\n  - run: x\n    inputs: [\"a/../../b\"]\n",
+			wantContain: "setup[0].inputs[0]: must not traverse outside",
+		},
+		{
+			name:        "empty input",
+			src:         "version: 1\nsetup:\n  - run: x\n    inputs: [\"\"]\n",
+			wantContain: "setup[0].inputs[0]: must not be empty",
+		},
+		{
+			name:        "step is a list",
+			src:         "version: 1\nsetup:\n  - [a, b]\n",
+			wantContain: "must be a string or a mapping",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse([]byte(tc.src))
+			if err == nil {
+				t.Fatalf("expected an error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantContain) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantContain)
+			}
+		})
+	}
+}
+
+// a step inside a subdirectory is fine; only escaping the Fusefile's directory
+// is rejected.
+func TestParseAcceptsNestedInputPaths(t *testing.T) {
+	f, err := Parse([]byte("version: 1\nsetup:\n  - run: x\n    inputs: [\"src/**/*.go\", \"./package.json\", \"a/../b\"]\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(f.Setup[0].Inputs) != 3 {
+		t.Errorf("inputs: got %v", f.Setup[0].Inputs)
 	}
 }

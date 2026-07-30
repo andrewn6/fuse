@@ -35,6 +35,12 @@ func TestInitWritesParseableFusefile(t *testing.T) {
 	if f.Version != 1 {
 		t.Errorf("version = %d, want 1", f.Version)
 	}
+	if !f.Cache.Enabled {
+		t.Errorf("cache.enabled = false, want the scaffold to opt in")
+	}
+	if len(f.Setup) != 1 {
+		t.Errorf("setup = %v, want the one uncommented step", f.Setup)
+	}
 	svc, ok := f.Services["postgres"]
 	if !ok {
 		t.Fatalf("services.postgres missing from scaffold")

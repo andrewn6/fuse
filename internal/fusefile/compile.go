@@ -353,9 +353,23 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// compileStartupScript joins setup lines and the run command into a single
-// shell script with a strict-mode prelude. if there is nothing to run (no
-// setup lines and no run command), it returns "" rather than a bare prelude.
+// setupScripts returns the shell fragment emitted for each setup step, in
+// order. compileStartupScript concatenates exactly this, and layer key
+// derivation hashes exactly this, so the key and the emitted script cannot
+// drift apart. a step's fragment is its `run` string byte for byte: no
+// normalization, because guessing at semantic equivalence is how a cache
+// serves a stale rootfs.
+func setupScripts(f *Fusefile) []string {
+	if len(f.Setup) == 0 {
+		return nil
+	}
+	out := make([]string, len(f.Setup))
+	for i, step := range f.Setup {
+		out[i] = step.Run
+	}
+	return out
+}
+
 // scriptPrelude renders the strict-mode header and the workspace cd that every
 // generated script shares.
 //
@@ -379,23 +393,24 @@ func scriptPrelude(f *Fusefile) string {
 	return b.String()
 }
 
-// compileBuildScript renders the setup lines alone, without the run command.
+// compileBuildScript renders the setup steps alone, without the run command.
 // an empty setup phase yields "" rather than a bare prelude, matching
-// compileStartupScript.
+// compileStartupScript. it emits exactly the fragments layer keys are derived
+// from, so a `fuse build` runs the same bytes the plan hashed.
 func compileBuildScript(f *Fusefile) string {
 	if len(f.Setup) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString(scriptPrelude(f))
-	for _, line := range f.Setup {
-		b.WriteString(line)
+	for _, script := range setupScripts(f) {
+		b.WriteString(script)
 		b.WriteString("\n")
 	}
 	return b.String()
 }
 
-// compileRunScript renders the run command alone, without the setup lines.
+// compileRunScript renders the run command alone, without the setup steps.
 func compileRunScript(f *Fusefile) string {
 	if f.Run == "" {
 		return ""
@@ -403,6 +418,9 @@ func compileRunScript(f *Fusefile) string {
 	return scriptPrelude(f) + f.Run + "\n"
 }
 
+// compileStartupScript joins the setup steps and the run command into a single
+// shell script with a strict-mode prelude. if there is nothing to run (no
+// setup steps and no run command), it returns "" rather than a bare prelude.
 func compileStartupScript(f *Fusefile) string {
 	if len(f.Setup) == 0 && f.Run == "" {
 		return ""
@@ -410,8 +428,8 @@ func compileStartupScript(f *Fusefile) string {
 
 	var b strings.Builder
 	b.WriteString(scriptPrelude(f))
-	for _, line := range f.Setup {
-		b.WriteString(line)
+	for _, script := range setupScripts(f) {
+		b.WriteString(script)
 		b.WriteString("\n")
 	}
 	if f.Run != "" {

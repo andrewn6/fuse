@@ -45,10 +45,24 @@ placement:
     disk: nvme
     tier: build
 
+# opt in to the setup layer cache. off by default.
+cache:
+  enabled: true
+
 # convenience layer run once at boot, before run. compiles into startup_script.
 setup:
-  - apt-get update -qq
-  - apt-get install -y --no-install-recommends ripgrep
+  # bare string form: one step, keyed on its bytes plus the step before it.
+  - apt-get update -qq && apt-get install -y --no-install-recommends ripgrep
+
+  # mapping form: `inputs` are hashed into the step's cache key.
+  - run: npm ci
+    inputs:
+      - package.json
+      - package-lock.json
+
+  # a step that reads secrets or has effects outside the rootfs must opt out.
+  - run: ./scripts/register-with-vault.sh
+    cache: false
 
 # services brought up inside the vm. compiles to manifest.services then a compose project.
 services:
@@ -93,7 +107,11 @@ secrets:
 | `resources.idle_timeout` | string | Go duration, minimum `1m`; compiles to `idle_timeout_seconds`. Destroys the environment once it has gone this long with no exec and no attach session. Omit for no idle expiry. |
 | `placement.host` | string | Pins the environment to an exact host id. A pin is not an override: the host must still be active, run the right backend, and fit the request. An unknown host id fails fast with a 404. |
 | `placement.labels` | map | Label selectors matched against the labels an operator declared with `fuse host register --label key=value`. Every pair must match (AND). A selector that matches no host is rejected immediately. |
-| `setup` | list of strings | Commands run once at boot, before `run`. Compiled into `startup_script`. |
+| `cache.enabled` | bool | Opt in to the setup layer cache. Off by default. |
+| `setup` | list of strings or steps | Commands run once at boot, before `run`. Compiled into `startup_script`. Each entry is either a bare string or a `{run, inputs, cache}` mapping. |
+| `setup[].run` | string | The step's shell command. Required in the mapping form. |
+| `setup[].inputs` | list of strings | Files (or directories, or globs) whose contents are hashed into the step's cache key. Relative to the Fusefile's directory; absolute and `..`-traversing paths are rejected. |
+| `setup[].cache` | bool | Set `false` to make the step uncacheable. Required for a step that reads secrets or has effects outside the rootfs. |
 | `services` | map | In-VM services, each with `image`, `ports`, and `env`. Compiles to `manifest.services` plus a compose project. |
 | `services.*.env.*` | literal or secret ref | Exactly one of `value` or `secret` must be set per entry. `{ secret: name }` resolves from the `secrets` you supply at `up` time. |
 | `run` | string | The main entrypoint, compiled into `startup_script` after `setup`. |
@@ -164,6 +182,73 @@ only considers hosts that offer the profile *and* report a MIG-capable device of
 that kind. Hosts that report no per-device inventory fall back to their declared
 `gpu_kind`, and a host that declares neither is left for the qemu agent to accept
 or reject. See [GPU workloads](/docs/guides/gpu-workloads).
+
+## The setup layer cache
+
+`setup` steps compile into one startup script that re-runs in full on every
+`fuse up`. `cache: {enabled: true}` opts the Fusefile into content-addressed
+layers, so a step whose inputs have not changed can be skipped instead of rerun.
+Caching is opt-in: a layer is a rootfs captured mid-provisioning, so it is a
+deliberate choice, never a default.
+
+Each step gets a key derived from the step before it, which is what makes
+invalidation directional:
+
+```
+layer_key(i) = sha256(
+    "fusefile-layer/v1\n" +
+    parent_key(i) + "\n" +     // layer_key(i-1); the base key for i == 0
+    step_script(i) + "\n" +    // the step's `run` string, byte for byte
+    inputs_digest(i) + "\n" +
+    workspace + "\n" +         // setup runs after `cd <workspace>`
+    arch)                      // an ext4 rootfs is not portable across arch
+
+base_key      = "image:" + sha256(<base image reference>)
+inputs_digest = sha256 over the sorted list of
+                (relative path, mode & 0o111, sha256(content)); "" when unset
+```
+
+Edit step *N* and steps *N..end* all get new keys; steps before *N* are
+untouched. The same chaining is why a miss cascades: step *N+1*'s key is defined
+in terms of step *N*'s, so a step whose parent is unknown cannot be keyed at all,
+and neither can anything after it.
+
+Deliberately **not** in the key: secret values, the task ID, `run:` (it is the
+entrypoint, not a layer), and every `resources` field other than the
+architecture, since none of them change the filesystem. There is no
+normalization either: a byte change in a step is a miss, because guessing at
+semantic equivalence is how a cache serves a stale rootfs.
+
+A step that reads `/fuse/secrets.json`, or has effects outside the rootfs, must
+set `cache: false`. Secrets are written to disk before `setup` runs, so a layer
+captured after such a step would bake secret material into a rootfs keyed on
+content that excludes those secrets, and a later `up` with rotated values would
+get a hit. Declaring `inputs` on an uncacheable step is an error.
+
+Two other limits: a GPU environment gets no caching at all (GPU environments run
+on the qemu backend, whose snapshot endpoints hard-501 because a vfio device
+cannot be checkpointed), and layers are host-local, so there is no cross-host
+sharing.
+
+To see the derived keys without creating anything:
+
+```bash
+fuse up --plan
+fuse build --plan
+```
+
+Both print the same plan: there is one key derivation, shared by the two commands
+that run the setup phase. `--no-cache` on either ignores the `cache` block for
+one run.
+
+[`fuse build`](/reference/cli/build) is the more useful of the two, since it is
+the command that runs `setup:` on its own and captures the result. On a
+[`fuse up --from-build`](/reference/cli/up) boot, `setup:` does not run at all,
+so there is no layer plan for it and `--plan` and `--no-cache` are rejected
+there rather than silently ignored.
+
+Every step currently reports as a miss: key derivation and the plan land ahead of
+the layer store they will be looked up in.
 
 ## Scaffolding one
 

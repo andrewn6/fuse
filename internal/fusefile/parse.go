@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -60,6 +63,25 @@ func validate(f *Fusefile) error {
 		}
 	}
 
+	for i, step := range f.Setup {
+		if strings.TrimSpace(step.Run) == "" {
+			errs = append(errs, fmt.Errorf("setup[%d].run: is required", i))
+		}
+		if !step.cacheable() && len(step.Inputs) > 0 {
+			errs = append(errs, fmt.Errorf("setup[%d].inputs: not allowed on a step with cache: false", i))
+		}
+		for j, in := range step.Inputs {
+			switch {
+			case strings.TrimSpace(in) == "":
+				errs = append(errs, fmt.Errorf("setup[%d].inputs[%d]: must not be empty", i, j))
+			case path.IsAbs(in) || filepath.IsAbs(in):
+				errs = append(errs, fmt.Errorf("setup[%d].inputs[%d]: must be relative to the Fusefile, got %q", i, j, in))
+			case escapesRoot(in):
+				errs = append(errs, fmt.Errorf("setup[%d].inputs[%d]: must not traverse outside the Fusefile's directory, got %q", i, j, in))
+			}
+		}
+	}
+
 	serviceNames := make([]string, 0, len(f.Services))
 	for name := range f.Services {
 		serviceNames = append(serviceNames, name)
@@ -97,4 +119,12 @@ func validate(f *Fusefile) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// escapesRoot reports whether a relative input path climbs out of the
+// directory it is resolved against. slashes are normalized first so a
+// windows-authored `..\x` is caught too.
+func escapesRoot(p string) bool {
+	clean := path.Clean(filepath.ToSlash(p))
+	return clean == ".." || strings.HasPrefix(clean, "../")
 }
