@@ -12,6 +12,7 @@ export default defineMeta({
     "up",
     "build",
     "init",
+    "compile",
     "snapshot",
     "apikeys",
     "metrics",
