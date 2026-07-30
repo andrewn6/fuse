@@ -14,13 +14,18 @@ A Fusefile is parsed and compiled entirely client-side (by the CLI) into the
 orchestrator's wire format. The orchestrator itself never sees a Fusefile, only the
 compiled `CreateEnvironmentRequest`.
 
+Everything below is the complete field reference. If you have not written one
+before, start with [Your first Fusefile](/docs/learn/first-fusefile), which is
+the smallest file that boots, explained line by line.
+
 ## Full field reference
 
 ```yaml
 version: 1
 
-# base environment. an oci image ref, or omitted to use the baked base rootfs.
-image: ghcr.io/acme/worker:latest
+# base environment. the name of a rootfs pre-baked on the host, or omitted to
+# use the baked base rootfs.
+image: worker
 
 resources:
   cpus: 2
@@ -68,7 +73,7 @@ secrets:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `version` | int | Currently always `1`. |
-| `image` | string | OCI image ref. Omit to use the baked base rootfs. |
+| `image` | string | Name of a rootfs pre-baked on the host, **not** an OCI image ref. There is no OCI pull: fc-agent resolves it to `<IMAGES_DIR>/<image>.ext4` and qemu-agent to `<IMAGES_DIR>/<image>.qcow2`, and returns a 400 if no such file exists. An operator bakes and places it out of band (e.g. with `fc-bake-rootfs.sh`). Omit to use the baked base rootfs. |
 | `resources.cpus` | int | vCPU count. |
 | `resources.gpu` | int | Device count. Whole GPUs by default, or MIG instances when `gpu_profile` is set. Requires a host registered with the `qemu` backend. |
 | `resources.gpu_kind` | string | Optional GPU model match, e.g. `a100`. See [Providers](/docs/concepts/providers). |
@@ -132,6 +137,12 @@ fuse init
 writes a commented starter Fusefile to `./Fusefile` (or a path passed via
 `-f`/`--file`). Pass `--force` to overwrite an existing file. The scaffold covers the
 common CPU case and omits the GPU fields, add them by hand from the reference above.
+
+The scaffold is intentionally maximal: its value is naming every field with a
+comment, not being the shortest thing that runs. It is not a working file as
+written, it declares a secret you must supply and an `image` that has to exist
+on the host first. For the minimum that boots with a bare `fuse up`, see
+[Your first Fusefile](/docs/learn/first-fusefile).
 
 ## Bringing it up
 
