@@ -24,6 +24,14 @@ type SnapshotMode string
 const (
 	SnapshotModeManual SnapshotMode = "manual"
 	SnapshotModeAuto   SnapshotMode = "auto"
+
+	// SnapshotModeBuild marks a build artifact: a deliberately created,
+	// durable rootfs meant to seed future environments (see `fuse build`).
+	// Unlike manual and auto snapshots it is not an ephemeral checkpoint of
+	// one vm's state, so retention gc and the per-tenant snapshot quota both
+	// skip it. That means build artifacts accumulate until deleted
+	// explicitly; there is no ceiling on them today.
+	SnapshotModeBuild SnapshotMode = "build"
 )
 
 // SnapshotState captures the lifecycle of a persisted snapshot resource.
