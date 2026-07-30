@@ -133,6 +133,17 @@ class Event(BaseModel):
     updated_at: Optional[datetime] = None
     err: Optional[Exception] = Field(default=None, exclude=True)
 
+    # set only on "step" events, which report one setup step's boundary,
+    # timing, and cache verdict. zero on state events.
+    index: int = 0
+    total: int = 0
+    key: str = ""
+    cached: bool = False
+    miss_reason: str = ""
+    miss_detail: list[str] = Field(default_factory=list)
+    duration_ms: int = 0
+    exit_code: int = 0
+
 
 class SnapshotRequest(_Model):
     # optional body for snapshots.create.

@@ -114,7 +114,49 @@ type Event struct {
 	Error     string    `json:"error,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Err       error     `json:"-"`
+
+	// fields below are set only on EventKindStep events, which report one
+	// setup step's boundary, timing, and cache verdict. they are zero on
+	// state events, and on step events from a server that does not report
+	// caching yet.
+	Index      int      `json:"index,omitempty"`
+	Total      int      `json:"total,omitempty"`
+	Key        string   `json:"key,omitempty"`
+	Cached     bool     `json:"cached,omitempty"`
+	MissReason string   `json:"miss_reason,omitempty"`
+	MissDetail []string `json:"miss_detail,omitempty"`
+	DurationMS int64    `json:"duration_ms,omitempty"`
+	ExitCode   int      `json:"exit_code,omitempty"`
 }
+
+// Event kinds carried in Event.Kind. An empty kind means "state": older
+// servers omit the field.
+const (
+	EventKindState = "state"
+	EventKindStep  = "step"
+)
+
+// IsStateEvent reports whether kind is a lifecycle state event, which is the
+// only kind that advances an environment's state. An empty kind counts as a
+// state event for compatibility with servers that omit it.
+func IsStateEvent(kind string) bool {
+	return kind == "" || kind == EventKindState
+}
+
+// Cache miss reasons carried in Event.MissReason. The set is closed so
+// clients can render them, but unknown values must pass through rather than
+// be treated as an error.
+const (
+	MissReasonNoEntry      = "no-entry"
+	MissReasonStepChanged  = "step-changed"
+	MissReasonInputsChange = "inputs-changed"
+	MissReasonParentChange = "parent-changed"
+	MissReasonBaseChanged  = "base-changed"
+	MissReasonUncacheable  = "uncacheable"
+	MissReasonDisabled     = "disabled"
+	MissReasonNotOnHost    = "not-on-host"
+	MissReasonUnsupported  = "unsupported"
+)
 
 // ForkOptions is the optional body for env.Fork.
 type ForkOptions struct {

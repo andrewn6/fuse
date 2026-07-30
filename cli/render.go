@@ -168,6 +168,19 @@ func humanBytes(n int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
+// stepLineStyle colors a setup step line. the verdict word already carries the
+// verdict, so color is decoration and never the only signal.
+func stepLineStyle(e stepEntry) lipgloss.Style {
+	switch {
+	case e.exitCode != 0:
+		return styleBad
+	case e.cached:
+		return styleGood
+	default:
+		return lipgloss.NewStyle()
+	}
+}
+
 // stateStyle colors a lifecycle state for detail views.
 func stateStyle(state string) string {
 	switch state {
