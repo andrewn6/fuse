@@ -201,6 +201,9 @@ func toAPISnapshot(s orchestrator.SnapshotRecord) Snapshot {
 		if exportRef := extractStringField(s.Metadata, "export_ref"); exportRef != "" {
 			out.ExportRef = exportRef
 		}
+		if name := extractStringField(s.Metadata, "name"); name != "" {
+			out.Name = name
+		}
 	}
 	if len(s.Exports) > 0 {
 		out.Exports = make([]SnapshotExport, 0, len(s.Exports))

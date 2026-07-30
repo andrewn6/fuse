@@ -1,0 +1,100 @@
+---
+title: fuse build
+sidebar:
+  icon: hammer
+description: Run a Fusefile's setup phase once and snapshot the result
+---
+
+```bash
+fuse build [path] [flags]
+```
+
+Boots a throwaway environment, runs the [Fusefile](/docs/concepts/fusefile)'s
+`setup:` phase inside it, snapshots the resulting disk, destroys the
+environment, and prints the snapshot ID. Pass that ID to
+[`fuse up --from-build`](/reference/cli/up) to boot an environment with the
+setup work already done.
+
+```bash
+# build once, capture the artifact id
+id=$(fuse build)
+
+# boot from it as many times as you like; setup does not rerun
+fuse up --from-build "$id"
+```
+
+Only the ID goes to stdout, so `$(fuse build)` captures it cleanly. Progress
+and warnings go to stderr.
+
+## Why this exists
+
+`setup:` normally compiles into the environment's startup script, which the
+orchestrator runs **synchronously inside the create request** under a 30 second
+ceiling that is not configurable in the shipped binary. Any real setup step, an
+`apt-get install` included, routinely exceeds it.
+
+`fuse build` runs the same lines through the exec path instead, which allows
+600 seconds, and shows their output so a failing build is debuggable. The
+result is captured once rather than re-run on every boot.
+
+:::warning[Build artifacts are host-local]
+An artifact is a rootfs file on the host that produced it. Fuse has no object
+storage, so an artifact built on one host **cannot** boot on another:
+`fuse up --from-build` pins the environment to the artifact's host and fails
+with a no-capacity error if that host cannot take it.
+
+Artifacts are also **Firecracker-only**. Snapshots are unsupported on QEMU
+hosts, which is where GPU workloads run, so a GPU Fusefile cannot be built this
+way.
+:::
+
+:::warning[Artifacts persist until you delete them]
+Build artifacts are deliberately exempt from snapshot retention sweeping and
+from the per-tenant snapshot quota, because a swept artifact would silently
+break every `fuse up --from-build` that references it. That also means they
+accumulate on the host with no ceiling. Delete them yourself with
+[`fuse snapshot delete`](/reference/cli/snapshot) when a build is superseded.
+:::
+
+## Flags
+
+| Flag | Purpose |
+| --- | --- |
+| `-f, --file` | Path to the Fusefile. Default: `./Fusefile`, or a positional path argument. |
+| `--name` | Name for the build artifact, recorded as its lookup key. Default: the Fusefile's parent directory name. |
+| `--secret` | Secret as `key=value`. Repeatable. Overrides `--secrets-file` on key collision. |
+| `--secrets-file` | Path to a file of `KEY=VALUE` secret lines. |
+| `--keep` | Leave the builder environment running instead of destroying it. For debugging a failed build. |
+
+Path resolution matches [`fuse up`](/reference/cli/up): `-f/--file`, then a
+positional argument, then `./Fusefile`.
+
+## Finding an artifact later
+
+`--name` is recorded on the snapshot so an artifact can be found without its
+random ID:
+
+```bash
+fuse build --name api
+fuse snapshot list --mode build --name api -o json
+```
+
+## What is captured
+
+Only the `setup:` phase runs. The `run:` command is not executed, so a build
+never starts your application. On a later `fuse up --from-build`, `setup:` is
+skipped and only `run:` executes, since the setup result is already baked into
+the artifact's rootfs.
+
+A Fusefile with no `setup:` lines has nothing to build and `fuse build` exits
+non-zero rather than producing an empty artifact.
+
+`--from-build` and a Fusefile `image:` are mutually exclusive: both name the
+rootfs to boot from.
+
+## Exit status
+
+`fuse build` exits non-zero if the builder fails to come up, if the setup phase
+exits non-zero, or if the snapshot cannot be taken. In each case the builder
+environment is destroyed before returning unless `--keep` is set, so a failed
+build does not leave a VM holding host capacity.

@@ -10,6 +10,7 @@ export default defineMeta({
     "hosts",
     "environment",
     "up",
+    "build",
     "init",
     "snapshot",
     "apikeys",

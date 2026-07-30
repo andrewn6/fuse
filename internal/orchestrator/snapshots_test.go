@@ -321,6 +321,121 @@ func TestReconcileSnapshots_deletesExpiredLeaf(t *testing.T) {
 	}
 }
 
+// TestReconcileSnapshots_keepsExpiredBuildArtifact is the counterpart to
+// deletesExpiredLeaf: an identically expired leaf survives gc purely because
+// its mode is build. Sweeping one would break every `fuse up --from-build`
+// referencing it.
+func TestReconcileSnapshots_keepsExpiredBuildArtifact(t *testing.T) {
+	provider := newSnapshotTestProvider()
+	fm := NewFleetManager(FleetConfig{
+		Provider: provider,
+		Prefix:   "fuse-",
+	})
+	vmID := provisionSnapshotTestVM(t, fm, "task-1")
+
+	// a later snapshot exists so the artifact is not the vm's latest, which is
+	// otherwise exempt on its own and would mask the mode check.
+	artifact, _ := fm.CreateSnapshot(context.Background(), vmID, SnapshotOptions{Mode: SnapshotModeBuild})
+	if _, err := fm.CreateSnapshot(context.Background(), vmID, SnapshotOptions{}); err != nil {
+		t.Fatalf("create trailing snapshot: %v", err)
+	}
+
+	expired := time.Now().Add(-time.Hour)
+	artifact.RetentionUntil = &expired
+	if err := fm.upsertSnapshotRecord(context.Background(), artifact); err != nil {
+		t.Fatalf("update artifact: %v", err)
+	}
+
+	fm.reconcileSnapshots(context.Background())
+
+	if _, err := fm.GetSnapshot(context.Background(), vmID, artifact.SnapshotID); err != nil {
+		t.Fatalf("expired build artifact should survive gc: %v", err)
+	}
+}
+
+// TestEnforceSnapshotQuota_ignoresBuildArtifacts pins the other half of the
+// exemption: build artifacts do not consume the per-tenant checkpoint quota.
+func TestEnforceSnapshotQuota_ignoresBuildArtifacts(t *testing.T) {
+	fm := NewFleetManager(FleetConfig{
+		Provider:              newSnapshotTestProvider(),
+		Prefix:                "fuse-",
+		SnapshotQuotaMaxCount: 1,
+	})
+
+	all := []SnapshotRecord{
+		{SnapshotID: "s-build", TenantID: "t1", State: SnapshotStateReady, Mode: SnapshotModeBuild},
+		{SnapshotID: "s-build-2", TenantID: "t1", State: SnapshotStateReady, Mode: SnapshotModeBuild},
+	}
+	if err := fm.enforceSnapshotQuota(all, "t1"); err != nil {
+		t.Fatalf("build artifacts should not count against the quota: %v", err)
+	}
+
+	// a single ordinary checkpoint still trips the same quota of 1.
+	all = append(all, SnapshotRecord{
+		SnapshotID: "s-manual", TenantID: "t1", State: SnapshotStateReady, Mode: SnapshotModeManual,
+	})
+	if err := fm.enforceSnapshotQuota(all, "t1"); !errors.Is(err, ErrSnapshotQuotaExceeded) {
+		t.Fatalf("manual snapshot should still be charged: got %v", err)
+	}
+}
+
+// TestListSnapshotsFiltered_modeAndName covers the lookup key a build artifact
+// is found by when its random id is not known.
+func TestListSnapshotsFiltered_modeAndName(t *testing.T) {
+	provider := newSnapshotTestProvider()
+	fm := NewFleetManager(FleetConfig{
+		Provider: provider,
+		Prefix:   "fuse-",
+	})
+	vmID := provisionSnapshotTestVM(t, fm, "task-1")
+
+	artifact, err := fm.CreateSnapshot(context.Background(), vmID, SnapshotOptions{
+		Mode:     SnapshotModeBuild,
+		Metadata: map[string]string{"name": "api"},
+	})
+	if err != nil {
+		t.Fatalf("create artifact: %v", err)
+	}
+	if _, err := fm.CreateSnapshot(context.Background(), vmID, SnapshotOptions{
+		Mode:     SnapshotModeBuild,
+		Metadata: map[string]string{"name": "worker"},
+	}); err != nil {
+		t.Fatalf("create second artifact: %v", err)
+	}
+	if _, err := fm.CreateSnapshot(context.Background(), vmID, SnapshotOptions{}); err != nil {
+		t.Fatalf("create manual snapshot: %v", err)
+	}
+
+	got, err := fm.ListSnapshotsFiltered(context.Background(), SnapshotFilter{
+		Mode: SnapshotModeBuild,
+		Name: "api",
+	})
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(got) != 1 || got[0].SnapshotID != artifact.SnapshotID {
+		t.Fatalf("mode+name filter = %+v, want just %s", got, artifact.SnapshotID)
+	}
+
+	// mode alone excludes the manual snapshot but keeps both artifacts.
+	got, err = fm.ListSnapshotsFiltered(context.Background(), SnapshotFilter{Mode: SnapshotModeBuild})
+	if err != nil {
+		t.Fatalf("list by mode: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("mode filter returned %d snapshots, want 2", len(got))
+	}
+
+	// an unknown name matches nothing rather than erroring.
+	got, err = fm.ListSnapshotsFiltered(context.Background(), SnapshotFilter{Name: "nope"})
+	if err != nil {
+		t.Fatalf("list by unknown name: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("unknown name returned %d snapshots, want 0", len(got))
+	}
+}
+
 func TestRestoreSnapshot_marksMissingProviderSnapshotError(t *testing.T) {
 	provider := newSnapshotTestProvider()
 	fm := NewFleetManager(FleetConfig{

@@ -22,6 +22,13 @@ type ListSnapshotsOptions struct {
 	TaskID   string
 	TenantID string
 	State    string
+
+	// Mode narrows to one creation mode, e.g. "build" for build artifacts.
+	Mode string
+
+	// Name matches the snapshot's metadata name, the lookup key `fuse build`
+	// sets on an artifact.
+	Name string
 }
 
 func (s *SnapshotsService) Create(ctx context.Context, vmID string, reqBody SnapshotRequest) (*Snapshot, error) {
@@ -67,6 +74,12 @@ func (s *SnapshotsService) List(ctx context.Context, opt ListSnapshotsOptions) (
 	}
 	if opt.State != "" {
 		values.Set("state", opt.State)
+	}
+	if opt.Mode != "" {
+		values.Set("mode", opt.Mode)
+	}
+	if opt.Name != "" {
+		values.Set("name", opt.Name)
 	}
 	req, err := s.t.newRequest(ctx, http.MethodGet, "/v1/snapshots", values, nil)
 	if err != nil {

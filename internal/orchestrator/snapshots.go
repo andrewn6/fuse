@@ -38,6 +38,16 @@ type SnapshotFilter struct {
 	TaskID   string
 	TenantID string
 	State    SnapshotState
+
+	// Mode narrows to one creation mode, e.g. SnapshotModeBuild to list only
+	// build artifacts.
+	Mode SnapshotMode
+
+	// Name matches the "name" key inside the snapshot's metadata blob. It is
+	// how a build artifact is found by something other than its random id.
+	// Metadata is free-form JSON, so an absent key or a malformed blob simply
+	// does not match rather than erroring.
+	Name string
 }
 
 // CreateSnapshot quiesces the given VM, invokes Environment.Checkpoint,
@@ -194,6 +204,12 @@ func (fm *FleetManager) ListSnapshotsFiltered(ctx context.Context, filter Snapsh
 			continue
 		}
 		if filter.State != "" && s.State != filter.State {
+			continue
+		}
+		if filter.Mode != "" && s.Mode != filter.Mode {
+			continue
+		}
+		if filter.Name != "" && snapshotMetadataString(s.Metadata, "name") != filter.Name {
 			continue
 		}
 		out = append(out, s)
@@ -401,6 +417,12 @@ func (fm *FleetManager) reconcileSnapshots(ctx context.Context) {
 
 	for _, snapshot := range all {
 		if snapshot.State != SnapshotStateDeleting {
+			// Build artifacts are removed only on explicit request. Sweeping
+			// one silently breaks every `fuse up --from-build` that references
+			// it, with nothing to tell the operator why.
+			if snapshot.Mode == SnapshotModeBuild {
+				continue
+			}
 			if snapshot.RetentionUntil == nil || snapshot.RetentionUntil.After(now) {
 				continue
 			}
@@ -454,6 +476,11 @@ func (fm *FleetManager) enforceSnapshotQuota(all []SnapshotRecord, tenantID stri
 	)
 	for _, snapshot := range all {
 		if snapshot.TenantID != tenantID {
+			continue
+		}
+		// See reconcileSnapshots: a build artifact is not an ephemeral
+		// checkpoint, so it is not charged against the checkpoint quota.
+		if snapshot.Mode == SnapshotModeBuild {
 			continue
 		}
 		switch snapshot.State {
@@ -614,6 +641,22 @@ func snapshotTenantID(taskID, vmID string) string {
 		return taskID
 	}
 	return vmID
+}
+
+// snapshotMetadataString reads one key out of a snapshot's metadata blob.
+// marshalSnapshotMetadata always writes a flat map[string]string, so that is
+// the shape read back. A missing key, a blob written by an older or
+// hand-edited path, or unparseable JSON all yield "" rather than an error:
+// metadata is best-effort by construction and must not fail a list call.
+func snapshotMetadataString(raw json.RawMessage, key string) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var m map[string]string
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return ""
+	}
+	return m[key]
 }
 
 func marshalSnapshotMetadata(comment string, extra map[string]string) (json.RawMessage, error) {

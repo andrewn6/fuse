@@ -265,6 +265,33 @@ func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	spec := toOrchestratorSpec(req.Spec)
+	if req.SeedSnapshotID != "" {
+		if req.Spec.Image != "" {
+			writeError(w, http.StatusBadRequest, CodeInvalidArgument,
+				"seed_snapshot_id and spec.image are mutually exclusive: both name the rootfs to boot", nil)
+			return
+		}
+		// Resolve the seed before provisioning so an unusable one fails the
+		// request outright instead of leaving a vm to fail at boot. The host
+		// pin comes from the record because the artifact is host-local.
+		record, err := h.Fleet.GetSnapshotByID(r.Context(), req.SeedSnapshotID)
+		if err != nil {
+			writeFleetError(w, err)
+			return
+		}
+		if record.State != orchestrator.SnapshotStateReady {
+			writeError(w, http.StatusConflict, CodeConflict,
+				fmt.Sprintf("snapshot %s is in state %s, want ready", record.SnapshotID, record.State), nil)
+			return
+		}
+		if record.HostID == "" {
+			writeError(w, http.StatusConflict, CodeConflict,
+				fmt.Sprintf("snapshot %s has no recorded host, so it cannot seed an environment", record.SnapshotID), nil)
+			return
+		}
+		spec.SeedSnapshotID = record.SnapshotID
+		spec.PinnedHostID = record.HostID
+	}
 	info, err := h.Fleet.ProvisionAndAssign(r.Context(), req.TaskID, spec, manifest, req.Secrets, orchestrator.BootOptions{
 		StartupScript: req.StartupScript,
 		GatewayURL:    req.GatewayURL,
@@ -442,6 +469,8 @@ func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 //	@Param		task_id		query		string	false	"Filter by task ID"
 //	@Param		tenant_id	query		string	false	"Filter by tenant ID"
 //	@Param		state		query		string	false	"Filter by state"	Enums(creating, ready, restoring, deleting, error)
+//	@Param		mode		query		string	false	"Filter by creation mode"	Enums(manual, auto, build)
+//	@Param		name		query		string	false	"Filter by metadata name (build artifact lookup key)"
 //	@Success	200			{object}	SnapshotList
 //	@Security	BearerAuth
 //	@Router		/v1/snapshots [get]
@@ -451,6 +480,8 @@ func (h *Handler) listSnapshots(w http.ResponseWriter, r *http.Request) {
 		TaskID:   r.URL.Query().Get("task_id"),
 		TenantID: r.URL.Query().Get("tenant_id"),
 		State:    orchestrator.SnapshotState(r.URL.Query().Get("state")),
+		Mode:     orchestrator.SnapshotMode(r.URL.Query().Get("mode")),
+		Name:     r.URL.Query().Get("name"),
 	}
 
 	records, err := h.Fleet.ListSnapshotsFiltered(r.Context(), filter)

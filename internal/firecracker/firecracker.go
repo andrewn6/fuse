@@ -88,12 +88,13 @@ func (p *Provider) Create(ctx context.Context, spec orchestrator.Spec) (orchestr
 	}
 
 	reqBody := createVMRequest{
-		Name:      spec.Name,
-		CPUs:      spec.CPUs,
-		MemoryMB:  spec.RamMB,
-		StorageGB: spec.StorageGB,
-		Region:    spec.Region,
-		Image:     spec.Image,
+		Name:         spec.Name,
+		CPUs:         spec.CPUs,
+		MemoryMB:     spec.RamMB,
+		StorageGB:    spec.StorageGB,
+		Region:       spec.Region,
+		Image:        spec.Image,
+		SeedSnapshot: spec.SeedSnapshotID,
 	}
 	var resp createVMResponse
 	if err := p.doJSON(ctx, http.MethodPost, "/v1/vm", reqBody, &resp); err != nil {
@@ -455,6 +456,10 @@ type createVMRequest struct {
 	StorageGB int    `json:"storage_gb"`
 	Region    string `json:"region"`
 	Image     string `json:"image,omitempty"`
+	// SeedSnapshot boots from an artifact in the agent's snapshot store rather
+	// than a named base image. The agent treats it as winning over Image, but
+	// the orchestrator rejects a request carrying both before it gets here.
+	SeedSnapshot string `json:"seed_snapshot,omitempty"`
 }
 
 type createVMResponse struct {
@@ -647,7 +652,12 @@ func (p *stubProvider) Create(_ context.Context, spec orchestrator.Spec) (orches
 	if _, exists := p.envs[spec.Name]; exists {
 		return nil, fmt.Errorf("env %s already exists", spec.Name)
 	}
-	env := &stubEnv{name: spec.Name, url: fmt.Sprintf("fc://%s", spec.Name), image: spec.Image}
+	env := &stubEnv{
+		name:  spec.Name,
+		url:   fmt.Sprintf("fc://%s", spec.Name),
+		image: spec.Image,
+		seed:  spec.SeedSnapshotID,
+	}
 	p.envs[spec.Name] = env
 	return env, nil
 }
@@ -739,6 +749,7 @@ type stubEnv struct {
 	name  string
 	url   string
 	image string // spec.Image at Create time, kept for test inspection only
+	seed  string // spec.SeedSnapshotID at Create time, same purpose as image
 
 	mu          sync.Mutex
 	files       map[string][]byte
