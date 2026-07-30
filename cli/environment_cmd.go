@@ -136,6 +136,8 @@ func newEnvCreateCmd() *cobra.Command {
 		gpuKind       string
 		gpuProfile    string
 		region        string
+		hostID        string
+		labels        []string
 		maxRuntime    int64
 		manifest      string
 		startupScript string
@@ -149,8 +151,9 @@ func newEnvCreateCmd() *cobra.Command {
 		Short: "Create an environment",
 		Long: "create provisions a new environment. it requires a task id and a spec.\n" +
 			"with no --task-id and a tty, the required fields are collected interactively.\n" +
-			"note: scheduling is orchestrator-wide; the active host does not pin placement\n" +
-			"(use spec.region to influence it).",
+			"note: the active host set by `fuse host <id>` is a client-side scope, not a\n" +
+			"placement pin. to pin placement, pass --host <id> (the Fusefile equivalent is\n" +
+			"the placement block), or narrow the fleet with --label key=value and --region.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			if taskID == "" && isInteractive() {
@@ -176,6 +179,10 @@ func newEnvCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			labelMap, err := parseHostLabels(labels)
+			if err != nil {
+				return err
+			}
 			manifestVal, err := maybeFile(manifest)
 			if err != nil {
 				return err
@@ -188,8 +195,8 @@ func newEnvCreateCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if cur.ActiveHost != "" {
-				infof("note: create is orchestrator-scheduled; the active host %q does not pin placement", cur.ActiveHost)
+			if cur.ActiveHost != "" && hostID == "" {
+				infof("note: create is orchestrator-scheduled; the active host %q does not pin placement (pass --host %s to pin it)", cur.ActiveHost, cur.ActiveHost)
 			}
 			e, err := cl.Environments.Create(cmd.Context(), fuse.CreateRequest{
 				TaskID: taskID,
@@ -201,6 +208,8 @@ func newEnvCreateCmd() *cobra.Command {
 					GPUKind:           gpuKind,
 					GPUProfile:        gpuProfile,
 					Region:            region,
+					HostID:            hostID,
+					Labels:            labelMap,
 					MaxRuntimeSeconds: maxRuntime,
 				},
 				ManifestInline: manifestVal,
@@ -234,6 +243,8 @@ func newEnvCreateCmd() *cobra.Command {
 	cmd.Flags().StringVar(&gpuKind, "gpu-kind", "", "gpu model label, e.g. a100")
 	cmd.Flags().StringVar(&gpuProfile, "gpu-profile", "", "MIG profile for fractional gpus, e.g. 1g.10gb (requires --gpus >= 1)")
 	cmd.Flags().StringVar(&region, "region", "", "region")
+	cmd.Flags().StringVar(&hostID, "host", "", "pin placement to an exact host id (the host must still be active and fit)")
+	cmd.Flags().StringArrayVar(&labels, "label", nil, "placement label selector as key=value (repeatable, all must match)")
 	cmd.Flags().Int64Var(&maxRuntime, "max-runtime", 0, "max runtime in seconds (0 = unlimited)")
 	cmd.Flags().StringVar(&manifest, "manifest", "", "inline manifest, or @path to read from a file")
 	cmd.Flags().StringVar(&startupScript, "startup-script", "", "startup script, or @path to read from a file")

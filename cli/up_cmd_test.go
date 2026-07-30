@@ -319,3 +319,138 @@ func TestUpSecretFlagOverridesFile(t *testing.T) {
 		t.Errorf("secrets.pg_password = %v, want fromflag (flag should override file)", secrets["pg_password"])
 	}
 }
+
+// writePlacementFusefile writes a Fusefile with a placement block and no
+// secrets, so `up` sends the spec straight through.
+func writePlacementFusefile(t *testing.T, dir string) string {
+	t.Helper()
+	src := `version: 1
+resources:
+  cpus: 4
+  memory: 8GB
+placement:
+  host: build-3
+  labels:
+    disk: nvme
+    tier: build
+run: ./start.sh
+`
+	path := filepath.Join(dir, "Fusefile")
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestUpSendsPlacementSpec(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/environments" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		fmt.Fprint(w, `{"id":"vm1","state":"pending","task_id":"t","url":"","spec":{}}`)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writePlacementFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	_, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{
+			"--config", cfg, "-o", "json",
+			"up", "-f", fusefilePath,
+			"--task-id", "t",
+			"--no-wait",
+		})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if gotBody == nil {
+		t.Fatalf("server was never called")
+	}
+
+	spec, ok := gotBody["spec"].(map[string]any)
+	if !ok {
+		t.Fatalf("spec missing or wrong type: %v", gotBody["spec"])
+	}
+	if spec["host_id"] != "build-3" {
+		t.Errorf("spec.host_id = %v, want build-3", spec["host_id"])
+	}
+	labels, ok := spec["labels"].(map[string]any)
+	if !ok {
+		t.Fatalf("spec.labels missing or wrong type: %v", spec["labels"])
+	}
+	if labels["disk"] != "nvme" || labels["tier"] != "build" {
+		t.Errorf("spec.labels = %v, want disk=nvme and tier=build", labels)
+	}
+}
+
+func TestUpWithoutPlacementOmitsTheFields(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/environments" {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		fmt.Fprint(w, `{"id":"vm1","state":"pending","task_id":"t","url":"","spec":{}}`)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	_, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{
+			"--config", cfg, "-o", "json",
+			"up", "-f", fusefilePath,
+			"--task-id", "t",
+			"--secret", "pg_password=pw",
+			"--no-wait",
+		})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	spec, ok := gotBody["spec"].(map[string]any)
+	if !ok {
+		t.Fatalf("spec missing or wrong type: %v", gotBody["spec"])
+	}
+	// omitempty on both fields: a Fusefile with no placement block must send
+	// exactly the wire it sent before placement existed.
+	if _, present := spec["host_id"]; present {
+		t.Errorf("spec.host_id present (%v), want it omitted", spec["host_id"])
+	}
+	if _, present := spec["labels"]; present {
+		t.Errorf("spec.labels present (%v), want it omitted", spec["labels"])
+	}
+}
+
+func TestParseHostLabels(t *testing.T) {
+	got, err := parseHostLabels([]string{"disk=nvme", "tier=build"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got["disk"] != "nvme" || got["tier"] != "build" {
+		t.Errorf("labels = %v, want disk=nvme and tier=build", got)
+	}
+	if nilMap, err := parseHostLabels(nil); err != nil || nilMap != nil {
+		t.Errorf("parseHostLabels(nil) = %v, %v, want nil, nil", nilMap, err)
+	}
+	for _, bad := range []string{"disk", "=nvme", "disk="} {
+		if _, err := parseHostLabels([]string{bad}); err == nil {
+			t.Errorf("parseHostLabels(%q): expected an error", bad)
+		}
+	}
+}

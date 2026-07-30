@@ -176,6 +176,7 @@ type HostRecord struct {
 	State          HostState
 	TenantID       string
 	Backend        HostBackend
+	Labels         map[string]string
 	Capacity       HostCapacity
 	Allocated      HostCapacity
 	LastSeen       time.Time
@@ -394,12 +395,18 @@ func (s *MemoryStateStore) ListDeadLetters(_ context.Context) ([]DeadLetterRecor
 	return out, nil
 }
 
-// cloneHostRecord deep-copies the per-device GPU and per-instance MIG
-// inventory so a caller that mutates those slices (before Upsert or on a
-// returned record) cannot corrupt the stored view. HostRecord is otherwise a
-// flat value; only GPUDevices and MIGInstances share a backing array under a
-// shallow copy.
+// cloneHostRecord deep-copies the host labels and the per-device GPU and
+// per-instance MIG inventory so a caller that mutates them (before Upsert or
+// on a returned record) cannot corrupt the stored view. HostRecord is
+// otherwise a flat value.
 func cloneHostRecord(h HostRecord) HostRecord {
+	if h.Labels != nil {
+		labels := make(map[string]string, len(h.Labels))
+		for k, v := range h.Labels {
+			labels[k] = v
+		}
+		h.Labels = labels
+	}
 	if h.Capacity.GPUDevices != nil {
 		devices := make([]GPUDevice, len(h.Capacity.GPUDevices))
 		copy(devices, h.Capacity.GPUDevices)

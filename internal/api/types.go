@@ -31,6 +31,14 @@ type ResourceSpec struct {
 	// mig-parted vocabulary (e.g. "1g.10gb"). When set, GPUs counts MIG
 	// instances of this profile rather than whole devices (decision D5).
 	GPUProfile string `json:"gpu_profile,omitempty"`
+	// HostID pins the environment to an exact host id (the Fusefile's
+	// placement.host). A pin is a hard gate, not an override: the host still
+	// has to be active, run the right backend, and fit the request. An
+	// unknown host id is rejected as a 404 before any VM row is created.
+	HostID string `json:"host_id,omitempty"`
+	// Labels are placement label selectors (the Fusefile's placement.labels).
+	// Every pair must match the target host's operator-declared labels.
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // ExposeSpec requests that a guest port be published as a reachable
@@ -319,27 +327,32 @@ type MIGInstance struct {
 // Backend selects the host's virtualization backend ("firecracker" or
 // "qemu"). Omitted or empty defaults to "firecracker". Only "qemu" hosts
 // may register with Capacity.GPUs > 0.
+//
+// Labels are operator-declared key/value pairs matched against a spec's
+// placement label selectors. They are never probed from the host agent.
 type RegisterHostRequest struct {
-	ID       string       `json:"id"`
-	URL      string       `json:"url"`
-	Token    string       `json:"token,omitempty"`
-	Region   string       `json:"region,omitempty"`
-	Backend  string       `json:"backend,omitempty"`
-	Capacity HostCapacity `json:"capacity"`
+	ID       string            `json:"id"`
+	URL      string            `json:"url"`
+	Token    string            `json:"token,omitempty"`
+	Region   string            `json:"region,omitempty"`
+	Backend  string            `json:"backend,omitempty"`
+	Labels   map[string]string `json:"labels,omitempty"`
+	Capacity HostCapacity      `json:"capacity"`
 }
 
 // HostInfo is the JSON shape returned for a single host.
 type HostInfo struct {
-	ID        string       `json:"id"`
-	URL       string       `json:"url"`
-	Region    string       `json:"region,omitempty"`
-	Backend   string       `json:"backend,omitempty"`
-	State     string       `json:"state"`
-	Capacity  HostCapacity `json:"capacity"`
-	Allocated HostCapacity `json:"allocated"`
-	LastSeen  time.Time    `json:"last_seen"`
-	CreatedAt time.Time    `json:"created_at"`
-	UpdatedAt time.Time    `json:"updated_at"`
+	ID        string            `json:"id"`
+	URL       string            `json:"url"`
+	Region    string            `json:"region,omitempty"`
+	Backend   string            `json:"backend,omitempty"`
+	Labels    map[string]string `json:"labels,omitempty"`
+	State     string            `json:"state"`
+	Capacity  HostCapacity      `json:"capacity"`
+	Allocated HostCapacity      `json:"allocated"`
+	LastSeen  time.Time         `json:"last_seen"`
+	CreatedAt time.Time         `json:"created_at"`
+	UpdatedAt time.Time         `json:"updated_at"`
 
 	// Warnings carries non-fatal notices from registration (e.g. a
 	// declared capacity value that exceeds what was probed from the host

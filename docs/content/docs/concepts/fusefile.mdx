@@ -36,6 +36,14 @@ resources:
   storage: 10GB       # compiles to storage_gb
   max_runtime: 1h     # accepts go duration, compiles to max_runtime_seconds
 
+# hard placement constraints for a self-hosted fleet. every field is a gate,
+# not a preference: a request that matches no host is rejected, never queued.
+placement:
+  host: build-3       # exact host id. still has to clear the other gates.
+  labels:             # every pair must match the host's declared labels (AND).
+    disk: nvme
+    tier: build
+
 # convenience layer run once at boot, before run. compiles into startup_script.
 setup:
   - apt-get update -qq
@@ -81,6 +89,8 @@ secrets:
 | `resources.memory` | string | Accepts `MB`/`GB` suffixes; compiles to `ram_mb`. |
 | `resources.storage` | string | Accepts `MB`/`GB` suffixes; compiles to `storage_gb`. |
 | `resources.max_runtime` | string | Go duration (`1h`, `30m`); compiles to `max_runtime_seconds`. |
+| `placement.host` | string | Pins the environment to an exact host id. A pin is not an override: the host must still be active, run the right backend, and fit the request. An unknown host id fails fast with a 404. |
+| `placement.labels` | map | Label selectors matched against the labels an operator declared with `fuse host register --label key=value`. Every pair must match (AND). A selector that matches no host is rejected immediately. |
 | `setup` | list of strings | Commands run once at boot, before `run`. Compiled into `startup_script`. |
 | `services` | map | In-VM services, each with `image`, `ports`, and `env`. Compiles to `manifest.services` plus a compose project. |
 | `services.*.env.*` | literal or secret ref | Exactly one of `value` or `secret` must be set per entry. `{ secret: name }` resolves from the `secrets` you supply at `up` time. |

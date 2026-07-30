@@ -30,6 +30,22 @@ operator-supplied string and is the host's primary key, use a readable one
 | `--gpus` | GPU device count, override. `0` (default) probes the host agent. Requires `--backend qemu`. |
 | `--gpu-kind` | GPU model label, for example `a100`, override. Empty (default) probes the host agent. |
 | `--mig-profile` | MIG instance capacity as `profile=count`, for example `1g.10gb=4`. Repeatable. Requires `--backend qemu`. |
+| `--label` | Placement label as `key=value`, for example `disk=nvme`. Repeatable. Declared, never probed. |
+
+## Labels
+
+`--label key=value` declares a label a Fusefile's `placement.labels` selector can
+match on:
+
+```bash
+fuse host register build-3 --url https://build-3.internal:8080 \
+  --max-vms 8 --label disk=nvme --label tier=build
+```
+
+Labels are operator-declared and never probed from the host agent, the same trust
+model as `--gpu-kind`: Fuse does not check that the box really has NVMe. Keys and
+values must be alphanumeric with `.`, `-`, and `_` inside, up to 63 characters.
+See [Scheduling and placement](/docs/concepts/scheduling).
 
 ## Token verification
 

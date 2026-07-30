@@ -37,6 +37,8 @@ func toAPIResourceSpec(s orchestrator.Spec) ResourceSpec {
 		GPUs:              s.GPUs,
 		GPUKind:           s.GPUKind,
 		GPUProfile:        s.GPUProfile,
+		HostID:            s.HostID,
+		Labels:            copyLabels(s.Labels),
 	}
 }
 
@@ -54,7 +56,23 @@ func toOrchestratorSpec(s ResourceSpec) orchestrator.Spec {
 		GPUs:       s.GPUs,
 		GPUKind:    s.GPUKind,
 		GPUProfile: strings.ToLower(s.GPUProfile),
+		HostID:     s.HostID,
+		Labels:     copyLabels(s.Labels),
 	}
+}
+
+// copyLabels clones a label map so neither side of a conversion aliases the
+// other. Nil (and empty) in, nil out, so the json omitempty behavior and the
+// scheduler's "no selector" fast path are both preserved.
+func copyLabels(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // toOrchestratorExpose converts wire expose entries into the orchestrator type.
@@ -88,6 +106,7 @@ func toAPIHost(h orchestrator.Host) HostInfo {
 		URL:     h.URL,
 		Region:  h.Region,
 		Backend: string(h.Backend),
+		Labels:  copyLabels(h.Labels),
 		State:   string(h.State),
 		Capacity: HostCapacity{
 			CPUs:         h.Capacity.CPUs,

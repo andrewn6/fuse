@@ -1401,3 +1401,174 @@ func TestRegisterHost_MIGProfilesRoundTrip(t *testing.T) {
 		t.Errorf("mig_profiles = %v, want {1g.10gb: 4}", info.Capacity.MIGProfiles)
 	}
 }
+
+// ── Placement tests (issue #102) ──────────────────────────────────
+
+func TestCreateEnvironment_hostPinRoundTripsAndPlaces(t *testing.T) {
+	h, fm, provider := newTestHandler(t)
+	for _, id := range []string{"build-2", "build-3"} {
+		if err := fm.RegisterHost(context.Background(), orchestrator.Host{
+			ID:       id,
+			Labels:   map[string]string{"disk": "nvme"},
+			Capacity: orchestrator.HostCapacity{CPUs: 4, RamMB: 8192, StorageGB: 100, VMCount: 10},
+		}, provider); err != nil {
+			t.Fatal(err)
+		}
+	}
+	r := mustRouter(t, h)
+
+	rr := doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+		TaskID: "task-pin",
+		Spec: ResourceSpec{
+			CPUs: 2, RamMB: 1024,
+			HostID: "build-3",
+			Labels: map[string]string{"disk": "nvme"},
+		},
+		ManifestInline: encodeManifest(t),
+	})
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201. body: %s", rr.Code, rr.Body.String())
+	}
+	var env Environment
+	if err := json.NewDecoder(rr.Body).Decode(&env); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if env.HostID != "build-3" {
+		t.Errorf("host_id = %q, want build-3 (the pin)", env.HostID)
+	}
+	if env.Spec.HostID != "build-3" || env.Spec.Labels["disk"] != "nvme" {
+		t.Errorf("spec placement = %+v, want it echoed back", env.Spec)
+	}
+}
+
+func TestCreateEnvironment_unknownHostPinReturns404(t *testing.T) {
+	h, fm, provider := newTestHandler(t)
+	if err := fm.RegisterHost(context.Background(), orchestrator.Host{
+		ID:       "build-2",
+		Capacity: orchestrator.HostCapacity{CPUs: 4, RamMB: 8192, StorageGB: 100, VMCount: 10},
+	}, provider); err != nil {
+		t.Fatal(err)
+	}
+	r := mustRouter(t, h)
+
+	rr := doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+		TaskID:         "task-bad-pin",
+		Spec:           ResourceSpec{CPUs: 2, RamMB: 1024, HostID: "nope"},
+		ManifestInline: encodeManifest(t),
+	})
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404. body: %s", rr.Code, rr.Body.String())
+	}
+	if got := decodeError(t, rr.Body); got.Error.Code != CodeNotFound {
+		t.Errorf("code = %q, want %q", got.Error.Code, CodeNotFound)
+	}
+	// no VM row may exist for a host that cannot exist.
+	if vms := fm.ListFleet(); len(vms) != 0 {
+		t.Errorf("fleet = %+v, want no vm created", vms)
+	}
+}
+
+func TestCreateEnvironment_pinToCordonedHostReturnsUnavailable(t *testing.T) {
+	h, fm, provider := newTestHandler(t)
+	if err := fm.RegisterHost(context.Background(), orchestrator.Host{
+		ID:       "build-3",
+		State:    orchestrator.HostCordoned,
+		Capacity: orchestrator.HostCapacity{CPUs: 4, RamMB: 8192, StorageGB: 100, VMCount: 10},
+	}, provider); err != nil {
+		t.Fatal(err)
+	}
+	r := mustRouter(t, h)
+
+	rr := doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+		TaskID:         "task-cordoned-pin",
+		Spec:           ResourceSpec{CPUs: 2, RamMB: 1024, HostID: "build-3"},
+		ManifestInline: encodeManifest(t),
+	})
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503. body: %s", rr.Code, rr.Body.String())
+	}
+	// the message must name the host and the gate, not just "no capacity".
+	if body := rr.Body.String(); !strings.Contains(body, "build-3") || !strings.Contains(body, "cordoned") {
+		t.Errorf("body = %s, want it to name the host and the cordoned gate", body)
+	}
+}
+
+func TestCreateEnvironment_labelMissReturnsUnavailable(t *testing.T) {
+	h, fm, provider := newTestHandler(t)
+	if err := fm.RegisterHost(context.Background(), orchestrator.Host{
+		ID:       "build-2",
+		Labels:   map[string]string{"disk": "ssd"},
+		Capacity: orchestrator.HostCapacity{CPUs: 4, RamMB: 8192, StorageGB: 100, VMCount: 10},
+	}, provider); err != nil {
+		t.Fatal(err)
+	}
+	r := mustRouter(t, h)
+
+	rr := doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+		TaskID: "task-label-miss",
+		Spec: ResourceSpec{
+			CPUs: 2, RamMB: 1024,
+			Labels: map[string]string{"disk": "nvme"},
+		},
+		ManifestInline: encodeManifest(t),
+	})
+	if rr.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503. body: %s", rr.Code, rr.Body.String())
+	}
+	if body := rr.Body.String(); !strings.Contains(body, "disk=nvme") {
+		t.Errorf("body = %s, want it to name the unmatched selector", body)
+	}
+}
+
+func TestCreateEnvironment_invalidPlacementLabelReturns400(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	r := mustRouter(t, h)
+
+	rr := doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+		TaskID:         "task-bad-label",
+		Spec:           ResourceSpec{CPUs: 2, RamMB: 1024, Labels: map[string]string{"bad key": "nvme"}},
+		ManifestInline: encodeManifest(t),
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400. body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+func TestRegisterHost_labelsRoundTrip(t *testing.T) {
+	h, _ := newTestHandlerWithProvider(t)
+	r := mustRouter(t, h)
+
+	rr := doJSON(t, r, http.MethodPost, "/v1/hosts", RegisterHostRequest{
+		ID:       "build-3",
+		URL:      "http://build-3.test",
+		Token:    "agent-token",
+		Labels:   map[string]string{"disk": "nvme", "tier": "build"},
+		Capacity: HostCapacity{CPUs: 4, RamMB: 8192, StorageGB: 100, VMCount: 10},
+	})
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201. body: %s", rr.Code, rr.Body.String())
+	}
+	var info HostInfo
+	if err := json.NewDecoder(rr.Body).Decode(&info); err != nil {
+		t.Fatalf("decode body: %v", err)
+	}
+	if info.Labels["disk"] != "nvme" || info.Labels["tier"] != "build" {
+		t.Errorf("labels = %v, want disk=nvme and tier=build", info.Labels)
+	}
+}
+
+func TestRegisterHost_invalidLabelReturns400(t *testing.T) {
+	h, _ := newTestHandlerWithProvider(t)
+	r := mustRouter(t, h)
+
+	rr := doJSON(t, r, http.MethodPost, "/v1/hosts", RegisterHostRequest{
+		ID:       "build-3",
+		URL:      "http://build-3.test",
+		Token:    "agent-token",
+		Labels:   map[string]string{"disk": "bad value"},
+		Capacity: HostCapacity{CPUs: 4, RamMB: 8192, StorageGB: 100, VMCount: 10},
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400. body: %s", rr.Code, rr.Body.String())
+	}
+}

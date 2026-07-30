@@ -18,6 +18,13 @@ export interface Spec {
   region?: string;
   max_runtime_seconds?: number;
   image?: string;
+  /** Pins the environment to an exact host id (the Fusefile's
+   * placement.host). The pinned host still has to be active, run the right
+   * backend, and fit the request. */
+  host_id?: string;
+  /** Placement label selectors (the Fusefile's placement.labels): every pair
+   * must match the target host's declared labels. */
+  labels?: Record<string, string>;
 }
 
 /** ExposeSpec requests that a guest port be published at boot. */
@@ -213,6 +220,9 @@ export interface RegisterHostRequest {
   token?: string;
   region?: string;
   backend?: string;
+  /** Operator-declared key/value pairs matched against a spec's placement
+   * label selectors. Never probed from the host agent. */
+  labels?: Record<string, string>;
   capacity?: HostCapacity;
 }
 
@@ -223,6 +233,7 @@ export interface Host {
   region?: string;
   state: string;
   backend?: string;
+  labels?: Record<string, string>;
   capacity: HostCapacity;
   allocated: HostCapacity;
   last_seen: string;

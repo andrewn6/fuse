@@ -2,6 +2,7 @@ package fusefile
 
 import (
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -53,7 +54,7 @@ func TestDocsFirstFusefileCompiles(t *testing.T) {
 	// the page's line-by-line table asserts each of these; if the example
 	// changes, the prose has to change with it.
 	want := ResourceSpec{CPUs: 2, RamMB: 2048}
-	if c.Spec != want {
+	if !reflect.DeepEqual(c.Spec, want) {
 		t.Errorf("spec = %+v, want %+v", c.Spec, want)
 	}
 

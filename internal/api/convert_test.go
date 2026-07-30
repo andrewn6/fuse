@@ -51,3 +51,64 @@ func TestToAPIHost_MIGInstancesRoundTrip(t *testing.T) {
 		t.Error("allocated mig_instance_uuids aliases the orchestrator slice")
 	}
 }
+
+// TestPlacementSpecRoundTrip checks that a host pin and label selectors
+// survive both directions of the single conversion point, and that neither
+// side aliases the other's label map.
+func TestPlacementSpecRoundTrip(t *testing.T) {
+	wire := ResourceSpec{
+		CPUs: 2, RamMB: 1024,
+		HostID: "build-3",
+		Labels: map[string]string{"disk": "nvme"},
+	}
+	spec := toOrchestratorSpec(wire)
+	if spec.HostID != "build-3" {
+		t.Errorf("spec.HostID = %q, want build-3", spec.HostID)
+	}
+	if spec.Labels["disk"] != "nvme" {
+		t.Errorf("spec.Labels = %v, want disk=nvme", spec.Labels)
+	}
+	spec.Labels["disk"] = "ssd"
+	if wire.Labels["disk"] != "nvme" {
+		t.Errorf("toOrchestratorSpec aliased the wire label map")
+	}
+
+	back := toAPIResourceSpec(spec)
+	if back.HostID != "build-3" || back.Labels["disk"] != "ssd" {
+		t.Errorf("round trip = %+v, want the placement fields preserved", back)
+	}
+}
+
+// TestPlacementSpecEmptyStaysNil keeps the omitempty behavior and the
+// scheduler's "no selector" fast path: an empty spec must convert to nil
+// labels, not an allocated empty map.
+func TestPlacementSpecEmptyStaysNil(t *testing.T) {
+	spec := toOrchestratorSpec(ResourceSpec{CPUs: 2})
+	if spec.HostID != "" || spec.Labels != nil {
+		t.Errorf("spec placement = %q/%v, want empty and nil", spec.HostID, spec.Labels)
+	}
+	if back := toAPIResourceSpec(spec); back.HostID != "" || back.Labels != nil {
+		t.Errorf("wire placement = %q/%v, want empty and nil", back.HostID, back.Labels)
+	}
+}
+
+// TestToAPIHost_LabelsRoundTrip checks host labels reach the wire shape and
+// that the response never aliases the fleet's live label map.
+func TestToAPIHost_LabelsRoundTrip(t *testing.T) {
+	h := orchestrator.Host{
+		ID:       "build-3",
+		Labels:   map[string]string{"disk": "nvme"},
+		Capacity: orchestrator.HostCapacity{CPUs: 8, RamMB: 4096, StorageGB: 100, VMCount: 10},
+	}
+	info := toAPIHost(h)
+	if info.Labels["disk"] != "nvme" {
+		t.Fatalf("labels = %v, want disk=nvme", info.Labels)
+	}
+	info.Labels["disk"] = "ssd"
+	if h.Labels["disk"] != "nvme" {
+		t.Errorf("toAPIHost aliased the host label map")
+	}
+	if got := toAPIHost(orchestrator.Host{ID: "h2"}); got.Labels != nil {
+		t.Errorf("labels = %v, want nil for a host with none", got.Labels)
+	}
+}

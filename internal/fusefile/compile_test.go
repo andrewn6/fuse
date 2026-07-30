@@ -572,3 +572,54 @@ func TestParseSize(t *testing.T) {
 		})
 	}
 }
+
+func TestCompilePlacement(t *testing.T) {
+	f := &Fusefile{
+		Version: 1,
+		Placement: Placement{
+			Host:   "build-3",
+			Labels: map[string]string{"disk": "nvme"},
+		},
+	}
+	c, err := Compile(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Spec.HostID != "build-3" {
+		t.Errorf("spec.HostID = %q, want build-3", c.Spec.HostID)
+	}
+	if !reflect.DeepEqual(c.Spec.Labels, map[string]string{"disk": "nvme"}) {
+		t.Errorf("spec.Labels = %v, want disk=nvme", c.Spec.Labels)
+	}
+	// the compiled spec must not alias the Fusefile's map.
+	c.Spec.Labels["disk"] = "ssd"
+	if f.Placement.Labels["disk"] != "nvme" {
+		t.Errorf("compile aliased the fusefile label map")
+	}
+}
+
+func TestCompileEmptyPlacementLeavesSpecEmpty(t *testing.T) {
+	c, err := Compile(&Fusefile{Version: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Spec.HostID != "" || c.Spec.Labels != nil {
+		t.Errorf("spec placement = %q/%v, want empty (nil labels keep the scheduler fast path)",
+			c.Spec.HostID, c.Spec.Labels)
+	}
+}
+
+func TestValidLabel(t *testing.T) {
+	valid := []string{"a", "nvme", "disk", "tier-1", "a.b_c-d", "A1", strings.Repeat("x", 63)}
+	for _, s := range valid {
+		if !ValidLabel(s) {
+			t.Errorf("ValidLabel(%q) = false, want true", s)
+		}
+	}
+	invalid := []string{"", " ", "-lead", "trail-", "has space", "has/slash", "has=eq", strings.Repeat("x", 64)}
+	for _, s := range invalid {
+		if ValidLabel(s) {
+			t.Errorf("ValidLabel(%q) = true, want false", s)
+		}
+	}
+}

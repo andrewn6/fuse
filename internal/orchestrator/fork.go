@@ -149,6 +149,13 @@ func (fm *FleetManager) ForkEnvironment(ctx context.Context, srcVMID string, opt
 	newVMID := fm.prefix + forkTaskID
 	spec := srcSpec
 	spec.Name = newVMID
+	// placement is cleared, not inherited: a fork is already pinned to the
+	// source's host (the seed snapshot's rootfs is host-local) and never goes
+	// through Schedule, so carrying the source's placement.host/labels forward
+	// would record selectors nothing ever evaluates -- and they could name a
+	// different host than the one the fork actually lands on.
+	spec.HostID = ""
+	spec.Labels = nil
 
 	// a fork is a real vm consuming real resources on the source's host, so it
 	// must be charged to that host. the fork does NOT go through Schedule: the

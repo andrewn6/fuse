@@ -246,3 +246,62 @@ func TestParseValidationErrorsSortedAndJoined(t *testing.T) {
 		t.Fatalf("expected sorted (apple before zebra) order, got: %s", msg)
 	}
 }
+
+func TestParsePlacementBlock(t *testing.T) {
+	src := `version: 1
+resources:
+  cpus: 4
+  memory: 8GB
+placement:
+  host: build-3
+  labels:
+    disk: nvme
+    tier: build
+`
+	f, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Placement.Host != "build-3" {
+		t.Errorf("placement.host: got %q, want %q", f.Placement.Host, "build-3")
+	}
+	if got := f.Placement.Labels["disk"]; got != "nvme" {
+		t.Errorf("placement.labels.disk: got %q, want %q", got, "nvme")
+	}
+	if got := f.Placement.Labels["tier"]; got != "build" {
+		t.Errorf("placement.labels.tier: got %q, want %q", got, "build")
+	}
+}
+
+func TestParseNoPlacementBlockIsEmpty(t *testing.T) {
+	f, err := Parse([]byte("version: 1\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Placement.Host != "" || f.Placement.Labels != nil {
+		t.Errorf("placement = %+v, want the zero value", f.Placement)
+	}
+}
+
+func TestParseRejectsBadPlacementLabels(t *testing.T) {
+	src := `version: 1
+placement:
+  labels:
+    "bad key": nvme
+    disk: "bad value"
+`
+	_, err := Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected an error for malformed label key and value")
+	}
+	// both violations are reported in one pass, keys sorted for stability.
+	msg := err.Error()
+	for _, want := range []string{`invalid label key "bad key"`, `invalid label value "bad value"`} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error %q, want it to contain %q", msg, want)
+		}
+	}
+	if got := strings.Index(msg, "bad key"); got > strings.Index(msg, "bad value") {
+		t.Errorf("error %q: want the sorted key order (disk after the bad key)", msg)
+	}
+}

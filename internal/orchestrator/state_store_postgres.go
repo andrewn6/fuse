@@ -597,6 +597,10 @@ func (s *PostgresStateStore) UpsertHost(ctx context.Context, h HostRecord) error
 	if err != nil {
 		return fmt.Errorf("marshal mig instances for host %s: %w", h.ID, err)
 	}
+	labelsJSON, err := marshalHostLabels(h.Labels)
+	if err != nil {
+		return fmt.Errorf("marshal labels for host %s: %w", h.ID, err)
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO orchestrator_hosts (
 			host_id, url, token_encrypted, region, state, tenant_id,
@@ -604,8 +608,9 @@ func (s *PostgresStateStore) UpsertHost(ctx context.Context, h HostRecord) error
 			cpus_allocated, ram_mb_allocated, storage_gb_allocated, vm_count_allocated,
 			last_seen_at, created_at, updated_at,
 			backend, gpus_total, gpu_kind, gpus_allocated,
-			mig_profiles_json, mig_allocated_json, gpu_devices_json, mig_instances_json
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25)
+			mig_profiles_json, mig_allocated_json, gpu_devices_json, mig_instances_json,
+			labels_json
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
 		ON CONFLICT (host_id) DO UPDATE SET
 			url=EXCLUDED.url,
 			token_encrypted=EXCLUDED.token_encrypted,
@@ -629,7 +634,8 @@ func (s *PostgresStateStore) UpsertHost(ctx context.Context, h HostRecord) error
 			mig_profiles_json=EXCLUDED.mig_profiles_json,
 			mig_allocated_json=EXCLUDED.mig_allocated_json,
 			gpu_devices_json=EXCLUDED.gpu_devices_json,
-			mig_instances_json=EXCLUDED.mig_instances_json
+			mig_instances_json=EXCLUDED.mig_instances_json,
+			labels_json=EXCLUDED.labels_json
 	`,
 		h.ID,
 		h.URL,
@@ -656,6 +662,7 @@ func (s *PostgresStateStore) UpsertHost(ctx context.Context, h HostRecord) error
 		migAllocatedJSON,
 		string(gpuDevicesJSON),
 		string(migInstancesJSON),
+		labelsJSON,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert host %s: %w", h.ID, err)
@@ -693,6 +700,36 @@ func unmarshalMIGProfiles(s string) (map[string]int, error) {
 	return m, nil
 }
 
+// marshalHostLabels renders operator-declared host labels as the JSON object
+// stored in labels_json. Nil/empty maps store as "{}" to match the column
+// default, so unmigrated rows and hosts without labels look identical.
+func marshalHostLabels(m map[string]string) (string, error) {
+	if len(m) == 0 {
+		return "{}", nil
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
+}
+
+// unmarshalHostLabels is the inverse of marshalHostLabels: "{}" (or empty)
+// yields nil so in-memory state never carries useless empty maps.
+func unmarshalHostLabels(s string) (map[string]string, error) {
+	if s == "" || s == "{}" {
+		return nil, nil
+	}
+	var m map[string]string
+	if err := json.Unmarshal([]byte(s), &m); err != nil {
+		return nil, err
+	}
+	if len(m) == 0 {
+		return nil, nil
+	}
+	return m, nil
+}
+
 func (s *PostgresStateStore) DeleteHost(ctx context.Context, hostID string) error {
 	if _, err := s.db.ExecContext(ctx, "DELETE FROM orchestrator_hosts WHERE host_id=$1", hostID); err != nil {
 		return fmt.Errorf("delete host %s: %w", hostID, err)
@@ -707,7 +744,8 @@ const hostsSelect = `
 	       cpus_allocated, ram_mb_allocated, storage_gb_allocated, vm_count_allocated,
 	       last_seen_at, created_at, updated_at,
 	       backend, gpus_total, gpu_kind, gpus_allocated,
-	       mig_profiles_json, mig_allocated_json, gpu_devices_json, mig_instances_json
+	       mig_profiles_json, mig_allocated_json, gpu_devices_json, mig_instances_json,
+	       labels_json
 	FROM orchestrator_hosts`
 
 // scanHost maps a row from hostsSelect onto a HostRecord. Both
@@ -722,6 +760,7 @@ func scanHost(scan func(...any) error) (HostRecord, error) {
 		migAllocatedJSON string
 		gpuDevicesJSON   []byte
 		migInstancesJSON []byte
+		labelsJSON       string
 	)
 	if err := scan(
 		&record.ID,
@@ -749,6 +788,7 @@ func scanHost(scan func(...any) error) (HostRecord, error) {
 		&migAllocatedJSON,
 		&gpuDevicesJSON,
 		&migInstancesJSON,
+		&labelsJSON,
 	); err != nil {
 		return HostRecord{}, err
 	}
@@ -760,6 +800,9 @@ func scanHost(scan func(...any) error) (HostRecord, error) {
 	}
 	if record.Allocated.MIGProfiles, err = unmarshalMIGProfiles(migAllocatedJSON); err != nil {
 		return HostRecord{}, fmt.Errorf("unmarshal mig allocation for host %s: %w", record.ID, err)
+	}
+	if record.Labels, err = unmarshalHostLabels(labelsJSON); err != nil {
+		return HostRecord{}, fmt.Errorf("unmarshal labels for host %s: %w", record.ID, err)
 	}
 	// gpu_devices_json defaults to '[]' but a legacy null or empty scan
 	// leaves GPUDevices nil, which the scheduler treats as "no per-device
