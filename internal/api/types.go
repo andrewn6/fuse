@@ -61,6 +61,14 @@ type CreateEnvironmentRequest struct {
 	GatewayURL     string            `json:"gateway_url,omitempty"`
 	GatewayToken   string            `json:"gateway_token,omitempty"`
 	Expose         []ExposeSpec      `json:"expose,omitempty"`
+
+	// SeedSnapshotID boots the environment from an existing snapshot artifact
+	// (see `fuse build`) rather than from spec.image, which it is mutually
+	// exclusive with. The artifact is host-local and there is no object
+	// storage, so the environment is pinned to the snapshot's host and the
+	// request fails if that host cannot take it, rather than silently booting
+	// a base image somewhere else.
+	SeedSnapshotID string `json:"seed_snapshot_id,omitempty"`
 }
 
 // Environment is the JSON shape returned for a single VM.
@@ -111,21 +119,24 @@ type SnapshotExport struct {
 
 // Snapshot is the JSON shape of a persisted snapshot record.
 type Snapshot struct {
-	ID               string           `json:"id"`
-	VMID             string           `json:"vm_id"`
-	TaskID           string           `json:"task_id,omitempty"`
-	TenantID         string           `json:"tenant_id,omitempty"`
-	ParentSnapshotID string           `json:"parent_snapshot_id,omitempty"`
-	Mode             string           `json:"mode,omitempty"`
-	State            string           `json:"state,omitempty"`
-	Comment          string           `json:"comment,omitempty"`
-	SizeBytes        int64            `json:"size_bytes,omitempty"`
-	CreatedAt        time.Time        `json:"created_at"`
-	UpdatedAt        time.Time        `json:"updated_at,omitempty"`
-	RetentionUntil   *time.Time       `json:"retention_until,omitempty"`
-	LastError        string           `json:"last_error,omitempty"`
-	ExportRef        string           `json:"export_ref,omitempty"`
-	Exports          []SnapshotExport `json:"exports,omitempty"`
+	ID               string `json:"id"`
+	VMID             string `json:"vm_id"`
+	TaskID           string `json:"task_id,omitempty"`
+	TenantID         string `json:"tenant_id,omitempty"`
+	ParentSnapshotID string `json:"parent_snapshot_id,omitempty"`
+	Mode             string `json:"mode,omitempty"`
+	State            string `json:"state,omitempty"`
+	Comment          string `json:"comment,omitempty"`
+	// Name is the caller-chosen lookup key from the snapshot's metadata,
+	// surfaced so a build artifact can be found without its random id.
+	Name           string           `json:"name,omitempty"`
+	SizeBytes      int64            `json:"size_bytes,omitempty"`
+	CreatedAt      time.Time        `json:"created_at"`
+	UpdatedAt      time.Time        `json:"updated_at,omitempty"`
+	RetentionUntil *time.Time       `json:"retention_until,omitempty"`
+	LastError      string           `json:"last_error,omitempty"`
+	ExportRef      string           `json:"export_ref,omitempty"`
+	Exports        []SnapshotExport `json:"exports,omitempty"`
 }
 
 // SnapshotList is the response body for GET /v1/snapshots.

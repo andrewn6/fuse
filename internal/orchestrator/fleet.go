@@ -546,6 +546,25 @@ func (fm *FleetManager) ProvisionAndAssign(ctx context.Context, taskID string, s
 	reservedHost := false
 	fm.mu.Lock()
 	hosts := fm.activeHostsLocked()
+	// A pinned vm carries a host-local artifact (a seed snapshot), so narrow
+	// the candidate set to that host and let Schedule report insufficient
+	// capacity the way it does for any other request. Narrowing the input
+	// rather than bypassing Schedule keeps one scheduling path.
+	if spec.PinnedHostID != "" {
+		pinned := make([]*Host, 0, 1)
+		for _, h := range hosts {
+			if h.ID == spec.PinnedHostID {
+				pinned = append(pinned, h)
+			}
+		}
+		if len(pinned) == 0 {
+			delete(fm.vms, vmID)
+			fm.mu.Unlock()
+			_ = fm.store.DeleteVM(ctx, vmID)
+			return nil, fmt.Errorf("%w: host %s is required by the seed snapshot but is not active", ErrNoCapacity, spec.PinnedHostID)
+		}
+		hosts = pinned
+	}
 	if len(hosts) == 0 && spec.GPUs > 0 {
 		delete(fm.vms, vmID)
 		fm.mu.Unlock()
