@@ -17,6 +17,11 @@ export interface Spec {
   gpu_profile?: string;
   region?: string;
   max_runtime_seconds?: number;
+  /** Destroys the environment after this many seconds with no exec and no
+   * attach session. Omitted or 0 means no idle expiry. Unlike
+   * max_runtime_seconds (a ceiling measured from create), this is measured
+   * from the last exec or attach. */
+  idle_timeout_seconds?: number;
   image?: string;
   /** Pins the environment to an exact host id (the Fusefile's
    * placement.host). The pinned host still has to be active, run the right

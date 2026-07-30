@@ -26,10 +26,13 @@ type ResourceSpec struct {
 	StorageGB         int32
 	Region            string
 	MaxRuntimeSeconds int64
-	Image             string
-	GPUs              int32
-	GPUKind           string
-	GPUProfile        string
+	// IdleTimeoutSeconds destroys the environment after this many seconds
+	// with no exec and no attach session. Zero means no idle expiry.
+	IdleTimeoutSeconds int64
+	Image              string
+	GPUs               int32
+	GPUKind            string
+	GPUProfile         string
 	// HostID pins the environment to an exact host id (placement.host).
 	HostID string
 	// Labels are the placement label selectors (placement.labels); every
@@ -68,6 +71,12 @@ type Compiled struct {
 // defaultWorkspace is used for manifest.machine.workspace when Fusefile.Workspace
 // is unset.
 const defaultWorkspace = "/workspace"
+
+// MinIdleTimeout is the smallest meaningful resources.idle_timeout. Idle
+// expiry is detected on the orchestrator's reconcile loop (30s default) and
+// requires two consecutive observations, so anything shorter than this
+// promises a precision the loop cannot deliver.
+const MinIdleTimeout = time.Minute
 
 // manifest is the compiler-local marshal type for the guest-facing manifest
 // json. it mirrors DefaultFusedManifest (internal/orchestrator/agent_profile.go)
@@ -176,10 +185,32 @@ func Compile(f *Fusefile) (*Compiled, error) {
 	var maxRuntimeSeconds int64
 	if f.Resources.MaxRuntime != "" {
 		d, err := time.ParseDuration(f.Resources.MaxRuntime)
-		if err != nil {
+		switch {
+		case err != nil:
 			errs = append(errs, fmt.Errorf("resources.max_runtime: %w", err))
-		} else {
+		case d < 0:
+			errs = append(errs, fmt.Errorf("resources.max_runtime: must not be negative"))
+		default:
 			maxRuntimeSeconds = int64(d.Seconds())
+		}
+	}
+
+	var idleTimeoutSeconds int64
+	if f.Resources.IdleTimeout != "" {
+		d, err := time.ParseDuration(f.Resources.IdleTimeout)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("resources.idle_timeout: %w", err))
+		case d < 0:
+			errs = append(errs, fmt.Errorf("resources.idle_timeout: must not be negative"))
+		case d > 0 && d < MinIdleTimeout:
+			// idle expiry is only as accurate as the reconcile tick plus the
+			// two-strike rule, so sub-minute windows would be misleading.
+			errs = append(errs, fmt.Errorf(
+				"resources.idle_timeout: must be at least %s (idle detection runs on the reconcile loop)",
+				MinIdleTimeout))
+		default:
+			idleTimeoutSeconds = int64(d.Seconds())
 		}
 	}
 
@@ -219,14 +250,15 @@ func Compile(f *Fusefile) (*Compiled, error) {
 			RamMB: ramMB,
 			// round up so any positive storage request is never silently zeroed
 			// (e.g. "512MB" must provision 1GB, not floor to 0).
-			StorageGB:         int32((int64(storageMB) + 1023) / 1024),
-			MaxRuntimeSeconds: maxRuntimeSeconds,
-			Image:             f.Image,
-			GPUs:              int32(f.Resources.GPU),
-			GPUKind:           f.Resources.GPUKind,
-			GPUProfile:        strings.ToLower(f.Resources.GPUProfile),
-			HostID:            f.Placement.Host,
-			Labels:            compileLabels(f.Placement.Labels),
+			StorageGB:          int32((int64(storageMB) + 1023) / 1024),
+			MaxRuntimeSeconds:  maxRuntimeSeconds,
+			IdleTimeoutSeconds: idleTimeoutSeconds,
+			Image:              f.Image,
+			GPUs:               int32(f.Resources.GPU),
+			GPUKind:            f.Resources.GPUKind,
+			GPUProfile:         strings.ToLower(f.Resources.GPUProfile),
+			HostID:             f.Placement.Host,
+			Labels:             compileLabels(f.Placement.Labels),
 		},
 		ManifestJSON:    manifestJSON,
 		StartupScript:   compileStartupScript(f),

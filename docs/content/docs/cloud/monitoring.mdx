@@ -55,6 +55,13 @@ is what keeps the state store and the real provider fleet in sync:
   `TaskStuckTimeout` (2 hours) when it isn't set.
   `orchestrator_reconcile_stuck_tasks_suspected_total` is the first-strike
   leading indicator, it fires one cycle earlier on the same condition.
+- `orchestrator_reconcile_idle_vms_failed_total` increasing means a running VM
+  went longer than its idle timeout with no exec and no attach session on two
+  consecutive cycles and was torn down. The window is the environment's
+  `idle_timeout_seconds`, falling back to the fleet-wide `DefaultIdleTimeout`,
+  which is unset by default: environments that don't ask for idle expiry never
+  get it. `orchestrator_reconcile_idle_vms_suspected_total` is the first-strike
+  leading indicator.
 
 **Fleet size drift**: `orchestrator_fleet_tracked_vms` (what the state store
 thinks exists) versus `orchestrator_fleet_provider_vms` (what the provider

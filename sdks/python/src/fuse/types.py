@@ -36,6 +36,9 @@ class Spec(_Model):
     gpu_profile: Optional[str] = None
     region: Optional[str] = None
     max_runtime_seconds: Optional[int] = None
+    # destroys the environment after this many seconds with no exec and no
+    # attach session. none or 0 means no idle expiry.
+    idle_timeout_seconds: Optional[int] = None
     image: Optional[str] = None
     # pins the environment to an exact host id (the fusefile's placement.host).
     host_id: Optional[str] = None

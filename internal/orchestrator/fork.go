@@ -246,6 +246,7 @@ func (fm *FleetManager) ForkEnvironment(ctx context.Context, srcVMID string, opt
 		drainCommand:       drainCommand,
 		createdAt:          now,
 		updatedAt:          now,
+		lastActivityAt:     now,
 	}
 	fm.mu.Lock()
 	fm.vms[newVMID] = v

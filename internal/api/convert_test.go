@@ -2,6 +2,7 @@ package api
 
 import (
 	"testing"
+	"time"
 
 	"github.com/folsomintel/fuse/internal/orchestrator"
 )
@@ -110,5 +111,51 @@ func TestToAPIHost_LabelsRoundTrip(t *testing.T) {
 	}
 	if got := toAPIHost(orchestrator.Host{ID: "h2"}); got.Labels != nil {
 		t.Errorf("labels = %v, want nil for a host with none", got.Labels)
+	}
+}
+
+// TestResourceSpecTimeoutsRoundTrip checks that both duration knobs survive
+// the wire -> orchestrator -> wire trip, in seconds either side.
+func TestResourceSpecTimeoutsRoundTrip(t *testing.T) {
+	in := ResourceSpec{MaxRuntimeSeconds: 14400, IdleTimeoutSeconds: 900}
+
+	spec := toOrchestratorSpec(in)
+	if spec.MaxRuntime != 4*time.Hour {
+		t.Errorf("MaxRuntime = %v, want 4h", spec.MaxRuntime)
+	}
+	if spec.IdleTimeout != 15*time.Minute {
+		t.Errorf("IdleTimeout = %v, want 15m", spec.IdleTimeout)
+	}
+
+	out := toAPIResourceSpec(spec)
+	if out.MaxRuntimeSeconds != in.MaxRuntimeSeconds {
+		t.Errorf("max_runtime_seconds = %d, want %d", out.MaxRuntimeSeconds, in.MaxRuntimeSeconds)
+	}
+	if out.IdleTimeoutSeconds != in.IdleTimeoutSeconds {
+		t.Errorf("idle_timeout_seconds = %d, want %d", out.IdleTimeoutSeconds, in.IdleTimeoutSeconds)
+	}
+}
+
+func TestValidateTimeoutSpec(t *testing.T) {
+	cases := []struct {
+		name    string
+		spec    ResourceSpec
+		wantErr bool
+	}{
+		{"zero is fine", ResourceSpec{}, false},
+		{"one minute idle", ResourceSpec{IdleTimeoutSeconds: 60}, false},
+		{"both set", ResourceSpec{MaxRuntimeSeconds: 3600, IdleTimeoutSeconds: 900}, false},
+		{"negative max runtime", ResourceSpec{MaxRuntimeSeconds: -3600}, true},
+		{"negative idle timeout", ResourceSpec{IdleTimeoutSeconds: -900}, true},
+		{"sub-minute idle timeout", ResourceSpec{IdleTimeoutSeconds: 10}, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateTimeoutSpec(tc.spec)
+			if tc.wantErr != (err != nil) {
+				t.Fatalf("err = %v, wantErr = %v", err, tc.wantErr)
+			}
+		})
 	}
 }

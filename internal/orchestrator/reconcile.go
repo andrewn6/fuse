@@ -174,12 +174,150 @@ func (fm *FleetManager) reconcileStuckTasks(ctx context.Context, summary *Reconc
 	}
 }
 
+// reconcileIdleVMs tears down Running VMs that have gone longer than their
+// idle timeout with no exec and no attach session. This is the liveness check
+// reconcileStuckTasks is not: it reads vm.lastActivityAt, which only the
+// guest-touching entry points in exec.go bump.
+//
+// "Idle" means no control-plane activity. In-guest CPU use and traffic on
+// exposed ports are deliberately not observed — the orchestrator has no
+// channel for either — so a VM busy computing with nobody attached will be
+// destroyed once its window elapses. Authors opt in per environment via
+// resources.idle_timeout; a zero timeout (the default) disables the check.
+//
+// Detection is two-strike like reconcileStuckTasks, so resolution is bounded
+// by roughly two reconcile ticks.
+func (fm *FleetManager) reconcileIdleVMs(ctx context.Context, summary *ReconcileSummary) {
+	now := time.Now()
+
+	type idleCandidate struct {
+		vmID     string
+		taskID   string
+		idle     time.Duration
+		timeout  time.Duration
+		strikes  int
+		needFail bool
+	}
+
+	fm.mu.Lock()
+	candidates := make([]idleCandidate, 0)
+	live := make(map[string]bool, len(fm.vms))
+	for id, v := range fm.vms {
+		live[id] = true
+
+		if v.state != VMStateRunning || v.attachSessions > 0 {
+			// Not eligible: either the VM is not running, or somebody is
+			// attached right now. Reset any strike history so it starts from a
+			// clean slate once it becomes eligible again.
+			delete(fm.idleStrikes, id)
+			continue
+		}
+
+		timeout := v.spec.IdleTimeout
+		if timeout <= 0 {
+			timeout = fm.defaultIdleTimeout
+		}
+		if timeout <= 0 {
+			delete(fm.idleStrikes, id)
+			continue
+		}
+
+		// A VM recorded before the activity clock existed (or one that
+		// somehow missed initialisation) falls back to its create time.
+		since := v.lastActivityAt
+		if since.IsZero() {
+			since = v.createdAt
+		}
+		idle := now.Sub(since)
+		if idle <= timeout {
+			delete(fm.idleStrikes, id)
+			continue
+		}
+
+		fm.idleStrikes[id]++
+		strikes := fm.idleStrikes[id]
+		candidates = append(candidates, idleCandidate{
+			vmID:     id,
+			taskID:   v.taskID,
+			idle:     idle,
+			timeout:  timeout,
+			strikes:  strikes,
+			needFail: strikes >= 2,
+		})
+	}
+	// Drop strike entries for VMs that no longer exist.
+	for id := range fm.idleStrikes {
+		if !live[id] {
+			delete(fm.idleStrikes, id)
+		}
+	}
+	fm.mu.Unlock()
+
+	for _, c := range candidates {
+		if !c.needFail {
+			summary.IdleVMsSuspected++
+			fm.logger.Warn("vm exceeded idle timeout, suspected idle",
+				"vm", c.vmID,
+				"task", c.taskID,
+				"idle", c.idle,
+				"timeout", c.timeout,
+				"strike", c.strikes,
+			)
+			fm.appendEventBackground("vm", c.vmID, "vm.idle_suspected", map[string]any{
+				"task_id": c.taskID,
+				"idle_s":  int(c.idle.Seconds()),
+				"timeout": c.timeout.String(),
+				"strike":  c.strikes,
+			})
+			continue
+		}
+
+		// Second strike — tear the environment down.
+		fm.failIdleVM(ctx, c.vmID, c.taskID, c.idle, c.timeout)
+		summary.IdleVMsFailed++
+	}
+}
+
+// expiry describes why a VM is being torn down by a reconcile detector. The
+// stuck-task and idle detectors differ only in these strings and counters, so
+// they share failExpiredVM below.
+type expiry struct {
+	reasonCode string         // short code carried on events and dead letters
+	kind       DeadLetterKind // dead-letter classification
+	reason     string         // human-readable, stored on the vm and the task
+	age        time.Duration  // observed age or idle duration
+	ceiling    time.Duration  // the window that was exceeded
+}
+
 // failStuckTask marks a Running VM as destroying and fails its task with
 // a "stuck" reason. Shares structure with the "vm missing from provider"
 // path in reconcile() but is triggered by the stuck-task detector.
 func (fm *FleetManager) failStuckTask(ctx context.Context, vmID, taskID string, age, ceiling time.Duration) {
-	reason := fmt.Sprintf("task stuck: runtime %s exceeded ceiling %s with no state transitions", age.Round(time.Second), ceiling)
+	fm.failExpiredVM(ctx, vmID, taskID, expiry{
+		reasonCode: "stuck_task",
+		kind:       DeadLetterStuckTask,
+		reason:     fmt.Sprintf("task stuck: runtime %s exceeded ceiling %s with no state transitions", age.Round(time.Second), ceiling),
+		age:        age,
+		ceiling:    ceiling,
+	})
+}
 
+// failIdleVM marks a Running VM as destroying because it has gone longer than
+// its idle timeout with no exec and no attach session. Takes the same teardown
+// path as failStuckTask, with its own reason code.
+func (fm *FleetManager) failIdleVM(ctx context.Context, vmID, taskID string, idle, timeout time.Duration) {
+	fm.failExpiredVM(ctx, vmID, taskID, expiry{
+		reasonCode: "idle_timeout",
+		kind:       DeadLetterIdleTimeout,
+		reason:     fmt.Sprintf("environment idle: no exec or attach for %s, exceeding idle timeout %s", idle.Round(time.Second), timeout),
+		age:        idle,
+		ceiling:    timeout,
+	})
+}
+
+// failExpiredVM marks a Running VM as destroying, fails its task if it carries
+// one, dead-letters the reason, and destroys the VM in the background.
+func (fm *FleetManager) failExpiredVM(ctx context.Context, vmID, taskID string, e expiry) {
 	fm.mu.Lock()
 	v, ok := fm.vms[vmID]
 	if !ok || v.state != VMStateRunning || v.taskID != taskID {
@@ -188,44 +326,48 @@ func (fm *FleetManager) failStuckTask(ctx context.Context, vmID, taskID string, 
 	}
 	v.state = VMStateDestroying
 	v.taskID = ""
-	v.err = reason
+	v.err = e.reason
 	v.updatedAt = time.Now()
 	assignedAt := v.createdAt
 	delete(fm.stuckStrikes, vmID)
+	delete(fm.idleStrikes, vmID)
 	fm.mu.Unlock()
 
-	fm.logger.Error("failing stuck task",
+	fm.logger.Error("tearing down expired vm",
 		"vm", vmID,
 		"task", taskID,
-		"age", age,
-		"ceiling", ceiling,
+		"reason", e.reasonCode,
+		"age", e.age,
+		"ceiling", e.ceiling,
 	)
 
 	fm.persistVMBackground(vmID)
-	fm.appendEventBackground("vm", vmID, "vm.destroying", map[string]any{"reason": "stuck_task"})
+	fm.appendEventBackground("vm", vmID, "vm.destroying", map[string]any{"reason": e.reasonCode})
 	fm.publishStateChange(vmID, "")
-	fm.upsertTaskBackground(TaskRecord{
-		TaskID:     taskID,
-		VMID:       vmID,
-		RunStatus:  TaskRunFailed,
-		RetryCount: 0,
-		LastError:  reason,
-		AssignedAt: assignedAt,
-		UpdatedAt:  time.Now(),
-	})
-	fm.appendEventBackground("task", taskID, "task.failed", map[string]any{
-		"vm_id":  vmID,
-		"error":  reason,
-		"reason": "stuck_task",
-	})
+	if taskID != "" {
+		fm.upsertTaskBackground(TaskRecord{
+			TaskID:     taskID,
+			VMID:       vmID,
+			RunStatus:  TaskRunFailed,
+			RetryCount: 0,
+			LastError:  e.reason,
+			AssignedAt: assignedAt,
+			UpdatedAt:  time.Now(),
+		})
+		fm.appendEventBackground("task", taskID, "task.failed", map[string]any{
+			"vm_id":  vmID,
+			"error":  e.reason,
+			"reason": e.reasonCode,
+		})
+	}
 	fm.recordDeadLetter(ctx, DeadLetterRecord{
-		Kind:     DeadLetterStuckTask,
+		Kind:     e.kind,
 		EntityID: vmID,
 		TaskID:   taskID,
-		Reason:   reason,
+		Reason:   e.reason,
 		Payload: dlPayload(
-			"age_s", fmt.Sprintf("%d", int(age.Seconds())),
-			"ceiling_s", fmt.Sprintf("%d", int(ceiling.Seconds())),
+			"age_s", fmt.Sprintf("%d", int(e.age.Seconds())),
+			"ceiling_s", fmt.Sprintf("%d", int(e.ceiling.Seconds())),
 		),
 	})
 	go fm.destroyAndRemove(vmID)

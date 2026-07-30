@@ -92,6 +92,48 @@ func TestCompileMaxRuntime(t *testing.T) {
 	}
 }
 
+func TestCompileIdleTimeout(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  int64
+	}{
+		{"unset", "", 0},
+		{"one minute", "1m", 60},
+		{"fifteen minutes", "15m", 900},
+		{"two hours", "2h", 7200},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &Fusefile{Version: 1, Resources: Resources{IdleTimeout: tc.input}}
+			c, err := Compile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Spec.IdleTimeoutSeconds != tc.want {
+				t.Fatalf("idle_timeout_seconds = %d, want %d", c.Spec.IdleTimeoutSeconds, tc.want)
+			}
+		})
+	}
+}
+
+// idle_timeout and max_runtime are independent knobs: one is a ceiling from
+// create, the other a window from the last exec or attach.
+func TestCompileIdleTimeoutAndMaxRuntimeCoexist(t *testing.T) {
+	f := &Fusefile{Version: 1, Resources: Resources{MaxRuntime: "4h", IdleTimeout: "15m"}}
+	c, err := Compile(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Spec.MaxRuntimeSeconds != 14400 {
+		t.Errorf("max_runtime_seconds = %d, want 14400", c.Spec.MaxRuntimeSeconds)
+	}
+	if c.Spec.IdleTimeoutSeconds != 900 {
+		t.Errorf("idle_timeout_seconds = %d, want 900", c.Spec.IdleTimeoutSeconds)
+	}
+}
+
 func TestCompileCPUsPassthrough(t *testing.T) {
 	f := &Fusefile{Version: 1, Resources: Resources{CPUs: 4}}
 	c, err := Compile(f)
@@ -177,7 +219,7 @@ func TestCompileEmptyResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if c.Spec.CPUs != 0 || c.Spec.RamMB != 0 || c.Spec.StorageGB != 0 || c.Spec.MaxRuntimeSeconds != 0 || c.Spec.Region != "" || c.Spec.GPUs != 0 || c.Spec.GPUKind != "" {
+	if c.Spec.CPUs != 0 || c.Spec.RamMB != 0 || c.Spec.StorageGB != 0 || c.Spec.MaxRuntimeSeconds != 0 || c.Spec.IdleTimeoutSeconds != 0 || c.Spec.Region != "" || c.Spec.GPUs != 0 || c.Spec.GPUKind != "" {
 		t.Fatalf("expected zero spec, got %+v", c.Spec)
 	}
 }
@@ -225,6 +267,26 @@ func TestCompileInvalid(t *testing.T) {
 			name:        "invalid duration",
 			resources:   Resources{MaxRuntime: "1 hour"},
 			wantContain: `resources.max_runtime: `,
+		},
+		{
+			name:        "negative max_runtime",
+			resources:   Resources{MaxRuntime: "-1h"},
+			wantContain: `resources.max_runtime: must not be negative`,
+		},
+		{
+			name:        "invalid idle_timeout duration",
+			resources:   Resources{IdleTimeout: "15 minutes"},
+			wantContain: `resources.idle_timeout: `,
+		},
+		{
+			name:        "negative idle_timeout",
+			resources:   Resources{IdleTimeout: "-15m"},
+			wantContain: `resources.idle_timeout: must not be negative`,
+		},
+		{
+			name:        "sub-minute idle_timeout",
+			resources:   Resources{IdleTimeout: "10s"},
+			wantContain: `resources.idle_timeout: must be at least 1m0s`,
 		},
 		{
 			name:        "negative gpu count",

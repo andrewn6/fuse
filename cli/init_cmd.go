@@ -20,6 +20,7 @@ resources:
   memory: 2GB # accepts MB/GB suffixes, compiles to ram_mb
   storage: 10GB # compiles to storage_gb
   max_runtime: 1h # accepts go duration, compiles to max_runtime_seconds
+  # idle_timeout: 15m # uncomment to destroy after this long with no exec or attach
 
 # convenience layer run once at boot, before run. compiles into startup_script.
 setup:

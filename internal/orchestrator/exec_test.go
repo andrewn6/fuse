@@ -271,3 +271,66 @@ func TestAttach_NotRunningRejected(t *testing.T) {
 		t.Fatalf("err = %v, want ErrVMNotRunning", err)
 	}
 }
+
+func TestExec_RecordsActivity(t *testing.T) {
+	p := newMockProvider()
+	fm := NewFleetManager(FleetConfig{Provider: p, Prefix: "fuse-"})
+	vmID := provisionRunning(t, fm)
+
+	// Back-date the activity clock so the bump is unambiguous.
+	stale := time.Now().Add(-time.Hour)
+	fm.mu.Lock()
+	fm.vms[vmID].lastActivityAt = stale
+	fm.mu.Unlock()
+
+	if _, err := fm.Exec(context.Background(), vmID, []string{"true"}, ExecOptions{}); err != nil {
+		t.Fatalf("exec: %v", err)
+	}
+
+	fm.mu.RLock()
+	got := fm.vms[vmID].lastActivityAt
+	fm.mu.RUnlock()
+	if !got.After(stale) {
+		t.Errorf("lastActivityAt = %v, want later than %v", got, stale)
+	}
+}
+
+func TestAttach_TracksSessionUntilStreamClose(t *testing.T) {
+	p := newMockProvider()
+	fm := NewFleetManager(FleetConfig{Provider: p, Prefix: "fuse-"})
+	ctx := context.Background()
+	vmID := provisionRunning(t, fm)
+
+	guest, caller := net.Pipe()
+	t.Cleanup(func() { _ = guest.Close() })
+
+	att := &attachableEnv{mockEnv: p.envs[vmID], stream: caller}
+	fm.mu.Lock()
+	fm.vms[vmID].env = att
+	fm.mu.Unlock()
+
+	stream, err := fm.Attach(ctx, vmID, AttachSpec{TTY: true})
+	if err != nil {
+		t.Fatalf("attach: %v", err)
+	}
+
+	fm.mu.RLock()
+	open := fm.vms[vmID].attachSessions
+	fm.mu.RUnlock()
+	if open != 1 {
+		t.Fatalf("attachSessions = %d, want 1 while attached", open)
+	}
+
+	if err := stream.Close(); err != nil {
+		t.Fatalf("close: %v", err)
+	}
+	// Close is idempotent from the fleet's point of view.
+	_ = stream.Close()
+
+	fm.mu.RLock()
+	open = fm.vms[vmID].attachSessions
+	fm.mu.RUnlock()
+	if open != 0 {
+		t.Errorf("attachSessions = %d, want 0 after close", open)
+	}
+}

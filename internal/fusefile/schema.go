@@ -47,6 +47,11 @@ type Resources struct {
 	Memory     string `yaml:"memory,omitempty"`      // e.g. "2GB"
 	Storage    string `yaml:"storage,omitempty"`     // e.g. "10GB"
 	MaxRuntime string `yaml:"max_runtime,omitempty"` // go duration
+	// IdleTimeout destroys the environment after this long with no exec
+	// and no attach session. Go duration. "idle" means exactly that: no
+	// control-plane activity. In-guest CPU or network traffic is not
+	// observed. Empty means no idle expiry.
+	IdleTimeout string `yaml:"idle_timeout,omitempty"` // go duration
 }
 
 // Service is one in-vm service; compiled to manifest.services and a compose unit.
