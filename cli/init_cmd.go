@@ -8,8 +8,8 @@ import (
 )
 
 // initScaffold is the commented example Fusefile written by `fuse init`. it
-// documents the full v1 contract; image and expose are parsed and validated
-// today but not yet compiled (that lands in a later pr).
+// documents the full v1 contract; every field here is parsed, validated, and
+// compiled today.
 const initScaffold = `version: 1
 
 # base environment. an oci image ref, or omitted to use the baked base rootfs.
@@ -22,10 +22,27 @@ resources:
   max_runtime: 1h # accepts go duration, compiles to max_runtime_seconds
   # idle_timeout: 15m # uncomment to destroy after this long with no exec or attach
 
+# opt in to the setup layer cache. layers are host-local and firecracker-only;
+# a gpu environment gets no caching. see 'fuse build --plan'.
+cache:
+  enabled: true
+
 # convenience layer run once at boot, before run. compiles into startup_script.
 setup:
-  - apt-get update -qq
-  - apt-get install -y --no-install-recommends ripgrep
+  # bare string form: keyed on its bytes plus the step before it.
+  - apt-get update -qq && apt-get install -y --no-install-recommends ripgrep
+
+  # mapping form: inputs are hashed into the step's cache key, so editing one
+  # of these files re-runs this step (and every step after it).
+  # - run: npm ci
+  #   inputs:
+  #     - package.json
+  #     - package-lock.json
+
+  # a step that reads /fuse/secrets.json or has effects outside the rootfs must
+  # opt out, or its layer would be reused with stale secret material.
+  # - run: ./scripts/register.sh
+  #   cache: false
 
 # services brought up inside the vm. compiles to manifest.services then a compose project.
 services:

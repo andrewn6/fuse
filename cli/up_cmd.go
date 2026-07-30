@@ -21,6 +21,8 @@ func newUpCmd() *cobra.Command {
 		taskID      string
 		noWait      bool
 		fromBuild   string
+		plan        bool
+		noCache     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "up [path]",
@@ -40,9 +42,35 @@ func newUpCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("%s: %w", path, err)
 			}
+			// --from-build boots a rootfs that already has the setup phase
+			// baked in, so this boot runs no setup steps at all. the layer
+			// cache is a property of running them, so both flags that govern
+			// it would be describing work that does not happen here.
+			if fromBuild != "" {
+				if plan {
+					return fmt.Errorf("--plan and --from-build are mutually exclusive: a --from-build boot runs no setup steps to plan")
+				}
+				if noCache {
+					return fmt.Errorf("--no-cache and --from-build are mutually exclusive: a --from-build boot runs no setup steps to cache")
+				}
+			}
+			if noCache {
+				f.Cache.Enabled = false
+			}
 			c, err := fusefile.Compile(f)
 			if err != nil {
 				return fmt.Errorf("%s: %w", path, err)
+			}
+
+			if fromBuild == "" {
+				// derive layer keys when caching is on (so a bad `inputs` entry
+				// fails here rather than mid-provision) or when the user asked
+				// to see the plan.
+				if lp, err := planSetupLayers(path, f, plan); err != nil {
+					return err
+				} else if plan {
+					return renderLayerPlan(lp)
+				}
 			}
 
 			secretMap, err := loadSecretsFile(secretsFile)
@@ -127,6 +155,8 @@ func newUpCmd() *cobra.Command {
 	cmd.Flags().StringVar(&taskID, "task-id", "", "environment task id (default: the Fusefile's parent directory name)")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "create the environment without streaming provisioning events")
 	cmd.Flags().StringVar(&fromBuild, "from-build", "", "boot from a `fuse build` artifact instead of a base image (skips the setup phase)")
+	cmd.Flags().BoolVar(&plan, "plan", false, "print the derived setup layer cache plan and exit without creating anything")
+	cmd.Flags().BoolVar(&noCache, "no-cache", false, "ignore the Fusefile's cache block and run every setup step")
 	return cmd
 }
 

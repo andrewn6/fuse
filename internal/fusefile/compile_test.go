@@ -442,13 +442,13 @@ func TestCompileStartupScript(t *testing.T) {
 	cases := []struct {
 		name      string
 		workspace string
-		setup     []string
+		setup     []Step
 		run       string
 		want      string
 	}{
-		{"setup and run", "", []string{"a", "b"}, "./c", prelude + "a\nb\n./c\n"},
+		{"setup and run", "", []Step{{Run: "a"}, {Run: "b"}}, "./c", prelude + "a\nb\n./c\n"},
 		{"run only", "", nil, "./c", prelude + "./c\n"},
-		{"setup only", "", []string{"a"}, "", prelude + "a\n"},
+		{"setup only", "", []Step{{Run: "a"}}, "", prelude + "a\n"},
 		{"neither", "", nil, "", ""},
 		{
 			"custom workspace",
@@ -492,13 +492,13 @@ func TestCompileBuildAndRunScripts(t *testing.T) {
 		"mkdir -p '/workspace'\ncd '/workspace'\n"
 	cases := []struct {
 		name      string
-		setup     []string
+		setup     []Step
 		run       string
 		wantBuild string
 		wantRun   string
 	}{
-		{"setup and run", []string{"a", "b"}, "./c", prelude + "a\nb\n", prelude + "./c\n"},
-		{"setup only", []string{"a"}, "", prelude + "a\n", ""},
+		{"setup and run", []Step{{Run: "a"}, {Run: "b"}}, "./c", prelude + "a\nb\n", prelude + "./c\n"},
+		{"setup only", []Step{{Run: "a"}}, "", prelude + "a\n", ""},
 		{"run only", nil, "./c", "", prelude + "./c\n"},
 		{"neither", nil, "", "", ""},
 	}
@@ -522,6 +522,33 @@ func TestCompileBuildAndRunScripts(t *testing.T) {
 				t.Fatalf("build script %q contains the run command %q", c.BuildScript, tc.run)
 			}
 		})
+	}
+}
+
+// the mapping form of a setup step must emit the same fragment the bare scalar
+// form does, in every generated script. layer keys are derived from that same
+// fragment, so a build that ran something else than the key covered would serve
+// a stale layer.
+func TestCompileMappingStepsEmitRunOnly(t *testing.T) {
+	cacheOff := false
+	f := &Fusefile{Version: 1, Setup: []Step{
+		{Run: "apt-get update -qq"},
+		{Run: "npm ci", Inputs: []string{"package.json"}},
+		{Run: "./register.sh", Cache: &cacheOff},
+	}}
+	c, err := Compile(f)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	const prelude = "set -eu\nif (set -o pipefail) 2>/dev/null; then set -o pipefail; fi\n" +
+		"mkdir -p '/workspace'\ncd '/workspace'\n"
+	want := prelude + "apt-get update -qq\nnpm ci\n./register.sh\n"
+	if c.BuildScript != want {
+		t.Errorf("build script = %q, want %q", c.BuildScript, want)
+	}
+	if c.StartupScript != want {
+		t.Errorf("startup script = %q, want %q", c.StartupScript, want)
 	}
 }
 

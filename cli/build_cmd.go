@@ -26,6 +26,8 @@ func newBuildCmd() *cobra.Command {
 		secrets     []string
 		secretsFile string
 		keep        bool
+		plan        bool
+		noCache     bool
 	)
 	cmd := &cobra.Command{
 		Use:   "build [path]",
@@ -49,12 +51,25 @@ func newBuildCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("%s: %w", path, err)
 			}
+			if noCache {
+				f.Cache.Enabled = false
+			}
 			c, err := fusefile.Compile(f)
 			if err != nil {
 				return fmt.Errorf("%s: %w", path, err)
 			}
 			if c.BuildScript == "" {
 				return fmt.Errorf("%s: no setup phase to build", path)
+			}
+
+			// build is where the setup phase actually runs, so the layer plan
+			// describes exactly this command's work. derive it before booting
+			// the builder: a bad `inputs` entry should fail here rather than
+			// after a vm is up and holding host capacity.
+			if lp, err := planSetupLayers(path, f, plan); err != nil {
+				return err
+			} else if plan {
+				return renderLayerPlan(lp)
 			}
 
 			secretMap, err := loadSecretsFile(secretsFile)
@@ -173,6 +188,8 @@ func newBuildCmd() *cobra.Command {
 	cmd.Flags().StringArrayVar(&secrets, "secret", nil, "secret as key=value (repeatable, overrides --secrets-file)")
 	cmd.Flags().StringVar(&secretsFile, "secrets-file", "", "path to a file of KEY=VALUE secret lines")
 	cmd.Flags().BoolVar(&keep, "keep", false, "leave the builder environment running instead of destroying it")
+	cmd.Flags().BoolVar(&plan, "plan", false, "print the derived setup layer cache plan and exit without building anything")
+	cmd.Flags().BoolVar(&noCache, "no-cache", false, "ignore the Fusefile's cache block and run every setup step")
 	return cmd
 }
 

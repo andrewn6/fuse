@@ -7,7 +7,7 @@ func TestFusefileFieldsPresent(t *testing.T) {
 		Version:   1,
 		Image:     "img:tag",
 		Resources: Resources{CPUs: 2, Memory: "2GB", Storage: "10GB", MaxRuntime: "1h", IdleTimeout: "15m"},
-		Setup:     []string{"echo hi"},
+		Setup:     []Step{{Run: "echo hi"}},
 		Services:  map[string]Service{"db": {Image: "postgres:16", Ports: []int{5432}, Env: map[string]EnvValue{"PGPASSWORD": {Secret: "pg_password"}, "PGUSER": {Value: "admin"}}}},
 		Run:       "./start.sh",
 		Workspace: "/workspace",
@@ -43,7 +43,7 @@ func TestFusefileFieldsPresent(t *testing.T) {
 	}
 
 	// setup field
-	if len(f.Setup) != 1 || f.Setup[0] != "echo hi" {
+	if len(f.Setup) != 1 || f.Setup[0].Run != "echo hi" {
 		t.Errorf("setup: got %v, want [echo hi]", f.Setup)
 	}
 
