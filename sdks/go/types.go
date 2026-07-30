@@ -41,6 +41,12 @@ type CreateRequest struct {
 	GatewayURL     string            `json:"gateway_url,omitempty"`
 	GatewayToken   string            `json:"gateway_token,omitempty"`
 	Expose         []ExposeSpec      `json:"expose,omitempty"`
+
+	// SeedSnapshotID boots the environment from an existing snapshot artifact
+	// instead of Spec.Image. The two are mutually exclusive. The artifact is
+	// host-local, so the environment lands on the snapshot's host or the call
+	// fails.
+	SeedSnapshotID string `json:"seed_snapshot_id,omitempty"`
 }
 
 // EnvironmentInfo is the server's view of a single microVM.
@@ -125,21 +131,24 @@ type SnapshotExport struct {
 
 // Snapshot is a persisted snapshot record.
 type Snapshot struct {
-	ID               string           `json:"id"`
-	VMID             string           `json:"vm_id"`
-	TaskID           string           `json:"task_id,omitempty"`
-	TenantID         string           `json:"tenant_id,omitempty"`
-	ParentSnapshotID string           `json:"parent_snapshot_id,omitempty"`
-	Mode             string           `json:"mode,omitempty"`
-	State            string           `json:"state,omitempty"`
-	Comment          string           `json:"comment,omitempty"`
-	SizeBytes        int64            `json:"size_bytes,omitempty"`
-	CreatedAt        time.Time        `json:"created_at"`
-	UpdatedAt        time.Time        `json:"updated_at,omitempty"`
-	RetentionUntil   *time.Time       `json:"retention_until,omitempty"`
-	LastError        string           `json:"last_error,omitempty"`
-	ExportRef        string           `json:"export_ref,omitempty"`
-	Exports          []SnapshotExport `json:"exports,omitempty"`
+	ID               string `json:"id"`
+	VMID             string `json:"vm_id"`
+	TaskID           string `json:"task_id,omitempty"`
+	TenantID         string `json:"tenant_id,omitempty"`
+	ParentSnapshotID string `json:"parent_snapshot_id,omitempty"`
+	Mode             string `json:"mode,omitempty"`
+	State            string `json:"state,omitempty"`
+	Comment          string `json:"comment,omitempty"`
+	// Name is the caller-chosen lookup key from the snapshot's metadata, set
+	// by `fuse build` so an artifact can be found without its random id.
+	Name           string           `json:"name,omitempty"`
+	SizeBytes      int64            `json:"size_bytes,omitempty"`
+	CreatedAt      time.Time        `json:"created_at"`
+	UpdatedAt      time.Time        `json:"updated_at,omitempty"`
+	RetentionUntil *time.Time       `json:"retention_until,omitempty"`
+	LastError      string           `json:"last_error,omitempty"`
+	ExportRef      string           `json:"export_ref,omitempty"`
+	Exports        []SnapshotExport `json:"exports,omitempty"`
 }
 
 type snapshotList struct {
