@@ -1,5 +1,16 @@
 # Changelog
 
+## [0.11.0](https://github.com/folsomintel/fuse/compare/v0.10.0...v0.11.0) (2026-07-30)
+
+
+### Features
+
+* **cli:** add fuse compile to print what a Fusefile compiles into ([#131](https://github.com/folsomintel/fuse/issues/131)) ([b0e600e](https://github.com/folsomintel/fuse/commit/b0e600e6b95eb5f4cd93bc32cd3cc908a19712a4))
+* **cli:** report per-step cache state, timing, and miss reason in fuse up ([#132](https://github.com/folsomintel/fuse/issues/132)) ([5c437dc](https://github.com/folsomintel/fuse/commit/5c437dc3bf83c045a51f0a0c67a356df765d3805))
+* **fusefile:** add placement block for host pinning and label selectors ([#136](https://github.com/folsomintel/fuse/issues/136)) ([420ca17](https://github.com/folsomintel/fuse/commit/420ca17fbe05b7c3b1ce17cbf7574aa2589fa29b))
+* **fusefile:** add resources.idle_timeout ([#135](https://github.com/folsomintel/fuse/issues/135)) ([7b3c3e6](https://github.com/folsomintel/fuse/commit/7b3c3e6ad608c05bcbe79a0d989daf5e68b69b92))
+* **fusefile:** content-addressed layer cache keys for setup steps ([#133](https://github.com/folsomintel/fuse/issues/133)) ([a6b8107](https://github.com/folsomintel/fuse/commit/a6b8107c3084caac01fade09a58cfacc802208cf))
+
 ## [0.10.0](https://github.com/folsomintel/fuse/compare/v0.9.2...v0.10.0) (2026-07-30)
 
 
