@@ -47,6 +47,12 @@ BASE_ROOTFS = Path(os.environ.get("BASE_ROOTFS", str(FC_DIR / "rootfs-fused.ext4
 # an operator bakes and places a rootfs there (e.g. with fc-bake-rootfs.sh)
 # before a Fusefile can reference it by name.
 IMAGES_DIR = Path(os.environ.get("IMAGES_DIR", str(FC_DIR / "images")))
+# Snapshot artifacts live here, NOT under the vm dir, so a snapshot outlives the
+# vm that produced it. destroy_vm rm -rf's the whole vm dir, so anything stored
+# there dies with its builder, which makes a build artifact (fuse build)
+# unusable by definition. Legacy snapshots under a vm dir stay readable; see
+# snapshot_rootfs.
+SNAPSHOTS_DIR = Path(os.environ.get("SNAPSHOTS_DIR", str(STATE_DIR / "snapshots")))
 SSH_KEY = FC_DIR / "ubuntu.id_rsa"
 TOKEN = os.environ.get("FC_AGENT_TOKEN")
 PORT = int(os.environ.get("FC_AGENT_PORT", "8090"))
@@ -75,6 +81,7 @@ if not TOKEN:
     sys.exit(1)
 
 VMS_DIR.mkdir(parents=True, exist_ok=True)
+SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 SSH_CONTROL_DIR = STATE_DIR / "ssh-control"
 SSH_CONTROL_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -417,6 +424,16 @@ def create_vm(req: dict, source_rootfs: Path | None = None) -> dict:
     # A caller-supplied source_rootfs (fork_vm, seeding from a snapshot) wins
     # over the image lookup.
     if source_rootfs is None:
+        # seed_snapshot boots a prepared rootfs straight out of the host-global
+        # snapshot store, with no live source vm involved. That is what a build
+        # artifact (fuse build) is, and it is why this differs from fork_vm,
+        # which resolves against a running source. It wins over image: the two
+        # name the same slot and cannot both apply, and the orchestrator rejects
+        # requests carrying both.
+        seed = req.get("seed_snapshot") or ""
+        if seed:
+            source_rootfs = snapshot_rootfs("", seed)
+    if source_rootfs is None:
         image = req.get("image") or ""
         source_rootfs = BASE_ROOTFS
         if image:
@@ -511,6 +528,9 @@ def destroy_vm(vm_id: str) -> None:
         del_expose_forward(endpoint["host_port"], meta["guest_ip"], endpoint["port"])
     teardown_tap(meta["tap"])
     Path(_ssh_control_path(meta["guest_ip"])).unlink(missing_ok=True)
+    # Snapshots are NOT under vm_dir any more (see SNAPSHOTS_DIR), so this
+    # removes the vm's own rootfs and metadata only. A build artifact this vm
+    # produced deliberately survives its builder.
     sudo(["rm", "-rf", str(vm_dir(vm_id))], check=False)
 
 
@@ -520,12 +540,44 @@ def destroy_vm(vm_id: str) -> None:
 # still require a full cold boot on restore (~5-15s). Memory snapshots would
 # enable sub-second (<200ms) resume, eliminating cold start latency.
 
+def snapshot_rootfs(vm_id: str, snapshot_id: str) -> Path:
+    """Resolve a snapshot's rootfs, preferring the host-global store.
+
+    snapshot_id names the request into a filesystem path, so both candidates are
+    realpath'd and confirmed to stay under their root: "../../etc/shadow", or
+    "../../<other-vm>/snapshots/<id>", must not resolve outside the store or
+    reach a rootfs belonging to a different vm.
+
+    Snapshots taken before SNAPSHOTS_DIR existed still live under their vm dir,
+    so that location stays readable. Nothing writes there any more. Pass an
+    empty vm_id to restrict the lookup to the store, which is what a seed with
+    no live source vm needs.
+    """
+    store_root = os.path.realpath(str(SNAPSHOTS_DIR))
+    resolved = os.path.realpath(os.path.join(store_root, snapshot_id, "rootfs.ext4"))
+    if not resolved.startswith(store_root + os.sep):
+        raise HTTPError(400, f"invalid snapshot id: {snapshot_id!r}")
+    if os.path.exists(resolved):
+        return Path(resolved)
+
+    if not vm_id:
+        raise HTTPError(404, "snapshot not found")
+
+    legacy_root = os.path.realpath(os.path.join(str(vm_dir(vm_id)), "snapshots"))
+    legacy = os.path.realpath(os.path.join(legacy_root, snapshot_id, "rootfs.ext4"))
+    if not legacy.startswith(legacy_root + os.sep):
+        raise HTTPError(400, f"invalid snapshot id: {snapshot_id!r}")
+    if not os.path.exists(legacy):
+        raise HTTPError(404, "snapshot not found")
+    return Path(legacy)
+
+
 def snapshot_create(vm_id: str, comment: str) -> dict:
     meta = load_meta(vm_id)
     if not meta:
         raise HTTPError(404, "vm not found")
     snap_id = f"snap-{int(time.time())}-{uuid.uuid4().hex[:6]}"
-    snap_dir = vm_dir(vm_id) / "snapshots" / snap_id
+    snap_dir = SNAPSHOTS_DIR / snap_id
     snap_dir.mkdir(parents=True)
     # Quiesce guest FS then copy.
     ssh_exec(meta["guest_ip"], "sync; sync", timeout=10.0)
@@ -533,7 +585,14 @@ def snapshot_create(vm_id: str, comment: str) -> dict:
     sudo(["cp", "--reflink=auto", meta["rootfs"], str(snap_rootfs)], check=False)
     if not snap_rootfs.exists():
         shutil.copyfile(meta["rootfs"], snap_rootfs)
-    record = {"snapshot_id": snap_id, "comment": comment, "created_at": now_iso()}
+    # origin_vm_id records provenance only. It is deliberately NOT a lifetime
+    # link: the origin vm may be destroyed while this artifact stays usable.
+    record = {
+        "snapshot_id": snap_id,
+        "comment": comment,
+        "created_at": now_iso(),
+        "origin_vm_id": vm_id,
+    }
     (snap_dir / "meta.json").write_text(json.dumps(record))
     meta.setdefault("snapshots", []).append(record)
     save_meta(meta)
@@ -551,17 +610,11 @@ def snapshot_restore(vm_id: str, snapshot_id: str) -> None:
     meta = load_meta(vm_id)
     if not meta:
         raise HTTPError(404, "vm not found")
-    # snapshot_id names the request into a filesystem path, so resolve it and
-    # confirm it stays under this vm's snapshots dir before touching the file:
-    # "../../<other-vm>/snapshots/<id>" would else restore a rootfs belonging to
-    # a different vm over this one. Same guard fork_vm applies to its seed.
-    snaps_root = os.path.realpath(os.path.join(str(vm_dir(vm_id)), "snapshots"))
-    resolved = os.path.realpath(os.path.join(snaps_root, snapshot_id, "rootfs.ext4"))
-    if not resolved.startswith(snaps_root + os.sep):
-        raise HTTPError(400, f"invalid snapshot id: {snapshot_id!r}")
-    snap_rootfs = Path(resolved)
-    if not snap_rootfs.exists():
-        raise HTTPError(404, "snapshot not found")
+    # snapshot_rootfs applies the same path-containment guard this call site used
+    # to inline, and additionally finds artifacts in the host-global store.
+    # Restore stays scoped to this vm's own snapshots plus the store; it cannot
+    # be steered at "../../<other-vm>/snapshots/<id>".
+    snap_rootfs = snapshot_rootfs(vm_id, snapshot_id)
     # Stop firecracker, swap rootfs, recreate the TAP (the dead fc process
     # may still be holding it briefly), restart with same config.
     stop_firecracker(meta)
@@ -606,15 +659,9 @@ def fork_vm(src_vm_id: str, req: dict) -> dict:
     snapshot_id = req.get("snapshot_id") or ""
     if not snapshot_id:
         raise HTTPError(400, "snapshot_id required")
-    # snapshot_id names the request into a filesystem path, so resolve it and
-    # confirm it stays under this vm's snapshots dir before touching the file.
-    snaps_root = os.path.realpath(os.path.join(str(vm_dir(src_vm_id)), "snapshots"))
-    resolved = os.path.realpath(os.path.join(snaps_root, snapshot_id, "rootfs.ext4"))
-    if not resolved.startswith(snaps_root + os.sep):
-        raise HTTPError(400, f"invalid snapshot id: {snapshot_id!r}")
-    snap_rootfs = Path(resolved)
-    if not snap_rootfs.exists():
-        raise HTTPError(404, "snapshot not found")
+    # Path containment and existence are snapshot_rootfs's job now, and it also
+    # finds artifacts in the host-global store whose origin vm is long gone.
+    snap_rootfs = snapshot_rootfs(src_vm_id, snapshot_id)
 
     fork_req = dict(req)
     for field in ("cpus", "memory_mb", "storage_gb", "region"):
