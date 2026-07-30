@@ -266,6 +266,18 @@ written, it declares a secret you must supply and an `image` that has to exist
 on the host first. For the minimum that boots with a bare `fuse up`, see
 [Your first Fusefile](/docs/learn/first-fusefile).
 
+## Checking one
+
+```bash
+fuse validate
+```
+
+parses and compiles a Fusefile and reports every problem it finds, then exits `0`
+if the file is valid and `1` if it is not. It creates nothing and makes no
+request, so it runs before `fuse connect` and in CI with no orchestrator
+reachable. Pass `-o json` for a machine-readable report, or `--quiet` for the
+exit code alone. See [`fuse validate`](/reference/cli/validate).
+
 ## Seeing what it compiles into
 
 ```bash
@@ -293,4 +305,5 @@ secret named in `secrets` is missing from the resolved set, `up` fails fast with
 list of missing names rather than creating a broken environment.
 
 See [`fuse up`](/reference/cli/up), [`fuse init`](/reference/cli/init), and
-[`fuse compile`](/reference/cli/compile) for the full flag reference.
+[`fuse compile`](/reference/cli/compile), and
+[`fuse validate`](/reference/cli/validate) for the full flag reference.

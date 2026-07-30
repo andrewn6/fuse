@@ -1,0 +1,155 @@
+---
+title: fuse validate
+sidebar:
+  icon: circle-check
+description: Check a Fusefile without creating an environment
+---
+
+```bash
+fuse validate [path] [flags]
+```
+
+Parses and compiles a [Fusefile](/docs/concepts/fusefile), reports every problem
+it finds, and exits `0` if the file is valid or `1` if it is not. Nothing is
+created and no request is made, so `validate` is the command to put in a
+pre-commit hook or a CI job.
+
+`validate` never talks to an orchestrator. It works before `fuse connect`, with
+no active host selected, and inside a CI container with no control plane
+reachable.
+
+## Exit codes
+
+| Code | Meaning |
+| --- | --- |
+| `0` | The Fusefile is valid. |
+| `1` | The Fusefile has at least one problem. Each is printed to stdout. |
+| `2` | The Fusefile could not be read (missing file, a directory, unreadable). |
+
+Diagnostics go to **stdout** so a CI job can capture or pipe them. The
+"is valid" confirmation and read errors go to stderr, like every other
+human-facing message in the CLI.
+
+## Flags
+
+| Flag | Purpose |
+| --- | --- |
+| `-f, --file` | Path to the Fusefile. Default: `./Fusefile`, or a positional path argument. |
+| `--quiet` | Suppress all output. The verdict is the exit code only. |
+| `--check-secrets` | Also fail when a secret the Fusefile requires is missing from the resolved set. |
+| `--secret` | Secret as `key=value`, for `--check-secrets`. Repeatable. Overrides `--secrets-file`. |
+| `--secrets-file` | Path to a file of `KEY=VALUE` secret lines, for `--check-secrets`. |
+
+Pass `-o json` for a machine-readable report.
+
+## Path resolution
+
+The path is resolved exactly as it is for [`fuse up`](/reference/cli/up) and
+[`fuse init`](/reference/cli/init): `-f/--file` if set, then a positional
+argument, then `./Fusefile`.
+
+```bash
+fuse validate                        # ./Fusefile
+fuse validate ./repro/Fusefile
+fuse validate -f custom.fusefile.yaml
+```
+
+## Examples
+
+A valid file:
+
+```bash
+fuse validate
+# Fusefile is valid
+# required secrets: pg_password
+echo $?
+# 0
+```
+
+An invalid file reports every problem in one pass, not one per run:
+
+```bash
+fuse validate
+# Fusefile: version: must be 1
+# Fusefile: services.db: image is required
+# Fusefile: expose[0].port: must be between 1 and 65535
+# Fusefile: resources.memory: invalid size "2 gigs"
+echo $?
+# 1
+```
+
+Each line is `<file>[:<line>]: [<field>]: <message>`. The yaml line number is
+present for problems the yaml parser itself reports (a syntax error, an unknown
+field); structural and compile problems name the field but not yet a position:
+
+```bash
+fuse validate
+# Fusefile:2: field nope not found in type fusefile.Fusefile
+```
+
+Exit code only, for a hook that has its own reporting:
+
+```bash
+fuse validate --quiet; echo $?
+# 1
+```
+
+Machine-readable, for CI:
+
+```bash
+fuse validate -o json
+```
+
+```json
+{
+  "path": "Fusefile",
+  "valid": false,
+  "errors": [
+    { "path": "version", "message": "must be 1" },
+    { "path": "resources.memory", "message": "invalid size \"2 gigs\"" }
+  ]
+}
+```
+
+`line` is omitted when the position is unknown, and `path` inside an entry is
+omitted when the problem does not belong to one field. Note that the top-level
+`path` is the file that was checked, while `path` inside an entry is the field.
+When the file is valid the report carries `"valid": true`, an empty `errors`
+array, and a `required_secrets` list.
+
+## Secrets
+
+By default a secret the Fusefile requires but does not supply is reported as
+information, not an error, and `validate` still exits `0`. That is deliberate:
+the point of the command is to run in places where no secrets are present, such
+as a pre-commit hook on a developer's laptop.
+
+A CI job that wants the stricter behaviour of [`fuse up`](/reference/cli/up)
+can opt in:
+
+```bash
+fuse validate --check-secrets --secrets-file .env.secrets
+# Fusefile: secrets: required secret "pg_password" is not set
+```
+
+## What validate cannot check
+
+`validate` is offline, so it is a check of the file, not of the fleet. A
+Fusefile that validates can still fail at create time. It cannot tell you:
+
+- whether the `image` you named has been baked into the target host's images
+  directory
+- whether a requested `region` matches any registered host
+- whether the fleet has capacity for the requested CPUs, memory, storage, or GPUs
+- whether a requested GPU kind or MIG profile exists on any host
+
+Those are answered by the orchestrator when [`fuse up`](/reference/cli/up)
+creates the environment.
+
+## Related commands
+
+`fuse validate` answers "is this file valid" with an exit code, and prints
+diagnostics only, never the compiled output. To see the resource spec, manifest,
+and startup script a Fusefile compiles into, use
+[`fuse up`](/reference/cli/up), which compiles and then creates. To scaffold a
+Fusefile to validate, use [`fuse init`](/reference/cli/init).
