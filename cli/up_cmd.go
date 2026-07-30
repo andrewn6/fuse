@@ -20,6 +20,7 @@ func newUpCmd() *cobra.Command {
 		secretsFile string
 		taskID      string
 		noWait      bool
+		fromBuild   string
 	)
 	cmd := &cobra.Command{
 		Use:   "up [path]",
@@ -67,6 +68,17 @@ func newUpCmd() *cobra.Command {
 				taskID = defaultTaskID(path)
 			}
 
+			// a build artifact already carries the setup phase's result baked
+			// into its rootfs, so replaying setup on boot would redo the exact
+			// work --from-build exists to skip. only the run phase is sent.
+			startupScript := c.StartupScript
+			if fromBuild != "" {
+				if c.Spec.Image != "" {
+					return fmt.Errorf("--from-build and the Fusefile's `image` are mutually exclusive: both name the rootfs to boot")
+				}
+				startupScript = c.RunScript
+			}
+
 			manifestInline := base64.StdEncoding.EncodeToString(c.ManifestJSON)
 
 			cl, _, err := app.client()
@@ -88,8 +100,9 @@ func newUpCmd() *cobra.Command {
 				},
 				ManifestInline: manifestInline,
 				Secrets:        secretMap,
-				StartupScript:  c.StartupScript,
+				StartupScript:  startupScript,
 				Expose:         toSDKExpose(c.Expose),
+				SeedSnapshotID: fromBuild,
 			})
 			if err != nil {
 				return friendly(err)
@@ -110,6 +123,7 @@ func newUpCmd() *cobra.Command {
 	cmd.Flags().StringVar(&secretsFile, "secrets-file", "", "path to a file of KEY=VALUE secret lines")
 	cmd.Flags().StringVar(&taskID, "task-id", "", "environment task id (default: the Fusefile's parent directory name)")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "create the environment without streaming provisioning events")
+	cmd.Flags().StringVar(&fromBuild, "from-build", "", "boot from a `fuse build` artifact instead of a base image (skips the setup phase)")
 	return cmd
 }
 

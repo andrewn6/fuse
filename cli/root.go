@@ -83,6 +83,7 @@ func newRootCmd() *cobra.Command {
 		newAPIKeysCmd(),
 		newMetricsCmd(),
 		newUpCmd(),
+		newBuildCmd(),
 		newInitCmd(),
 	)
 	return root
