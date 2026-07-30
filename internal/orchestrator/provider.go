@@ -78,6 +78,18 @@ type Spec struct {
 	// the provider (e.g. the firecracker host agent looks it up in its own
 	// named-rootfs directory). Empty means the provider's default base.
 	Image string
+
+	// SeedSnapshotID boots this VM from a persisted snapshot artifact instead
+	// of Image. Unlike a fork there is no live source VM: the artifact is
+	// resolved out of the host agent's snapshot store. It is host-local, which
+	// is why SeedSnapshotID always travels with PinnedHostID. Empty means boot
+	// from Image. Mutually exclusive with Image.
+	SeedSnapshotID string
+
+	// PinnedHostID restricts scheduling to a single host. Set when the VM must
+	// land where its host-local seed artifact already is. Empty means schedule
+	// across the fleet as usual.
+	PinnedHostID string
 }
 
 // ExposeSpec requests that a guest port be published as a reachable
