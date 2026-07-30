@@ -1,0 +1,23 @@
+{
+  "task_id": "compile",
+  "spec": {
+    "cpus": 2,
+    "ram_mb": 2048,
+    "storage_gb": 10,
+    "max_runtime_seconds": 3600,
+    "image": "ghcr.io/acme/worker:latest"
+  },
+  "manifest_inline": "eyJ2ZXJzaW9uIjoiMSIsIm1hY2hpbmUiOnsid29ya3NwYWNlIjoiL3dvcmtzcGFjZSJ9LCJzZXJ2aWNlcyI6eyJwb3N0Z3JlcyI6eyJpbWFnZSI6InBvc3RncmVzOjE2IiwicG9ydHMiOls1NDMyXSwiZW52Ijp7IlBPU1RHUkVTX0RCIjp7InZhbHVlIjoiYXBwIn0sIlBPU1RHUkVTX1BBU1NXT1JEIjp7InNlY3JldCI6InBnX3Bhc3N3b3JkIn19fX19",
+  "secrets": {},
+  "startup_script": "set -eu\nif (set -o pipefail) 2>/dev/null; then set -o pipefail; fi\nmkdir -p '/workspace'\ncd '/workspace'\napt-get update -qq\n./start.sh\n",
+  "expose": [
+    {
+      "port": 8080,
+      "as": "http"
+    }
+  ],
+  "required_secrets": [
+    "api_token",
+    "pg_password"
+  ]
+}

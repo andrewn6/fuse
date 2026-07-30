@@ -1,0 +1,27 @@
+task id  compile
+
+spec
+  cpus            2
+  ram mb          2048
+  storage gb      10
+  max runtime s   3600
+  idle timeout s  0
+  image           ghcr.io/acme/worker:latest
+
+startup script
+  set -eu
+  if (set -o pipefail) 2>/dev/null; then set -o pipefail; fi
+  mkdir -p '/workspace'
+  cd '/workspace'
+  apt-get update -qq
+  ./start.sh
+
+manifest (decoded; sent base64 as manifest_inline)
+  {"version":"1","machine":{"workspace":"/workspace"},"services":{"postgres":{"image":"postgres:16","ports":[5432],"env":{"POSTGRES_DB":{"value":"app"},"POSTGRES_PASSWORD":{"secret":"pg_password"}}}}}
+
+expose
+  8080 as http
+
+required secrets (values supplied at `fuse up`)
+  api_token
+  pg_password

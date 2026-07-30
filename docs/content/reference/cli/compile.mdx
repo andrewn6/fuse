@@ -1,0 +1,206 @@
+---
+title: fuse compile
+sidebar:
+  icon: file-search
+description: Print what a Fusefile compiles into, without creating anything
+---
+
+```bash
+fuse compile [path] [flags]
+```
+
+Reads a [Fusefile](/docs/concepts/fusefile), compiles it into a resource spec,
+manifest, startup script, exposed ports, and required secret names, then prints
+the result. Nothing is created and nothing is sent anywhere.
+
+`compile` is entirely client-side: it makes no HTTP request, so it works with no
+context configured, no host selected, and no network reachable. That makes it
+usable in CI and in code review to see exactly what a Fusefile change does to
+the request [`fuse up`](/reference/cli/up) would post.
+
+Secret **values** are never accepted or printed. `compile` deliberately has no
+`--secret` or `--secrets-file` flag: it lists the secret names the environment
+requires and emits `secrets` as an empty object in the wire form, because values
+are supplied at `fuse up`.
+
+## Flags
+
+| Flag | Purpose |
+| --- | --- |
+| `-f, --file` | Path to the Fusefile. Default: `./Fusefile`, or a positional path argument. |
+| `--task-id` | Task ID to render. Default: the Fusefile's parent directory name, matching `fuse up`. |
+| `--format` | Output format: `text` \| `json` \| `yaml`. Overrides the global `-o/--output`. |
+| `--only` | Print one part undecorated: `spec` \| `startup-script` \| `manifest` \| `expose` \| `secrets`. |
+| `--from-build` | Compile as [`fuse up --from-build`](/reference/cli/up) would: set `seed_snapshot_id` and send the `run:` phase alone. |
+
+Path resolution is identical to [`fuse up`](/reference/cli/up): `-f/--file`
+first, then a positional argument, then `./Fusefile`.
+
+Without `--format`, the global `-o/--output` decides: `table` (the default)
+renders the human view, `json` renders the wire body. `--only` selects a single
+part and cannot be combined with `--format`; passing both is an error rather
+than a silent precedence rule.
+
+## Human output
+
+```bash
+fuse compile
+```
+
+```
+task id  my-service
+
+spec
+  cpus            2
+  ram mb          2048
+  storage gb      10
+  max runtime s   3600
+  image           ghcr.io/acme/worker:latest
+
+startup script
+  set -eu
+  if (set -o pipefail) 2>/dev/null; then set -o pipefail; fi
+  mkdir -p '/workspace'
+  cd '/workspace'
+  apt-get update -qq
+  ./start.sh
+
+manifest (decoded; sent base64 as manifest_inline)
+  {"version":"1","machine":{"workspace":"/workspace"},"services":{"postgres":{"image":"postgres:16","ports":[5432],"env":{"POSTGRES_PASSWORD":{"secret":"pg_password"}}}}}
+
+expose
+  8080 as http
+
+required secrets (values supplied at `fuse up`)
+  api_token
+  pg_password
+```
+
+Empty sections are omitted, and the section order is fixed, so two runs over the
+same Fusefile are byte-identical and a diff between revisions is readable. The
+manifest is printed **decoded** here; on the wire it travels base64 as
+`manifest_inline`.
+
+## Wire output
+
+```bash
+fuse compile --format json
+```
+
+```json
+{
+  "task_id": "my-service",
+  "spec": {
+    "cpus": 2,
+    "ram_mb": 2048,
+    "storage_gb": 10,
+    "max_runtime_seconds": 3600,
+    "image": "ghcr.io/acme/worker:latest"
+  },
+  "manifest_inline": "eyJ2ZXJzaW9uIjoiMSIsIm1hY2hpbmUiOnsid29ya3NwYWNlIjoiL3dvcmtzcGFjZSJ9LCJzZXJ2aWNlcyI6eyJwb3N0Z3JlcyI6eyJpbWFnZSI6InBvc3RncmVzOjE2IiwicG9ydHMiOls1NDMyXSwiZW52Ijp7IlBPU1RHUkVTX1BBU1NXT1JEIjp7InNlY3JldCI6InBnX3Bhc3N3b3JkIn19fX19",
+  "secrets": {},
+  "startup_script": "set -eu\nif (set -o pipefail) 2>/dev/null; then set -o pipefail; fi\nmkdir -p '/workspace'\ncd '/workspace'\napt-get update -qq\n./start.sh\n",
+  "expose": [
+    {
+      "port": 8080,
+      "as": "http"
+    }
+  ],
+  "required_secrets": [
+    "api_token",
+    "pg_password"
+  ]
+}
+```
+
+This is the `POST /v1/environments` body `fuse up` would send, with two
+differences: `secrets` is always empty, and `required_secrets` is added so the
+names are visible. It is meant for reading, diffing, and review, not for posting
+back to the API.
+
+`--format yaml` prints the same document with the same keys, which diffs better
+in review:
+
+```bash
+fuse compile --format yaml
+```
+
+```yaml
+task_id: my-service
+spec:
+  cpus: 2
+  ram_mb: 2048
+  storage_gb: 10
+  max_runtime_seconds: 3600
+  image: ghcr.io/acme/worker:latest
+manifest_inline: eyJ2ZXJzaW9uIjoiMSIsIm1hY2hpbmUiOnsid29ya3NwYWNlIjoiL3dvcmtzcGFjZSJ9LCJzZXJ2aWNlcyI6eyJwb3N0Z3JlcyI6eyJpbWFnZSI6InBvc3RncmVzOjE2IiwicG9ydHMiOls1NDMyXSwiZW52Ijp7IlBPU1RHUkVTX1BBU1NXT1JEIjp7InNlY3JldCI6InBnX3Bhc3N3b3JkIn19fX19
+secrets: {}
+startup_script: |
+  set -eu
+  if (set -o pipefail) 2>/dev/null; then set -o pipefail; fi
+  mkdir -p '/workspace'
+  cd '/workspace'
+  apt-get update -qq
+  ./start.sh
+expose:
+  - port: 8080
+    as: http
+required_secrets:
+  - api_token
+  - pg_password
+```
+
+## Single parts
+
+`--only` writes one part with no headings, for piping:
+
+```bash
+fuse compile --only startup-script | shellcheck -
+fuse compile --only manifest | jq .services
+fuse compile --only spec | jq .ram_mb
+fuse compile --only secrets     # one required secret name per line
+fuse compile --only expose      # one "<port> <as>" line per entry
+```
+
+`--only manifest` prints the manifest JSON exactly as the guest receives it,
+and `--only startup-script` prints the script verbatim, so both pipe straight
+into other tools.
+
+## Previewing a seeded boot
+
+A [`fuse build`](/reference/cli/build) artifact already carries the `setup:`
+phase baked into its rootfs, so `fuse up --from-build` sends the `run:` phase
+alone. Pass the same flag to `compile` to see that request instead of the
+from-scratch one:
+
+```bash
+fuse compile --from-build snap-4f1c9a
+```
+
+The compiled output then carries `seed_snapshot_id` and a `startup_script` with
+no setup lines. Because a build artifact and `image` both name the rootfs to
+boot, passing `--from-build` for a Fusefile that sets `image` is an error here,
+exactly as it is at `fuse up`.
+
+## What it does and does not check
+
+`compile` fails with the same diagnostics `fuse up` would produce at parse and
+compile time: an unknown field, a `version` other than `1`, a service with no
+image, an env entry setting both `value` and `secret`, an out-of-range `expose`
+port, a malformed size or duration, or an invalid GPU/MIG combination.
+
+It knows nothing about the fleet. It cannot tell you whether the `image` exists
+on any host, whether a region matches a registered host, or whether there is
+capacity anywhere. Those only surface at `fuse up`.
+
+## Examples
+
+```bash
+fuse compile ./ci/Fusefile
+fuse compile -f Fusefile.gpu --format yaml
+fuse compile --task-id review-build --format json
+```
+
+See [Fusefile](/docs/concepts/fusefile) for the field reference,
+[`fuse init`](/reference/cli/init) to scaffold one, and
+[`fuse up`](/reference/cli/up) to create an environment from it.

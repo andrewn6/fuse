@@ -266,6 +266,19 @@ written, it declares a secret you must supply and an `image` that has to exist
 on the host first. For the minimum that boots with a bare `fuse up`, see
 [Your first Fusefile](/docs/learn/first-fusefile).
 
+## Seeing what it compiles into
+
+```bash
+fuse compile
+```
+
+prints the resource spec, startup script, decoded manifest, exposed ports, and
+required secret names a Fusefile produces, without creating anything and without
+contacting the orchestrator. `--format json` or `--format yaml` prints the create
+request body itself, which is what to diff when reviewing a Fusefile change.
+Secret values are never accepted or printed, only the names. See
+[`fuse compile`](/reference/cli/compile).
+
 ## Bringing it up
 
 ```bash
@@ -279,5 +292,5 @@ provisioning events until a terminal state, unless `--no-wait` is passed. If any
 secret named in `secrets` is missing from the resolved set, `up` fails fast with the
 list of missing names rather than creating a broken environment.
 
-See [`fuse up`](/reference/cli/up) and [`fuse init`](/reference/cli/init)
-for the full flag reference.
+See [`fuse up`](/reference/cli/up), [`fuse init`](/reference/cli/init), and
+[`fuse compile`](/reference/cli/compile) for the full flag reference.
