@@ -48,6 +48,16 @@ type Compiled struct {
 	StartupScript   string
 	RequiredSecrets []string
 	Expose          []ExposeSpec
+
+	// BuildScript is the setup phase alone, for `fuse build` to run through
+	// the exec path (600s) rather than the startup-script path (30s).
+	// StartupScript still carries setup+run, so `fuse up` is unchanged.
+	BuildScript string
+
+	// RunScript is the run command alone, for a boot whose setup phase is
+	// already baked into a seed rootfs (`fuse up --from-build`). Replaying
+	// setup there would redo the work the artifact exists to skip.
+	RunScript string
 }
 
 // defaultWorkspace is used for manifest.machine.workspace when Fusefile.Workspace
@@ -200,6 +210,8 @@ func Compile(f *Fusefile) (*Compiled, error) {
 		},
 		ManifestJSON:    manifestJSON,
 		StartupScript:   compileStartupScript(f),
+		BuildScript:     compileBuildScript(f),
+		RunScript:       compileRunScript(f),
 		RequiredSecrets: requiredSecrets,
 		Expose:          compileExpose(f),
 	}, nil
@@ -279,26 +291,60 @@ func shellQuote(s string) string {
 // compileStartupScript joins setup lines and the run command into a single
 // shell script with a strict-mode prelude. if there is nothing to run (no
 // setup lines and no run command), it returns "" rather than a bare prelude.
-func compileStartupScript(f *Fusefile) string {
-	if len(f.Setup) == 0 && f.Run == "" {
-		return ""
-	}
-
+// scriptPrelude renders the strict-mode header and the workspace cd that every
+// generated script shares.
+//
+// posix prelude: the orchestrator runs these via `sh -lc`, and dash (ubuntu's
+// /bin/sh) has no pipefail, so enable it only when supported.
+//
+// the workspace is where setup and run are meant to execute, so create it and
+// move into it. nothing else in the stack acts on manifest.machine.workspace,
+// so without this the directory never exists in the guest and the field has no
+// observable effect.
+func scriptPrelude(f *Fusefile) string {
 	var b strings.Builder
-	// posix prelude: the orchestrator runs this via `sh -lc`, and dash
-	// (ubuntu's /bin/sh) has no pipefail. enable it only when supported.
 	b.WriteString("set -eu\n")
 	b.WriteString("if (set -o pipefail) 2>/dev/null; then set -o pipefail; fi\n")
-	// the workspace is where setup and run are meant to execute, so create
-	// it and move into it. nothing else in the stack acts on
-	// manifest.machine.workspace, so without this the directory never
-	// exists in the guest and the field has no observable effect.
 	workspace := f.Workspace
 	if workspace == "" {
 		workspace = defaultWorkspace
 	}
 	fmt.Fprintf(&b, "mkdir -p %s\n", shellQuote(workspace))
 	fmt.Fprintf(&b, "cd %s\n", shellQuote(workspace))
+	return b.String()
+}
+
+// compileBuildScript renders the setup lines alone, without the run command.
+// an empty setup phase yields "" rather than a bare prelude, matching
+// compileStartupScript.
+func compileBuildScript(f *Fusefile) string {
+	if len(f.Setup) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(scriptPrelude(f))
+	for _, line := range f.Setup {
+		b.WriteString(line)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// compileRunScript renders the run command alone, without the setup lines.
+func compileRunScript(f *Fusefile) string {
+	if f.Run == "" {
+		return ""
+	}
+	return scriptPrelude(f) + f.Run + "\n"
+}
+
+func compileStartupScript(f *Fusefile) string {
+	if len(f.Setup) == 0 && f.Run == "" {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(scriptPrelude(f))
 	for _, line := range f.Setup {
 		b.WriteString(line)
 		b.WriteString("\n")

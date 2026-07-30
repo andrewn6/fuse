@@ -422,6 +422,47 @@ func TestCompileStartupScript(t *testing.T) {
 	}
 }
 
+// TestCompileBuildAndRunScripts pins the split `fuse build` and
+// `fuse up --from-build` rely on: BuildScript is setup without run, RunScript
+// is run without setup, and each is empty when its phase is.
+func TestCompileBuildAndRunScripts(t *testing.T) {
+	const prelude = "set -eu\nif (set -o pipefail) 2>/dev/null; then set -o pipefail; fi\n" +
+		"mkdir -p '/workspace'\ncd '/workspace'\n"
+	cases := []struct {
+		name      string
+		setup     []string
+		run       string
+		wantBuild string
+		wantRun   string
+	}{
+		{"setup and run", []string{"a", "b"}, "./c", prelude + "a\nb\n", prelude + "./c\n"},
+		{"setup only", []string{"a"}, "", prelude + "a\n", ""},
+		{"run only", nil, "./c", "", prelude + "./c\n"},
+		{"neither", nil, "", "", ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &Fusefile{Version: 1, Setup: tc.setup, Run: tc.run}
+			c, err := Compile(f)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if c.BuildScript != tc.wantBuild {
+				t.Fatalf("build script = %q, want %q", c.BuildScript, tc.wantBuild)
+			}
+			if c.RunScript != tc.wantRun {
+				t.Fatalf("run script = %q, want %q", c.RunScript, tc.wantRun)
+			}
+			// the run command must never appear in the build phase: that is the
+			// whole point of running setup separately.
+			if tc.run != "" && strings.Contains(c.BuildScript, tc.run) {
+				t.Fatalf("build script %q contains the run command %q", c.BuildScript, tc.run)
+			}
+		})
+	}
+}
+
 func TestCompileRequiredSecretsUnion(t *testing.T) {
 	f := &Fusefile{Version: 1,
 		Secrets: []string{"pg_password"},
