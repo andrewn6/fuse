@@ -1546,6 +1546,38 @@ func TestCreateEnvironment_labelMissReturnsUnavailable(t *testing.T) {
 	}
 }
 
+func TestCreateEnvironment_negativeStartupTimeoutReturns400(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	r := mustRouter(t, h)
+
+	// A negative bound would reach the fleet as "unset" and silently restore
+	// the default, so it must be refused where the sign is still visible.
+	rr := doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+		TaskID:                      "task-1",
+		ManifestInline:              encodeManifest(t),
+		StartupScriptTimeoutSeconds: -1,
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400. body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// A bound over the fleet ceiling surfaces as a 400 rather than a 500: it is a
+// caller mistake with an actionable message, not a server fault.
+func TestCreateEnvironment_startupTimeoutOverCeilingReturns400(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	r := mustRouter(t, h)
+
+	rr := doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+		TaskID:                      "task-1",
+		ManifestInline:              encodeManifest(t),
+		StartupScriptTimeoutSeconds: 3600,
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400. body: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestCreateEnvironment_invalidPlacementLabelReturns400(t *testing.T) {
 	h, _, _ := newTestHandler(t)
 	r := mustRouter(t, h)

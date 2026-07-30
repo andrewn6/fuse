@@ -12,8 +12,24 @@ import (
 // compiled today.
 const initScaffold = `version: 1
 
-# base environment. an oci image ref, or omitted to use the baked base rootfs.
-image: ghcr.io/acme/worker:latest
+# base rootfs to boot, by name. this is NOT an oci image ref: the host agent
+# resolves it against the rootfs images baked on the host, so the name must
+# already exist there. omit it to boot the host's default base rootfs.
+# (services[].image below IS an oci ref -- those run in containers in the vm.)
+# image: cuda-12
+
+# files materialized in the guest before setup runs. for config and small code,
+# not weights or datasets: entries are carried inside the create request, so
+# their combined size is capped at 64KiB. fetch large artifacts from setup.
+# commented out because 'source' would have to point at a file that exists.
+# files:
+#   - path: config/app.yaml   # relative paths resolve against the workspace
+#     source: ./app.yaml      # read relative to this Fusefile, not the cwd
+#   - path: entrypoint.sh
+#     content: |              # or inline it
+#       #!/bin/sh
+#       echo hello
+#     mode: "0755"            # optional octal mode
 
 resources:
   cpus: 2
@@ -26,6 +42,12 @@ resources:
 # a gpu environment gets no caching. see 'fuse build --plan'.
 cache:
   enabled: true
+
+# bound on setup + run, which the orchestrator runs synchronously during
+# create. the default is 30s and the ceiling is an operator setting (55s out of
+# the box), so this is headroom for a slow setup, not a budget for a long one:
+# bake genuinely long work into an image with 'fuse build' instead.
+startup_timeout: 55s
 
 # convenience layer run once at boot, before run. compiles into startup_script.
 setup:

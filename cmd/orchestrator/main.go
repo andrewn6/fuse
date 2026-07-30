@@ -139,14 +139,18 @@ func run() error {
 		idleTimeout       time.Duration
 		maxHeaderBytes    int
 		shutdownTimeout   time.Duration
-		fcBaseURL         string
-		fcToken           string
-		databaseURL       string
-		tlsCert           string
-		tlsKey            string
-		authToken         string
-		allowedCIDRs      string
-		secureCookies     string
+
+		startupScriptTimeout    time.Duration
+		maxStartupScriptTimeout time.Duration
+
+		fcBaseURL     string
+		fcToken       string
+		databaseURL   string
+		tlsCert       string
+		tlsKey        string
+		authToken     string
+		allowedCIDRs  string
+		secureCookies string
 	)
 
 	flag.StringVar(&listenAddr, "listen", env("ORCH_LISTEN", ":8080"),
@@ -161,6 +165,12 @@ func run() error {
 		"max time an idle keep-alive connection may stay open")
 	flag.IntVar(&maxHeaderBytes, "max-header-bytes", 64<<10,
 		"max size of request headers")
+	flag.DurationVar(&startupScriptTimeout, "startup-script-timeout",
+		orchestrator.DefaultStartupScriptTimeout,
+		"bound on a boot-time startup script when the request does not set its own")
+	flag.DurationVar(&maxStartupScriptTimeout, "max-startup-script-timeout",
+		orchestrator.DefaultMaxStartupScriptTimeout,
+		"largest startup script bound a request may ask for; must stay under -write-timeout")
 	flag.DurationVar(&shutdownTimeout, "shutdown-timeout",
 		time.Duration(envInt("ORCH_SHUTDOWN_TIMEOUT_SECONDS", 30))*time.Second,
 		"graceful shutdown ceiling")
@@ -211,6 +221,19 @@ func run() error {
 		if len(tokenEncKey) != 32 {
 			return fmt.Errorf("TOKEN_ENCRYPTION_KEY: must be 32 bytes (64 hex chars), got %d bytes", len(tokenEncKey))
 		}
+	}
+
+	// A startup script runs synchronously inside the create request, so a
+	// ceiling at or above the write timeout guarantees the response is cut
+	// off before the script's own bound can classify the failure: the caller
+	// gets a dropped connection instead of a 400. Refuse the combination here
+	// rather than discovering it one truncated create at a time.
+	if maxStartupScriptTimeout >= writeTimeout {
+		return fmt.Errorf(
+			"-max-startup-script-timeout (%s) must be less than -write-timeout (%s): "+
+				"a startup script runs inside the create request, so the response would be "+
+				"truncated before the script's timeout could be reported",
+			maxStartupScriptTimeout, writeTimeout)
 	}
 
 	// Strict-mode enforcement. Done after parsing so error messages
@@ -332,6 +355,9 @@ func run() error {
 		HostProviderFactory: hostProviderFactory,
 		Metrics:             promMetrics,
 		Logger:              logger,
+
+		StartupScriptTimeout:    startupScriptTimeout,
+		MaxStartupScriptTimeout: maxStartupScriptTimeout,
 	})
 
 	// Reconcile loop starts with the binary.

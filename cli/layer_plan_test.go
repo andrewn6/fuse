@@ -77,7 +77,7 @@ func TestUpPlanPrintsKeysAndReportsMisses(t *testing.T) {
 	if !plan.CacheEnabled {
 		t.Errorf("cache_enabled = false, want true")
 	}
-	if plan.BaseKey != fusefile.BaseKey("base-ubuntu-24") {
+	if plan.BaseKey != fusefile.BaseKey("base-ubuntu-24", nil) {
 		t.Errorf("base_key = %q", plan.BaseKey)
 	}
 	if plan.Arch == "" {

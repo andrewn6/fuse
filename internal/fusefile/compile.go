@@ -66,7 +66,27 @@ type Compiled struct {
 	// already baked into a seed rootfs (`fuse up --from-build`). Replaying
 	// setup there would redo the work the artifact exists to skip.
 	RunScript string
+
+	// StartupTimeoutSeconds carries Fusefile.StartupTimeout to the wire.
+	// Zero means the author did not ask for one and the orchestrator's
+	// default applies.
+	StartupTimeoutSeconds int64
 }
+
+// MaxFilesBytes caps the total decoded size of Fusefile.Files.
+//
+// The binding constraint is not the 1 MiB create body (api.MaxEnvironmentBodyBytes)
+// but the way the script is delivered: the orchestrator runs it as
+// `sh -lc <script>` and the host agent joins that into one shell word before
+// handing it to ssh, so the whole script ends up as a single argv element.
+// Linux caps one argument at MAX_ARG_STRLEN, 128 KiB, and overflowing it fails
+// the boot with a bare E2BIG rather than anything an author could act on.
+//
+// 64 KiB of files becomes roughly 88 KiB of base64 once wrapped, which leaves
+// around 40 KiB for the prelude, setup, and run. Exceeding the cap is a compile
+// error rather than a runtime failure, so the author learns at `fuse up` time
+// which file pushed them over.
+const MaxFilesBytes = 64 << 10
 
 // defaultWorkspace is used for manifest.machine.workspace when Fusefile.Workspace
 // is unset.
@@ -214,9 +234,27 @@ func Compile(f *Fusefile) (*Compiled, error) {
 		}
 	}
 
+	var startupTimeoutSeconds int64
+	if f.StartupTimeout != "" {
+		d, err := time.ParseDuration(f.StartupTimeout)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("startup_timeout: %w", err))
+		case d <= 0:
+			errs = append(errs, fmt.Errorf("startup_timeout: must be positive, got %q", f.StartupTimeout))
+		default:
+			// Round up so a sub-second request is never floored to zero,
+			// which the wire reads as "unset" and would silently hand back
+			// the orchestrator default instead of the bound asked for.
+			startupTimeoutSeconds = int64((d + time.Second - 1) / time.Second)
+		}
+	}
+
 	if f.Resources.GPU < 0 {
 		errs = append(errs, fmt.Errorf("resources.gpu: must not be negative"))
 	}
+
+	errs = append(errs, validateFiles(f.Files)...)
 
 	if f.Resources.GPUProfile != "" {
 		if !ValidGPUProfile(f.Resources.GPUProfile) {
@@ -260,12 +298,13 @@ func Compile(f *Fusefile) (*Compiled, error) {
 			HostID:             f.Placement.Host,
 			Labels:             compileLabels(f.Placement.Labels),
 		},
-		ManifestJSON:    manifestJSON,
-		StartupScript:   compileStartupScript(f),
-		BuildScript:     compileBuildScript(f),
-		RunScript:       compileRunScript(f),
-		RequiredSecrets: requiredSecrets,
-		Expose:          compileExpose(f),
+		ManifestJSON:          manifestJSON,
+		StartupScript:         compileStartupScript(f),
+		BuildScript:           compileBuildScript(f),
+		RunScript:             compileRunScript(f),
+		RequiredSecrets:       requiredSecrets,
+		Expose:                compileExpose(f),
+		StartupTimeoutSeconds: startupTimeoutSeconds,
 	}, nil
 }
 
@@ -393,16 +432,22 @@ func scriptPrelude(f *Fusefile) string {
 	return b.String()
 }
 
-// compileBuildScript renders the setup steps alone, without the run command.
-// an empty setup phase yields "" rather than a bare prelude, matching
-// compileStartupScript. it emits exactly the fragments layer keys are derived
-// from, so a `fuse build` runs the same bytes the plan hashed.
+// compileBuildScript renders the file block and the setup steps, without the
+// run command. an empty setup phase yields "" rather than a bare prelude:
+// `fuse build` exists to bake setup, and files alone are re-materialized on
+// every boot anyway, so there is nothing to bake.
+//
+// after the file block it emits exactly the fragments layer keys are derived
+// from, so a `fuse build` runs the same bytes the plan hashed. the files
+// themselves are folded into the base key instead, since they are part of the
+// state the first step builds on rather than a step of their own.
 func compileBuildScript(f *Fusefile) string {
 	if len(f.Setup) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString(scriptPrelude(f))
+	b.WriteString(renderFiles(f.Files))
 	for _, script := range setupScripts(f) {
 		b.WriteString(script)
 		b.WriteString("\n")
@@ -410,24 +455,38 @@ func compileBuildScript(f *Fusefile) string {
 	return b.String()
 }
 
-// compileRunScript renders the run command alone, without the setup steps.
+// compileRunScript renders the file block and the run command, without the
+// setup steps.
+//
+// Files are re-materialized here even though a `fuse build` artifact already
+// carries the copy written during the bake: they are authoring inputs that may
+// have been edited since, and rewriting a few KiB is cheap. Setup is the
+// expensive work --from-build exists to skip; files are not.
 func compileRunScript(f *Fusefile) string {
-	if f.Run == "" {
+	if f.Run == "" && len(f.Files) == 0 {
 		return ""
 	}
-	return scriptPrelude(f) + f.Run + "\n"
+	var b strings.Builder
+	b.WriteString(scriptPrelude(f))
+	b.WriteString(renderFiles(f.Files))
+	if f.Run != "" {
+		b.WriteString(f.Run)
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // compileStartupScript joins the setup steps and the run command into a single
 // shell script with a strict-mode prelude. if there is nothing to run (no
 // setup steps and no run command), it returns "" rather than a bare prelude.
 func compileStartupScript(f *Fusefile) string {
-	if len(f.Setup) == 0 && f.Run == "" {
+	if len(f.Setup) == 0 && f.Run == "" && len(f.Files) == 0 {
 		return ""
 	}
 
 	var b strings.Builder
 	b.WriteString(scriptPrelude(f))
+	b.WriteString(renderFiles(f.Files))
 	for _, script := range setupScripts(f) {
 		b.WriteString(script)
 		b.WriteString("\n")

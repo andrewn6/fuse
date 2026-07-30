@@ -23,9 +23,20 @@ the smallest file that boots, explained line by line.
 ```yaml
 version: 1
 
-# base environment. the name of a rootfs pre-baked on the host, or omitted to
-# use the baked base rootfs.
-image: worker
+# base rootfs to boot, by name. NOT an oci ref -- the host agent resolves it
+# against the rootfs images baked on that host. omit for the host's default.
+image: worker-base
+
+# files materialized in the guest before setup runs. config and small code only;
+# the combined size is capped at 64KiB.
+files:
+  - path: config/app.yaml # relative paths resolve against the workspace
+    source: ./app.yaml # read relative to this Fusefile, not the cwd
+  - path: entrypoint.sh
+    content: | # or inline the body instead of naming a source
+      #!/bin/sh
+      echo hello
+    mode: "0755" # optional octal mode
 
 resources:
   cpus: 2
@@ -75,6 +86,10 @@ services:
     image: redis:7
     ports: [6379]
 
+# bound on setup + run. default 30s, ceiling is an operator setting (55s out of
+# the box). headroom for a slow setup, not a budget for a long one.
+startup_timeout: 55s
+
 # the main task entrypoint. compiles into startup_script (after setup).
 run: ./start.sh
 
@@ -96,7 +111,8 @@ secrets:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `version` | int | Currently always `1`. |
-| `image` | string | Name of a rootfs pre-baked on the host, **not** an OCI image ref. There is no OCI pull: fc-agent resolves it to `<IMAGES_DIR>/<image>.ext4` and qemu-agent to `<IMAGES_DIR>/<image>.qcow2`, and returns a 400 if no such file exists. An operator bakes and places it out of band (e.g. with `fc-bake-rootfs.sh`). Omit to use the baked base rootfs. |
+| `image` | string | Name of a rootfs pre-baked on the host, **not** an OCI image ref. There is no OCI pull: fc-agent resolves it to `<IMAGES_DIR>/<image>.ext4` and qemu-agent to `<IMAGES_DIR>/<image>.qcow2`, and returns a 400 if no such file exists. An operator bakes and places it out of band (e.g. with `fc-bake-rootfs.sh`). Omit to use the baked base rootfs. See [Base images](#base-images-are-not-oci-images). |
+| `files` | list of `{path, source \| content, mode}` | Files written into the guest before `setup` runs. See [Files](#files). |
 | `resources.cpus` | int | vCPU count. |
 | `resources.gpu` | int | Device count. Whole GPUs by default, or MIG instances when `gpu_profile` is set. Requires a host registered with the `qemu` backend. |
 | `resources.gpu_kind` | string | Optional GPU model match, e.g. `a100`. See [Providers](/docs/concepts/providers). |
@@ -115,6 +131,7 @@ secrets:
 | `services` | map | In-VM services, each with `image`, `ports`, and `env`. Compiles to `manifest.services` plus a compose project. |
 | `services.*.env.*` | literal or secret ref | Exactly one of `value` or `secret` must be set per entry. `{ secret: name }` resolves from the `secrets` you supply at `up` time. |
 | `run` | string | The main entrypoint, compiled into `startup_script` after `setup`. |
+| `startup_timeout` | string | Go duration bounding `setup` + `run`. Omit for the orchestrator default (30s). See [Startup timeout](#startup-timeout). |
 | `workspace` | string | Working directory inside the guest. |
 | `expose` | list of `{port, as}` | Guest ports published externally. |
 | `secrets` | list of strings | Secret *names* this environment requires. Values are supplied out-of-band via `--secret key=value` or `--secrets-file`, never written into the Fusefile itself. |
@@ -143,6 +160,86 @@ down once its window elapses. If that is your workload, do not set `idle_timeout
 Detection runs on the reconcile loop (30s ticks) and requires two consecutive
 observations, so real teardown lands roughly one to two ticks after the window
 elapses. That is why the minimum accepted value is `1m`.
+## Base images are not OCI images
+
+`image` names a rootfs that has already been baked onto the host, and the host
+agent resolves that name against the images stored there. It is not a container
+reference, and there is no registry pull: `image: ghcr.io/acme/worker:latest`
+fails the create with `base image not found`.
+
+The distinction is per-field, not global. `services[].image` **is** an OCI
+reference, because services run as containers inside the guest via podman and
+compose. Only the top-level `image`, which decides what disk the VM boots from,
+is a host-local rootfs name.
+
+To get a custom base, either bake a rootfs on the host (`fc-bake-rootfs.sh`, or
+`qemu-bake-cuda-rootfs.sh` for GPU hosts) or run
+[`fuse build`](/reference/cli/build), which runs your `setup` phase once and
+snapshots the result into a bootable artifact.
+
+## Files
+
+`files` writes files into the guest before `setup` runs, so setup and run can
+read config, scripts, and small source trees that live next to the Fusefile
+rather than being fetched at boot.
+
+```yaml
+files:
+  - path: config/app.yaml
+    source: ./app.yaml
+  - path: entrypoint.sh
+    content: |
+      #!/bin/sh
+      exec python -m app
+    mode: "0755"
+```
+
+Each entry sets exactly one of `source` (a path on your machine, resolved
+relative to the Fusefile, not your working directory) and `content` (an inline
+literal). `path` is where it lands in the guest; a relative one resolves against
+the `workspace`. `mode` is an optional octal string.
+
+Entries compile into the startup script as base64 blocks, so content is carried
+verbatim: binary data, quotes, and shell metacharacters all survive, and nothing
+in a file is expanded by the shell.
+
+:::warning[This is a config transport, not a data transport]
+The startup script reaches the guest as a single shell argument, which Linux
+caps at 128 KiB, so the combined size of `files` is capped at **64 KiB**.
+Exceeding it is a compile error at `fuse up`, not a boot failure. Model weights,
+datasets, and container layers do not belong here. Fetch those from `setup` (or
+bake them in with `fuse build`), where they stream directly into the guest.
+:::
+
+Files are rewritten on every boot, including a `fuse up --from-build` boot that
+skips `setup`, since they are authoring inputs that may have changed since the
+artifact was baked.
+
+## Startup timeout
+
+`setup` and `run` compile into one `startup_script` that the orchestrator runs
+**synchronously inside the create request**. `startup_timeout` bounds it:
+
+```yaml
+startup_timeout: 55s
+```
+
+Omit it and the orchestrator's default (30s) applies. Exceed it and the create
+fails with `startup script did not complete in time`.
+
+Because the script runs inside the request, the bound is capped by an operator
+setting (`-max-startup-script-timeout`, 55s by default, which must stay under
+the server's `-write-timeout`). Asking for more than the ceiling is refused with
+a 400 naming the maximum, rather than being silently clamped to it.
+
+So this field is headroom for a setup phase that is a little slow, not a budget
+for one that is genuinely long. A setup that installs packages or pulls a model
+will not fit under any allowed value. Move that work into an image instead:
+
+```bash
+fuse build                    # runs setup once, on the 600s exec path
+fuse up --from-build <id>     # boots the result, skipping setup entirely
+```
 
 ## GPU fields
 

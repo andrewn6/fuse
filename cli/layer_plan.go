@@ -70,7 +70,7 @@ func buildLayerPlan(fusefilePath string, f *fusefile.Fusefile) (*layerPlan, erro
 	}
 
 	plan := &layerPlan{
-		BaseKey:      fusefile.BaseKey(f.Image),
+		BaseKey:      fusefile.BaseKey(f.Image, f.Files),
 		Arch:         opts.Arch,
 		CacheEnabled: f.Cache.Enabled,
 		Steps:        keys,

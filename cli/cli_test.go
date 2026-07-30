@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -426,5 +427,55 @@ func TestHostMetricsOmitsGPURowsForCPUHost(t *testing.T) {
 	}
 	if strings.Contains(out, "gpus") || strings.Contains(out, "mig") {
 		t.Errorf("cpu-only metrics should omit gpu/mig rows: %s", out)
+	}
+}
+
+// `fuse up` must carry a Fusefile's files and startup_timeout onto the wire:
+// files as base64 blocks inside the startup script, the timeout as its own
+// field. Sources resolve relative to the Fusefile, not the process cwd.
+func TestUpSendsFilesAndStartupTimeout(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"id":"fuse-1","state":"provisioning","task_id":"t1","spec":{}}`)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "app.yaml"), []byte("from disk\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fusefilePath := filepath.Join(dir, "Fusefile")
+	if err := os.WriteFile(fusefilePath, []byte(
+		"version: 1\n"+
+			"startup_timeout: 45s\n"+
+			"files:\n"+
+			"  - path: app.yaml\n"+
+			"    source: ./app.yaml\n"+
+			"run: cat app.yaml\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg := writeConfig(t, srv.URL)
+	_, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{"--config", cfg, "-o", "json", "up", "-f", fusefilePath,
+			"--task-id", "t1", "--no-wait"})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	if !strings.Contains(gotBody, `"startup_script_timeout_seconds":45`) {
+		t.Errorf("request body missing the startup timeout: %s", gotBody)
+	}
+	// The file's content reached the wire base64'd inside the startup script.
+	// The script itself is JSON-escaped in the body, so assert on the encoded
+	// payload rather than on shell syntax.
+	if want := base64.StdEncoding.EncodeToString([]byte("from disk\n")); !strings.Contains(gotBody, want) {
+		t.Errorf("request body missing the resolved file content (%s): %s", want, gotBody)
 	}
 }

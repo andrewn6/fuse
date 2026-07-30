@@ -67,14 +67,17 @@ type compiledExpose struct {
 // the gateway fields of fuse.CreateRequest are omitted on purpose: they carry
 // a credential and are not set from a Fusefile.
 type compiledRequest struct {
-	TaskID          string            `json:"task_id" yaml:"task_id"`
-	Spec            compiledSpec      `json:"spec" yaml:"spec"`
-	ManifestInline  string            `json:"manifest_inline,omitempty" yaml:"manifest_inline,omitempty"`
-	Secrets         map[string]string `json:"secrets" yaml:"secrets"`
-	StartupScript   string            `json:"startup_script,omitempty" yaml:"startup_script,omitempty"`
-	Expose          []compiledExpose  `json:"expose,omitempty" yaml:"expose,omitempty"`
-	SeedSnapshotID  string            `json:"seed_snapshot_id,omitempty" yaml:"seed_snapshot_id,omitempty"`
-	RequiredSecrets []string          `json:"required_secrets,omitempty" yaml:"required_secrets,omitempty"`
+	TaskID         string            `json:"task_id" yaml:"task_id"`
+	Spec           compiledSpec      `json:"spec" yaml:"spec"`
+	ManifestInline string            `json:"manifest_inline,omitempty" yaml:"manifest_inline,omitempty"`
+	Secrets        map[string]string `json:"secrets" yaml:"secrets"`
+	StartupScript  string            `json:"startup_script,omitempty" yaml:"startup_script,omitempty"`
+	Expose         []compiledExpose  `json:"expose,omitempty" yaml:"expose,omitempty"`
+	SeedSnapshotID string            `json:"seed_snapshot_id,omitempty" yaml:"seed_snapshot_id,omitempty"`
+	// StartupScriptTimeoutSeconds bounds setup + run. Zero means the author
+	// asked for no bound and the orchestrator's default applies.
+	StartupScriptTimeoutSeconds int64    `json:"startup_script_timeout_seconds,omitempty" yaml:"startup_script_timeout_seconds,omitempty"`
+	RequiredSecrets             []string `json:"required_secrets,omitempty" yaml:"required_secrets,omitempty"`
 }
 
 func newCompileCmd() *cobra.Command {
@@ -190,10 +193,11 @@ func newCompiledRequest(taskID, seedSnapshotID string, c *fusefile.Compiled) com
 			Image:              c.Spec.Image,
 		},
 		// values are supplied at `fuse up`, so the object is always empty.
-		Secrets:         map[string]string{},
-		StartupScript:   startupScript,
-		SeedSnapshotID:  seedSnapshotID,
-		RequiredSecrets: c.RequiredSecrets,
+		Secrets:                     map[string]string{},
+		StartupScript:               startupScript,
+		SeedSnapshotID:              seedSnapshotID,
+		StartupScriptTimeoutSeconds: c.StartupTimeoutSeconds,
+		RequiredSecrets:             c.RequiredSecrets,
 	}
 	if len(c.ManifestJSON) > 0 {
 		req.ManifestInline = base64.StdEncoding.EncodeToString(c.ManifestJSON)
@@ -229,6 +233,9 @@ func writeCompiledText(w io.Writer, c *fusefile.Compiled, req compiledRequest) e
 	_, _ = fmt.Fprintf(w, "task id  %s\n", req.TaskID)
 	if req.SeedSnapshotID != "" {
 		_, _ = fmt.Fprintf(w, "seed snapshot  %s (setup phase skipped)\n", req.SeedSnapshotID)
+	}
+	if req.StartupScriptTimeoutSeconds > 0 {
+		_, _ = fmt.Fprintf(w, "startup timeout  %ds\n", req.StartupScriptTimeoutSeconds)
 	}
 
 	_, _ = fmt.Fprintf(w, "\nspec\n")

@@ -105,7 +105,7 @@ func LayerKeys(f *Fusefile, inputs InputDigester, opts LayerOptions) ([]LayerKey
 
 	baseKey := opts.BaseKey
 	if baseKey == "" {
-		baseKey = BaseKey(f.Image)
+		baseKey = BaseKey(f.Image, f.Files)
 	}
 	workspace := f.Workspace
 	if workspace == "" {
@@ -184,12 +184,26 @@ func hashLayer(parent, script, inputsDigest, workspace, arch string) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
-// BaseKey derives the root of the chain from the base image reference. An
-// empty image means the host's baked base rootfs, which still gets a distinct
-// key rather than an empty one so the first step's preimage is never ambiguous.
-func BaseKey(image string) string {
-	sum := sha256.Sum256([]byte(image))
-	return "image:" + hex.EncodeToString(sum[:])
+// BaseKey derives the root of the chain from the base image reference and the
+// file block. An empty image means the host's baked base rootfs, which still
+// gets a distinct key rather than an empty one so the first step's preimage is
+// never ambiguous.
+//
+// Files belong here rather than in any step's key because they are written
+// before the first setup step runs, so they are part of the state that step
+// builds on. Leaving them out would let an edited `files:` entry serve a layer
+// baked against the old contents.
+func BaseKey(image string, files []File) string {
+	h := sha256.New()
+	h.Write([]byte(image))
+	// length-prefixed so ("ab", "c") and ("a", "bc") cannot collide.
+	// a hash.Hash never returns an error, but errcheck does not know that.
+	_, _ = fmt.Fprintf(h, "\x00files:%d\x00", len(files))
+	for _, f := range files {
+		_, _ = fmt.Fprintf(h, "%d:%s\x00%d:%s\x00",
+			len(f.Path), f.Path, len(f.Content), f.Content)
+	}
+	return "image:" + hex.EncodeToString(h.Sum(nil))
 }
 
 // cacheable reports whether the step opted out of caching. an unset `cache`

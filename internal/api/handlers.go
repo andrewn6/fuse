@@ -271,6 +271,14 @@ func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, CodeInvalidArgument, err.Error(), nil)
 		return
 	}
+	// A negative bound would reach the fleet as "unset" and quietly restore
+	// the default, so it is refused here where the sign is still visible.
+	// The upper bound is the fleet's to enforce, since it owns the ceiling.
+	if req.StartupScriptTimeoutSeconds < 0 {
+		writeError(w, http.StatusBadRequest, CodeInvalidArgument,
+			"startup_script_timeout_seconds must not be negative", nil)
+		return
+	}
 
 	manifest, err := h.resolver().Resolve(req)
 	if err != nil {
@@ -312,10 +320,11 @@ func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		spec.PinnedHostID = record.HostID
 	}
 	info, err := h.Fleet.ProvisionAndAssign(r.Context(), req.TaskID, spec, manifest, req.Secrets, orchestrator.BootOptions{
-		StartupScript: req.StartupScript,
-		GatewayURL:    req.GatewayURL,
-		GatewayToken:  req.GatewayToken,
-		Expose:        toOrchestratorExpose(req.Expose),
+		StartupScript:        req.StartupScript,
+		StartupScriptTimeout: time.Duration(req.StartupScriptTimeoutSeconds) * time.Second,
+		GatewayURL:           req.GatewayURL,
+		GatewayToken:         req.GatewayToken,
+		Expose:               toOrchestratorExpose(req.Expose),
 	})
 	if err != nil {
 		writeFleetErrorRedacted(w, err, req.Secrets)

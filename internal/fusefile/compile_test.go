@@ -712,3 +712,44 @@ func TestValidLabel(t *testing.T) {
 		}
 	}
 }
+
+func TestCompileStartupTimeout(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int64
+	}{
+		{"", 0},       // unset: the orchestrator's default applies
+		{"45s", 45},   //
+		{"2m", 120},   //
+		{"1500ms", 2}, // rounded up, never floored to the "unset" zero
+	}
+	for _, tc := range cases {
+		c, err := Compile(&Fusefile{Version: 1, StartupTimeout: tc.in})
+		if err != nil {
+			t.Fatalf("Compile(%q): %v", tc.in, err)
+		}
+		if c.StartupTimeoutSeconds != tc.want {
+			t.Errorf("Compile(%q) = %d seconds, want %d", tc.in, c.StartupTimeoutSeconds, tc.want)
+		}
+	}
+}
+
+func TestCompileStartupTimeoutErrors(t *testing.T) {
+	cases := []struct {
+		in          string
+		wantContain string
+	}{
+		{"1 minute", "startup_timeout: "},
+		{"0s", `startup_timeout: must be positive`},
+		{"-5s", `startup_timeout: must be positive`},
+	}
+	for _, tc := range cases {
+		_, err := Compile(&Fusefile{Version: 1, StartupTimeout: tc.in})
+		if err == nil {
+			t.Fatalf("Compile(%q): expected error, got nil", tc.in)
+		}
+		if !strings.Contains(err.Error(), tc.wantContain) {
+			t.Errorf("Compile(%q) error %q does not contain %q", tc.in, err.Error(), tc.wantContain)
+		}
+	}
+}

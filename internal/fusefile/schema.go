@@ -16,12 +16,47 @@ type Fusefile struct {
 	Resources Resources          `yaml:"resources,omitempty"`
 	Placement Placement          `yaml:"placement,omitempty"`
 	Cache     Cache              `yaml:"cache,omitempty"`
+	Files     []File             `yaml:"files,omitempty"`
 	Setup     []Step             `yaml:"setup,omitempty"`
 	Services  map[string]Service `yaml:"services,omitempty"`
 	Run       string             `yaml:"run,omitempty"`
 	Workspace string             `yaml:"workspace,omitempty"`
 	Expose    []Expose           `yaml:"expose,omitempty"`
 	Secrets   []string           `yaml:"secrets,omitempty"`
+
+	// StartupTimeout bounds the generated startup script (setup + run) as a
+	// go duration, e.g. "45s". Empty means the orchestrator's default. The
+	// orchestrator rejects a value above its configured ceiling rather than
+	// clamping it, so an author always knows what bound they got.
+	//
+	// This is not the knob for a genuinely long setup phase: the ceiling is
+	// bounded by the control plane's HTTP write timeout because create is
+	// synchronous. Bake long work into an image with `fuse build` instead.
+	StartupTimeout string `yaml:"startup_timeout,omitempty"`
+}
+
+// File is one file materialized inside the guest before setup runs.
+//
+// Exactly one of Source (a path on the authoring machine, resolved relative to
+// the Fusefile's directory by ResolveFiles) and Content (a literal) is set.
+// Content is what the compiler emits; Source is sugar that ResolveFiles reads
+// into Content, which keeps Compile a pure function of the Fusefile.
+//
+// This is a transport for config and small code, not for model weights or
+// datasets: entries are base64-encoded into the startup script, which travels
+// in the create request body, so MaxFilesBytes caps their total size. Fetch
+// large artifacts from inside `setup` instead.
+type File struct {
+	// Path is where the file lands in the guest. A relative path resolves
+	// against the workspace.
+	Path string `yaml:"path"`
+	// Source is a path on the authoring machine, relative to the Fusefile.
+	Source string `yaml:"source,omitempty"`
+	// Content is a literal file body.
+	Content string `yaml:"content,omitempty"`
+	// Mode is an octal permission string, e.g. "0755". Empty leaves the
+	// mode to the guest's umask.
+	Mode string `yaml:"mode,omitempty"`
 }
 
 // Placement constrains which host in a self-hosted fleet may run the

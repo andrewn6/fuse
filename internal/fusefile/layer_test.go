@@ -43,7 +43,7 @@ func TestLayerKeysAreStable(t *testing.T) {
 	}
 
 	// the chain must actually chain: each step's parent is the previous key.
-	if first[0].ParentKey != BaseKey("base-ubuntu-24") {
+	if first[0].ParentKey != BaseKey("base-ubuntu-24", nil) {
 		t.Errorf("step 0 parent = %q, want the base key", first[0].ParentKey)
 	}
 	if first[1].ParentKey != first[0].Key {
@@ -282,10 +282,38 @@ func TestLayerKeysExplicitBaseKeyOverridesImage(t *testing.T) {
 }
 
 func TestBaseKeyDistinguishesImages(t *testing.T) {
-	if BaseKey("") == BaseKey("base-ubuntu-24") {
+	if BaseKey("", nil) == BaseKey("base-ubuntu-24", nil) {
 		t.Errorf("the baked base rootfs and a named image share a base key")
 	}
-	if !strings.HasPrefix(BaseKey(""), "image:") {
-		t.Errorf("base key = %q, want an image: prefix", BaseKey(""))
+	if !strings.HasPrefix(BaseKey("", nil), "image:") {
+		t.Errorf("base key = %q, want an image: prefix", BaseKey("", nil))
+	}
+}
+
+// files are written before the first setup step runs, so they are part of the
+// state that step builds on: editing one must invalidate the whole chain, or a
+// layer baked against the old contents would still be served.
+func TestBaseKeyCoversFiles(t *testing.T) {
+	img := "base-ubuntu-24"
+	none := BaseKey(img, nil)
+	one := BaseKey(img, []File{{Path: "app.conf", Content: "a"}})
+	edited := BaseKey(img, []File{{Path: "app.conf", Content: "b"}})
+	renamed := BaseKey(img, []File{{Path: "other.conf", Content: "a"}})
+
+	if none == one {
+		t.Errorf("adding a file did not change the base key")
+	}
+	if one == edited {
+		t.Errorf("editing a file's content did not change the base key")
+	}
+	if one == renamed {
+		t.Errorf("renaming a file did not change the base key")
+	}
+	if one != BaseKey(img, []File{{Path: "app.conf", Content: "a"}}) {
+		t.Errorf("the same file block produced two different base keys")
+	}
+	// the path/content split is length-prefixed, so no two splits collide.
+	if BaseKey(img, []File{{Path: "ab", Content: "c"}}) == BaseKey(img, []File{{Path: "a", Content: "bc"}}) {
+		t.Errorf("a different path/content split produced the same base key")
 	}
 }

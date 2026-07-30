@@ -307,6 +307,22 @@ type BootOptions struct {
 // error rather than having the response cut off mid-flight.
 const DefaultStartupScriptTimeout = 30 * time.Second
 
+// DefaultMaxStartupScriptTimeout is the largest bound a caller may request via
+// BootOptions.StartupScriptTimeout when FleetConfig.MaxStartupScriptTimeout is
+// unset.
+//
+// The ceiling exists because the bound is caller-supplied but the cost is paid
+// by the server: the script runs synchronously inside the create request, so a
+// caller-chosen timeout is really a caller-chosen hold on a connection. 55s
+// keeps the whole create under the default 60s HTTP write timeout while still
+// giving authors most of a minute, nearly double the default.
+//
+// Raising it requires raising --write-timeout to match; an operator who does
+// both gets a longer setup budget, and one who raises only this gets a
+// truncated response instead of a classified error, which main.go refuses at
+// startup rather than discovering per request.
+const DefaultMaxStartupScriptTimeout = 55 * time.Second
+
 // EndpointReporter is implemented by environments that can report additional
 // network endpoints published during StartAgent (e.g. via ingress/expose).
 // Providers that don't support ingress simply omit it, in which case Boot
