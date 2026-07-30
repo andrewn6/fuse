@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.10.0](https://github.com/folsomintel/fuse/compare/v0.9.2...v0.10.0) (2026-07-30)
+
+
+### Features
+
+* **cli:** add `fuse build` to run the build phase separately from `fuse up` ([#128](https://github.com/folsomintel/fuse/issues/128)) ([aa175ed](https://github.com/folsomintel/fuse/commit/aa175edfebded26055b001adf97f35df1f30b975))
+
 ## [0.9.2](https://github.com/folsomintel/fuse/compare/v0.9.1...v0.9.2) (2026-07-29)
 
 
