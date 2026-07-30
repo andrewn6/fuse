@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -140,7 +141,21 @@ func newUpCmd() *cobra.Command {
 			}
 			successf("creating environment %s (task %s)", e.ID, e.TaskID)
 			if !noWait {
-				return waitForEnvironmentReady(cmd.Context(), cl, e.ID)
+				// the step events carry only an index, so the cli supplies the
+				// setup commands it just compiled as the labels.
+				labels := make([]string, 0, len(f.Setup))
+				for _, step := range f.Setup {
+					labels = append(labels, step.Run)
+				}
+				steps := newStepTracker(labels)
+				started := time.Now()
+				if err := waitForEnvironmentReady(cmd.Context(), cl, e.ID, steps); err != nil {
+					return err
+				}
+				if s := steps.summary(time.Since(started)); s != "" && !app.isJSON() {
+					_, _ = fmt.Fprintln(os.Stdout, s)
+				}
+				return nil
 			}
 			if app.isJSON() {
 				return printJSON(e)

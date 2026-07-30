@@ -118,13 +118,29 @@ export interface ExecResult {
  */
 export interface Event {
   id: string;
-  /** Event kind. v1 only emits "state". */
+  /** Event kind: "state" (an omitted kind means "state") or "step". */
   event: string;
   vm_id: string;
   state: string;
   url?: string;
   error?: string;
   updated_at: string;
+  /** index of the setup step, 1-based. step events only. */
+  index?: number;
+  /** total number of setup steps. step events only. */
+  total?: number;
+  /** layer cache key for the step. step events only. */
+  key?: string;
+  /** whether the step was served from the layer cache. step events only. */
+  cached?: boolean;
+  /** why the step missed the cache. step events only. */
+  miss_reason?: string;
+  /** what changed, e.g. the input paths. step events only. */
+  miss_detail?: string[];
+  /** wall-clock duration of the step in milliseconds. step events only. */
+  duration_ms?: number;
+  /** exit code of the step. step events only. */
+  exit_code?: number;
 }
 
 /** SnapshotRequest is the optional body for snapshots.create. */

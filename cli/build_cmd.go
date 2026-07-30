@@ -132,7 +132,12 @@ func newBuildCmd() *cobra.Command {
 				}
 			}
 
-			if err := waitForEnvironmentReady(cmd.Context(), cl, e.ID); err != nil {
+			// no step tracker: this only waits for the builder to boot, and the
+			// builder is created without a startup script, so no setup step runs
+			// in this window. the setup phase runs below as one exec of
+			// BuildScript, which reports a single exit code rather than per-step
+			// events, so there is nothing for a tracker to record.
+			if err := waitForEnvironmentReady(cmd.Context(), cl, e.ID, nil); err != nil {
 				destroy()
 				return err
 			}

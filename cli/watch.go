@@ -17,7 +17,10 @@ import (
 // transitions until until(state) is true. it uses an interactive bubbletea view
 // on a tty, and plain (or ndjson) output otherwise. it returns the last state
 // observed, which is empty if the stream ended before any event arrived.
-func streamEnvironment(ctx context.Context, cl *fuse.Client, vmID string, until func(string) bool) (string, error) {
+//
+// steps may be nil. when set, setup step events are recorded there and
+// rendered as their own lines.
+func streamEnvironment(ctx context.Context, cl *fuse.Client, vmID string, until func(string) bool, steps *stepTracker) (string, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
@@ -26,9 +29,9 @@ func streamEnvironment(ctx context.Context, cl *fuse.Client, vmID string, until 
 		return "", friendly(err)
 	}
 	if app.isJSON() || !isInteractive() {
-		return streamPlain(ch, until)
+		return streamPlain(ch, until, steps)
 	}
-	return streamTUI(ch, vmID, until)
+	return streamTUI(ch, vmID, until, steps)
 }
 
 // waitForEnvironmentReady streams provisioning events until the environment
@@ -36,8 +39,8 @@ func streamEnvironment(ctx context.Context, cl *fuse.Client, vmID string, until 
 // running is success: the stream can also end without settling at all (the sdk
 // closes the channel with no error on a clean eof), and a stream that dropped
 // mid-provision must not be reported as a ready environment.
-func waitForEnvironmentReady(ctx context.Context, cl *fuse.Client, vmID string) error {
-	state, err := streamEnvironment(ctx, cl, vmID, fuse.IsSettledState)
+func waitForEnvironmentReady(ctx context.Context, cl *fuse.Client, vmID string, steps *stepTracker) error {
+	state, err := streamEnvironment(ctx, cl, vmID, fuse.IsSettledState, steps)
 	if err != nil {
 		return err
 	}
@@ -57,17 +60,41 @@ func waitForEnvironmentReady(ctx context.Context, cl *fuse.Client, vmID string) 
 
 // streamPlain prints events as they arrive (ndjson in json mode, one line each
 // otherwise) and returns when until(state) is true or the stream closes.
-func streamPlain(ch <-chan fuse.Event, until func(string) bool) (string, error) {
+//
+// only state events advance last and are tested against until: a step event
+// carries no state, so treating it like one would clobber the last state and
+// make a healthy environment look like it never reported anything.
+func streamPlain(ch <-chan fuse.Event, until func(string) bool, steps *stepTracker) (string, error) {
+	if steps == nil {
+		steps = newStepTracker(nil)
+	}
 	last := ""
 	for ev := range ch {
 		if ev.Err != nil {
 			return last, friendly(ev.Err)
 		}
 		if app.isJSON() {
+			// json mode passes the raw event through unchanged, so a new kind
+			// needs no client support to be consumable.
 			if err := printJSON(ev); err != nil {
 				return last, err
 			}
-		} else {
+		}
+		switch {
+		case ev.Kind == fuse.EventKindStep:
+			entry := steps.add(ev)
+			if !app.isJSON() {
+				for _, line := range renderStepEntry(entry) {
+					_, _ = fmt.Fprintln(os.Stdout, line)
+				}
+			}
+			continue
+		case !fuse.IsStateEvent(ev.Kind):
+			// an unknown kind from a newer server: nothing to render, and it
+			// must not be mistaken for a state transition.
+			continue
+		}
+		if !app.isJSON() {
 			detail := ev.URL
 			if ev.Error != "" {
 				detail = ev.Error
@@ -92,16 +119,20 @@ type watchModel struct {
 	ch      <-chan fuse.Event
 	until   func(string) bool
 	spinner spinner.Model
-	events  []fuse.Event
+	steps   *stepTracker
+	lines   []string
 	last    string
 	done    bool
 	err     error
 }
 
-func newWatchModel(vmID string, ch <-chan fuse.Event, until func(string) bool) watchModel {
+func newWatchModel(vmID string, ch <-chan fuse.Event, until func(string) bool, steps *stepTracker) watchModel {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-	return watchModel{vmID: vmID, ch: ch, until: until, spinner: sp}
+	if steps == nil {
+		steps = newStepTracker(nil)
+	}
+	return watchModel{vmID: vmID, ch: ch, until: until, spinner: sp, steps: steps}
 }
 
 func (m watchModel) Init() tea.Cmd {
@@ -132,7 +163,15 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.err = ev.Err
 			return m, tea.Quit
 		}
-		m.events = append(m.events, ev)
+		switch {
+		case ev.Kind == fuse.EventKindStep:
+			// a step event has no state, so it must not touch last or until.
+			m.lines = append(m.lines, renderStepEntry(m.steps.add(ev))...)
+			return m, waitForEvent(m.ch)
+		case !fuse.IsStateEvent(ev.Kind):
+			return m, waitForEvent(m.ch)
+		}
+		m.lines = append(m.lines, renderStateLine(ev))
 		m.last = ev.State
 		if m.until(ev.State) {
 			m.done = true
@@ -153,14 +192,7 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m watchModel) View() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n", styleHeader.Render("watching "+m.vmID))
-	for _, ev := range m.events {
-		line := fmt.Sprintf("  %s  %s", shortTime(ev.UpdatedAt), stateStyle(ev.State))
-		if ev.URL != "" {
-			line += "  " + styleFaint.Render(ev.URL)
-		}
-		if ev.Error != "" {
-			line += "  " + styleBad.Render(ev.Error)
-		}
+	for _, line := range m.lines {
 		b.WriteString(line + "\n")
 	}
 	switch {
@@ -174,8 +206,20 @@ func (m watchModel) View() string {
 	return b.String()
 }
 
-func streamTUI(ch <-chan fuse.Event, vmID string, until func(string) bool) (string, error) {
-	final, err := tea.NewProgram(newWatchModel(vmID, ch, until)).Run()
+// renderStateLine renders one lifecycle transition for the interactive view.
+func renderStateLine(ev fuse.Event) string {
+	line := fmt.Sprintf("  %s  %s", shortTime(ev.UpdatedAt), stateStyle(ev.State))
+	if ev.URL != "" {
+		line += "  " + styleFaint.Render(ev.URL)
+	}
+	if ev.Error != "" {
+		line += "  " + styleBad.Render(ev.Error)
+	}
+	return line
+}
+
+func streamTUI(ch <-chan fuse.Event, vmID string, until func(string) bool, steps *stepTracker) (string, error) {
+	final, err := tea.NewProgram(newWatchModel(vmID, ch, until, steps)).Run()
 	if err != nil {
 		return "", err
 	}
