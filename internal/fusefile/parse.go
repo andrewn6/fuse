@@ -17,6 +17,21 @@ import (
 // fields are rejected) and then validates the result. It returns the parsed
 // Fusefile only if it is structurally valid.
 func Parse(data []byte) (*Fusefile, error) {
+	f, err := Decode(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := Validate(f); err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// Decode decodes a Fusefile from yaml with a strict decoder without validating
+// it. Parse is the normal entry point; Decode is separate so a caller that
+// wants to report structural and compile problems together (`fuse validate`)
+// can run Validate and Compile over the same decoded file.
+func Decode(data []byte) (*Fusefile, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 
@@ -24,13 +39,12 @@ func Parse(data []byte) (*Fusefile, error) {
 	if err := dec.Decode(&f); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("parse fusefile: %w", err)
 	}
-
-	if err := validate(&f); err != nil {
-		return nil, err
-	}
-
 	return &f, nil
 }
+
+// Validate reports every structural rule violation in f, joined into a single
+// error.
+func Validate(f *Fusefile) error { return validate(f) }
 
 // validate checks structural rules that yaml decoding alone cannot enforce.
 // all violations are collected and returned together (via errors.Join) so a

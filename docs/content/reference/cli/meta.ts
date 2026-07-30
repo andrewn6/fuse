@@ -11,6 +11,7 @@ export default defineMeta({
     "environment",
     "up",
     "build",
+    "validate",
     "init",
     "compile",
     "snapshot",
