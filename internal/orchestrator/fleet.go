@@ -134,7 +134,16 @@ type vm struct {
 	endpoints          []Endpoint // published endpoints (e.g. ingress), if the provider reported any
 	createdAt          time.Time
 	updatedAt          time.Time
-	err                string
+	// lastActivityAt is the clock the idle detector reads: the last time a
+	// caller exec'd or attached to this VM (create counts as activity). It is
+	// deliberately separate from updatedAt, which only moves on state
+	// transitions and would make every healthy VM look permanently idle.
+	// Not persisted: an orchestrator restart resets the idle window.
+	lastActivityAt time.Time
+	// attachSessions counts live attach streams. A VM holding at least one is
+	// never idle, however quiet the stream is.
+	attachSessions int
+	err            string
 }
 
 func (v *vm) toInfo() VMInfo {
@@ -187,6 +196,8 @@ type ReconcileSummary struct {
 	OrphansDeadLettered int
 	StuckTasksSuspected int
 	StuckTasksFailed    int
+	IdleVMsSuspected    int
+	IdleVMsFailed       int
 	VMsMissingProvider  int
 	Duration            time.Duration
 }
@@ -203,6 +214,13 @@ type FleetConfig struct {
 	// ceiling, NOT a heartbeat — healthy long-running tasks must set
 	// Spec.MaxRuntime to override this. Default 2h.
 	TaskStuckTimeout time.Duration
+
+	// DefaultIdleTimeout applies to VMs whose Spec.IdleTimeout is zero. It is
+	// how long a Running VM may go with no exec and no attach session before
+	// it is destroyed. Unlike TaskStuckTimeout this is a liveness check, but
+	// only over control-plane activity. Zero (the default) disables idle
+	// expiry for VMs that do not ask for it.
+	DefaultIdleTimeout time.Duration
 
 	// OrphanDestroyMaxRetries is the number of consecutive reconcile cycles
 	// an orphan VM may fail to destroy before being dead-lettered and
@@ -264,6 +282,7 @@ type FleetManager struct {
 	reconcileInterval time.Duration
 
 	taskStuckTimeout         time.Duration
+	defaultIdleTimeout       time.Duration
 	orphanDestroyMaxRetries  int
 	defaultSnapshotRetention time.Duration
 	snapshotQuotaMaxCount    int
@@ -278,6 +297,11 @@ type FleetManager struct {
 	// two strikes before it is failed, which guards against single-cycle
 	// clock skew or transient scheduling pauses.
 	stuckStrikes map[string]int
+
+	// idleStrikes mirrors stuckStrikes for the idle detector: a VM must be
+	// observed idle on two consecutive reconcile cycles before it is torn
+	// down, so a single delayed cycle cannot kill a live environment.
+	idleStrikes map[string]int
 
 	// ── Scheduler / multi-host fields ────────────────────────────
 	//
@@ -348,12 +372,14 @@ func NewFleetManager(cfg FleetConfig) *FleetManager {
 		startupScriptTimeout:     cfg.StartupScriptTimeout,
 		reconcileInterval:        cfg.ReconcileInterval,
 		taskStuckTimeout:         cfg.TaskStuckTimeout,
+		defaultIdleTimeout:       cfg.DefaultIdleTimeout,
 		orphanDestroyMaxRetries:  cfg.OrphanDestroyMaxRetries,
 		defaultSnapshotRetention: cfg.DefaultSnapshotRetention,
 		snapshotQuotaMaxCount:    cfg.SnapshotQuotaMaxCount,
 		snapshotQuotaMaxBytes:    cfg.SnapshotQuotaMaxBytes,
 		orphanRetries:            make(map[string]int),
 		stuckStrikes:             make(map[string]int),
+		idleStrikes:              make(map[string]int),
 		hosts:                    make(map[string]*Host),
 		hostProviders:            make(map[string]Provider),
 		tokenEncryptionKey:       cfg.TokenEncryptionKey,
@@ -503,12 +529,13 @@ func (fm *FleetManager) ProvisionAndAssign(ctx context.Context, taskID string, s
 	now := time.Now()
 
 	v := &vm{
-		id:        vmID,
-		state:     VMStateProvisioning,
-		taskID:    taskID,
-		spec:      spec,
-		createdAt: now,
-		updatedAt: now,
+		id:             vmID,
+		state:          VMStateProvisioning,
+		taskID:         taskID,
+		spec:           spec,
+		createdAt:      now,
+		updatedAt:      now,
+		lastActivityAt: now,
 	}
 
 	fm.mu.Lock()
@@ -1093,6 +1120,7 @@ func (fm *FleetManager) reconcile(ctx context.Context) {
 	// in reconcile.go so that fleet.go stays focused on the lifecycle API.
 	fm.reconcileOrphans(ctx, envs, envProviders, tracked, &summary)
 	fm.reconcileStuckTasks(ctx, &summary)
+	fm.reconcileIdleVMs(ctx, &summary)
 	fm.reconcileSnapshots(ctx)
 
 	// Sweep VMs that have been marked destroying and are no longer present
@@ -1219,7 +1247,10 @@ func (fm *FleetManager) recoverState(ctx context.Context) error {
 			endpoints:    record.Endpoints,
 			createdAt:    record.CreatedAt,
 			updatedAt:    record.UpdatedAt,
-			err:          record.LastError,
+			// activity is not persisted, so recovery restarts the idle
+			// window rather than inheriting a stale one.
+			lastActivityAt: time.Now(),
+			err:            record.LastError,
 		}
 
 		if recoveredVM.state == VMStateRunning {

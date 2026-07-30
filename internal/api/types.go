@@ -24,9 +24,14 @@ type ResourceSpec struct {
 	StorageGB         int32  `json:"storage_gb,omitempty"`
 	Region            string `json:"region,omitempty"`
 	MaxRuntimeSeconds int64  `json:"max_runtime_seconds,omitempty"`
-	Image             string `json:"image,omitempty"`
-	GPUs              int32  `json:"gpus,omitempty"`
-	GPUKind           string `json:"gpu_kind,omitempty"`
+	// IdleTimeoutSeconds destroys the environment after this many seconds
+	// with no exec and no attach session. Zero means no idle expiry. Unlike
+	// MaxRuntimeSeconds (a leak-detection ceiling measured from create),
+	// this is measured from the last control-plane activity.
+	IdleTimeoutSeconds int64  `json:"idle_timeout_seconds,omitempty"`
+	Image              string `json:"image,omitempty"`
+	GPUs               int32  `json:"gpus,omitempty"`
+	GPUKind            string `json:"gpu_kind,omitempty"`
 	// GPUProfile requests fractional GPU allocation: a MIG profile in
 	// mig-parted vocabulary (e.g. "1g.10gb"). When set, GPUs counts MIG
 	// instances of this profile rather than whole devices (decision D5).

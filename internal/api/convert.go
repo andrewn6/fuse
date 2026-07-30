@@ -28,17 +28,18 @@ func toAPIEnvironment(v orchestrator.VMInfo) Environment {
 // wire contract uses seconds for ergonomics (no Go-specific parser).
 func toAPIResourceSpec(s orchestrator.Spec) ResourceSpec {
 	return ResourceSpec{
-		CPUs:              int32(s.CPUs),
-		RamMB:             int32(s.RamMB),
-		StorageGB:         int32(s.StorageGB),
-		Region:            s.Region,
-		MaxRuntimeSeconds: int64(s.MaxRuntime.Seconds()),
-		Image:             s.Image,
-		GPUs:              s.GPUs,
-		GPUKind:           s.GPUKind,
-		GPUProfile:        s.GPUProfile,
-		HostID:            s.HostID,
-		Labels:            copyLabels(s.Labels),
+		CPUs:               int32(s.CPUs),
+		RamMB:              int32(s.RamMB),
+		StorageGB:          int32(s.StorageGB),
+		Region:             s.Region,
+		MaxRuntimeSeconds:  int64(s.MaxRuntime.Seconds()),
+		IdleTimeoutSeconds: int64(s.IdleTimeout.Seconds()),
+		Image:              s.Image,
+		GPUs:               s.GPUs,
+		GPUKind:            s.GPUKind,
+		GPUProfile:         s.GPUProfile,
+		HostID:             s.HostID,
+		Labels:             copyLabels(s.Labels),
 	}
 }
 
@@ -47,17 +48,18 @@ func toAPIResourceSpec(s orchestrator.Spec) ResourceSpec {
 // case-insensitive end to end.
 func toOrchestratorSpec(s ResourceSpec) orchestrator.Spec {
 	return orchestrator.Spec{
-		CPUs:       int(s.CPUs),
-		RamMB:      int(s.RamMB),
-		StorageGB:  int(s.StorageGB),
-		Region:     s.Region,
-		MaxRuntime: time.Duration(s.MaxRuntimeSeconds) * time.Second,
-		Image:      s.Image,
-		GPUs:       s.GPUs,
-		GPUKind:    s.GPUKind,
-		GPUProfile: strings.ToLower(s.GPUProfile),
-		HostID:     s.HostID,
-		Labels:     copyLabels(s.Labels),
+		CPUs:        int(s.CPUs),
+		RamMB:       int(s.RamMB),
+		StorageGB:   int(s.StorageGB),
+		Region:      s.Region,
+		MaxRuntime:  time.Duration(s.MaxRuntimeSeconds) * time.Second,
+		IdleTimeout: time.Duration(s.IdleTimeoutSeconds) * time.Second,
+		Image:       s.Image,
+		GPUs:        s.GPUs,
+		GPUKind:     s.GPUKind,
+		GPUProfile:  strings.ToLower(s.GPUProfile),
+		HostID:      s.HostID,
+		Labels:      copyLabels(s.Labels),
 	}
 }
 

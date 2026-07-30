@@ -117,6 +117,7 @@ func renderEnvDetail(e *fuse.EnvironmentInfo) {
 		{"storage gb", strconv.Itoa(int(e.Spec.StorageGB))},
 		{"region", dash(e.Spec.Region)},
 		{"max runtime s", strconv.FormatInt(e.Spec.MaxRuntimeSeconds, 10)},
+		{"idle timeout s", strconv.FormatInt(e.Spec.IdleTimeoutSeconds, 10)},
 		{"created", shortTime(e.CreatedAt)},
 		{"updated", shortTime(e.UpdatedAt)},
 	}

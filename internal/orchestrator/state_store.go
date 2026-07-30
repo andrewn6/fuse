@@ -144,6 +144,10 @@ const (
 	// DeadLetterStuckTask records a task that exceeded its runtime ceiling
 	// and was torn down by the reconcile loop.
 	DeadLetterStuckTask DeadLetterKind = "stuck_task"
+
+	// DeadLetterIdleTimeout records an environment torn down because it went
+	// longer than its idle timeout with no exec and no attach session.
+	DeadLetterIdleTimeout DeadLetterKind = "idle_timeout"
 )
 
 // DeadLetterRecord is a failure the reconciler has given up on retrying.

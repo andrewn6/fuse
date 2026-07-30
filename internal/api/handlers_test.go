@@ -370,6 +370,32 @@ func TestCreateEnvironment_missingTaskIDReturns400(t *testing.T) {
 	}
 }
 
+func TestCreateEnvironment_badTimeoutsReturn400(t *testing.T) {
+	cases := []struct {
+		name string
+		spec ResourceSpec
+	}{
+		{"negative max runtime", ResourceSpec{MaxRuntimeSeconds: -3600}},
+		{"negative idle timeout", ResourceSpec{IdleTimeoutSeconds: -900}},
+		{"sub-minute idle timeout", ResourceSpec{IdleTimeoutSeconds: 5}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _, _ := newTestHandler(t)
+			r := mustRouter(t, h)
+
+			rr := doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+				TaskID:         "task-1",
+				Spec:           tc.spec,
+				ManifestInline: encodeManifest(t),
+			})
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400. body: %s", rr.Code, rr.Body.String())
+			}
+		})
+	}
+}
+
 func TestCreateEnvironment_invalidBase64Returns400(t *testing.T) {
 	h, _, _ := newTestHandler(t)
 	r := mustRouter(t, h)

@@ -96,6 +96,7 @@ func (s *PostgresStateStore) ApplyMigrations(ctx context.Context) error {
 
 func (s *PostgresStateStore) UpsertVM(ctx context.Context, vm VMRecord) error {
 	maxRuntimeSeconds := int(vm.Spec.MaxRuntime.Seconds())
+	idleTimeoutSeconds := int(vm.Spec.IdleTimeout.Seconds())
 	endpoints := vm.Endpoints
 	if endpoints == nil {
 		endpoints = []Endpoint{}
@@ -129,8 +130,9 @@ func (s *PostgresStateStore) UpsertVM(ctx context.Context, vm VMRecord) error {
 			vm_id, host_id, network_host, state, url, task_id, tenant_id,
 			cpus, ram_mb, storage_gb, region, max_runtime_seconds,
 			auth_token_encrypted, secrets_encrypted, last_error, endpoints_json, created_at, updated_at,
-			gpus, gpu_kind, gpu_profile, gpu_uuids, mig_instance_uuids
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)
+			gpus, gpu_kind, gpu_profile, gpu_uuids, mig_instance_uuids,
+			idle_timeout_seconds
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
 		ON CONFLICT (vm_id) DO UPDATE SET
 			host_id=EXCLUDED.host_id,
 			network_host=EXCLUDED.network_host,
@@ -153,7 +155,8 @@ func (s *PostgresStateStore) UpsertVM(ctx context.Context, vm VMRecord) error {
 			gpu_kind=EXCLUDED.gpu_kind,
 			gpu_profile=EXCLUDED.gpu_profile,
 			gpu_uuids=EXCLUDED.gpu_uuids,
-			mig_instance_uuids=EXCLUDED.mig_instance_uuids
+			mig_instance_uuids=EXCLUDED.mig_instance_uuids,
+			idle_timeout_seconds=EXCLUDED.idle_timeout_seconds
 	`,
 		vm.ID,
 		vm.HostID,
@@ -178,6 +181,7 @@ func (s *PostgresStateStore) UpsertVM(ctx context.Context, vm VMRecord) error {
 		vm.Spec.GPUProfile,
 		string(gpuUUIDsJSON),
 		string(migInstanceUUIDsJSON),
+		idleTimeoutSeconds,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert vm %s: %w", vm.ID, err)
@@ -197,7 +201,8 @@ func (s *PostgresStateStore) ListVMs(ctx context.Context) ([]VMRecord, error) {
 		SELECT vm_id, host_id, network_host, state, url, task_id, tenant_id,
 		       cpus, ram_mb, storage_gb, region, max_runtime_seconds,
 		       auth_token_encrypted, secrets_encrypted, last_error, endpoints_json, created_at, updated_at,
-		       gpus, gpu_kind, gpu_profile, gpu_uuids, mig_instance_uuids
+		       gpus, gpu_kind, gpu_profile, gpu_uuids, mig_instance_uuids,
+		       idle_timeout_seconds
 		FROM orchestrator_vms
 	`)
 	if err != nil {
@@ -208,12 +213,13 @@ func (s *PostgresStateStore) ListVMs(ctx context.Context) ([]VMRecord, error) {
 	var out []VMRecord
 	for rows.Next() {
 		var (
-			record            VMRecord
-			state             string
-			maxRuntimeSeconds int
-			endpointsJSON     string
-			gpuUUIDsJSON      []byte
-			migInstUUIDsJSON  []byte
+			record             VMRecord
+			state              string
+			maxRuntimeSeconds  int
+			idleTimeoutSeconds int
+			endpointsJSON      string
+			gpuUUIDsJSON       []byte
+			migInstUUIDsJSON   []byte
 		)
 		if err := rows.Scan(
 			&record.ID,
@@ -239,12 +245,16 @@ func (s *PostgresStateStore) ListVMs(ctx context.Context) ([]VMRecord, error) {
 			&record.Spec.GPUProfile,
 			&gpuUUIDsJSON,
 			&migInstUUIDsJSON,
+			&idleTimeoutSeconds,
 		); err != nil {
 			return nil, fmt.Errorf("scan vm row: %w", err)
 		}
 		record.State = VMState(state)
 		if maxRuntimeSeconds > 0 {
 			record.Spec.MaxRuntime = time.Duration(maxRuntimeSeconds) * time.Second
+		}
+		if idleTimeoutSeconds > 0 {
+			record.Spec.IdleTimeout = time.Duration(idleTimeoutSeconds) * time.Second
 		}
 		if endpointsJSON != "" {
 			if err := json.Unmarshal([]byte(endpointsJSON), &record.Endpoints); err != nil {

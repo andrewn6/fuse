@@ -267,6 +267,10 @@ func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if err := validateTimeoutSpec(req.Spec); err != nil {
+		writeError(w, http.StatusBadRequest, CodeInvalidArgument, err.Error(), nil)
+		return
+	}
 
 	manifest, err := h.resolver().Resolve(req)
 	if err != nil {
@@ -363,6 +367,24 @@ func validatePlacementSpec(s ResourceSpec) error {
 		if value := s.Labels[key]; !fusefile.ValidLabel(value) {
 			return fmt.Errorf("spec.labels[%s]: invalid label value %q", key, value)
 		}
+	}
+	return nil
+}
+
+// validateTimeoutSpec enforces the duration invariants at the API boundary,
+// mirroring what the fusefile compiler applies client-side: no negative
+// windows, and no sub-minute idle timeout (idle expiry is detected on the
+// reconcile loop, so a shorter window promises accuracy it cannot deliver).
+func validateTimeoutSpec(s ResourceSpec) error {
+	if s.MaxRuntimeSeconds < 0 {
+		return errors.New("spec.max_runtime_seconds must not be negative")
+	}
+	if s.IdleTimeoutSeconds < 0 {
+		return errors.New("spec.idle_timeout_seconds must not be negative")
+	}
+	if s.IdleTimeoutSeconds > 0 && time.Duration(s.IdleTimeoutSeconds)*time.Second < fusefile.MinIdleTimeout {
+		return fmt.Errorf("spec.idle_timeout_seconds must be at least %d (idle detection runs on the reconcile loop)",
+			int64(fusefile.MinIdleTimeout.Seconds()))
 	}
 	return nil
 }

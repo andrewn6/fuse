@@ -14,6 +14,7 @@ resources:
   memory: 2GB
   storage: 10GB
   max_runtime: 1h
+  idle_timeout: 15m
 setup:
   - echo hi
 services:
@@ -48,6 +49,9 @@ secrets:
 	}
 	if f.Resources.MaxRuntime != "1h" {
 		t.Errorf("resources.max_runtime: got %q, want %q", f.Resources.MaxRuntime, "1h")
+	}
+	if f.Resources.IdleTimeout != "15m" {
+		t.Errorf("resources.idle_timeout: got %q, want %q", f.Resources.IdleTimeout, "15m")
 	}
 
 	db, ok := f.Services["db"]

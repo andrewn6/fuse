@@ -34,7 +34,8 @@ resources:
   gpu_profile: 1g.10gb # optional MIG profile; omit for whole devices
   memory: 2GB         # accepts MB/GB suffixes, compiles to ram_mb
   storage: 10GB       # compiles to storage_gb
-  max_runtime: 1h     # accepts go duration, compiles to max_runtime_seconds
+  max_runtime: 1h     # hard ttl from create; a leak ceiling, not a budget
+  idle_timeout: 15m   # destroyed after this long with no exec and no attach
 
 # hard placement constraints for a self-hosted fleet. every field is a gate,
 # not a preference: a request that matches no host is rejected, never queued.
@@ -88,7 +89,8 @@ secrets:
 | `resources.gpu_profile` | string | Optional MIG profile, e.g. `1g.10gb`. Requests a fractional slice of a GPU instead of whole devices. See [GPU workloads](/docs/guides/gpu-workloads). |
 | `resources.memory` | string | Accepts `MB`/`GB` suffixes; compiles to `ram_mb`. |
 | `resources.storage` | string | Accepts `MB`/`GB` suffixes; compiles to `storage_gb`. |
-| `resources.max_runtime` | string | Go duration (`1h`, `30m`); compiles to `max_runtime_seconds`. |
+| `resources.max_runtime` | string | Go duration (`1h`, `30m`); compiles to `max_runtime_seconds`. A leak-detection ceiling measured from create, *not* a task budget. See [Reconciliation](/docs/concepts/reconcile). |
+| `resources.idle_timeout` | string | Go duration, minimum `1m`; compiles to `idle_timeout_seconds`. Destroys the environment once it has gone this long with no exec and no attach session. Omit for no idle expiry. |
 | `placement.host` | string | Pins the environment to an exact host id. A pin is not an override: the host must still be active, run the right backend, and fit the request. An unknown host id fails fast with a 404. |
 | `placement.labels` | map | Label selectors matched against the labels an operator declared with `fuse host register --label key=value`. Every pair must match (AND). A selector that matches no host is rejected immediately. |
 | `setup` | list of strings | Commands run once at boot, before `run`. Compiled into `startup_script`. |
@@ -98,6 +100,31 @@ secrets:
 | `workspace` | string | Working directory inside the guest. |
 | `expose` | list of `{port, as}` | Guest ports published externally. |
 | `secrets` | list of strings | Secret *names* this environment requires. Values are supplied out-of-band via `--secret key=value` or `--secrets-file`, never written into the Fusefile itself. |
+
+## Lifetime fields
+
+`max_runtime` and `idle_timeout` answer different questions and neither replaces
+the other.
+
+`max_runtime` is a **ceiling measured from create**. The reconcile loop uses it to
+find leaks: a VM older than its ceiling that still carries a task is destroyed. It
+is not a budget and not a health check, so making progress does not spare a VM and
+being wedged does not doom one. Set it above any plausible healthy runtime.
+
+`idle_timeout` is a **window measured from the last activity**. An environment is
+idle when nobody has exec'd into it and no attach session is open. Once the window
+elapses the environment is destroyed. There is no pause or suspend anywhere in the
+stack, so idle expiry means teardown, not scale-to-zero.
+
+Activity means exactly two things: an `exec` call, and an open attach session. An
+attach session counts for as long as it stays open, however quiet it is, and the
+window restarts when it closes. In-guest CPU use and traffic on exposed ports are
+**not** observed, so a VM computing hard with nobody attached will still be torn
+down once its window elapses. If that is your workload, do not set `idle_timeout`.
+
+Detection runs on the reconcile loop (30s ticks) and requires two consecutive
+observations, so real teardown lands roughly one to two ticks after the window
+elapses. That is why the minimum accepted value is `1m`.
 
 ## GPU fields
 

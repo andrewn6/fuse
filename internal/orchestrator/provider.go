@@ -85,6 +85,13 @@ type Spec struct {
 	// not a liveness check — set it higher than any plausible healthy runtime.
 	MaxRuntime time.Duration
 
+	// IdleTimeout destroys this VM once it has gone this long with no exec
+	// and no attach session. Zero means "use FleetConfig.DefaultIdleTimeout"
+	// (itself zero by default, i.e. no idle expiry). Unlike MaxRuntime this
+	// is a liveness check, but only over control-plane activity: in-guest CPU
+	// and network traffic are not observed.
+	IdleTimeout time.Duration
+
 	// Image names a base rootfs for the provider to boot from, resolved by
 	// the provider (e.g. the firecracker host agent looks it up in its own
 	// named-rootfs directory). Empty means the provider's default base.

@@ -15,7 +15,12 @@ type Spec struct {
 	GPUProfile        string `json:"gpu_profile,omitempty"`
 	Region            string `json:"region,omitempty"`
 	MaxRuntimeSeconds int64  `json:"max_runtime_seconds,omitempty"`
-	Image             string `json:"image,omitempty"`
+	// IdleTimeoutSeconds destroys the environment after this many seconds
+	// with no exec and no attach session. Zero means no idle expiry. Unlike
+	// MaxRuntimeSeconds (a ceiling measured from create), this is measured
+	// from the last exec or attach.
+	IdleTimeoutSeconds int64  `json:"idle_timeout_seconds,omitempty"`
+	Image              string `json:"image,omitempty"`
 	// HostID pins the environment to an exact host id (the Fusefile's
 	// placement.host). The pinned host still has to be active, run the right
 	// backend, and fit the request.

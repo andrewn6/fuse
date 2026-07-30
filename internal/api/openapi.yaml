@@ -1404,6 +1404,17 @@ components:
             Leak-detection ceiling for this task. Zero means "use the
             fleet default". The orchestrator tears down tasks that
             exceed this age with no state transitions.
+        idle_timeout_seconds:
+          type: integer
+          format: int64
+          description: |
+            Destroys the environment once it has gone this long with no
+            exec and no attach session. Zero means "use the fleet
+            default", which is no idle expiry unless the operator
+            configured one. Measured from the last exec or attach, not
+            from create, and must be at least 60 (idle detection runs on
+            the reconcile loop). In-guest CPU use and traffic on exposed
+            ports are not observed.
 
     ExposeSpec:
       type: object
