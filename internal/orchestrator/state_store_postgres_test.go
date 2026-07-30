@@ -13,7 +13,7 @@ import (
 // openTestPostgres returns a migrated PostgresStateStore backed by
 // DATABASE_URL, or skips the test if the env var is unset. This mirrors
 // the env var the orchestrator binary itself uses to opt into Postgres
-// (see cmd/orchestrator/main.go), so a developer can run this test
+// (see orchestrator/main.go), so a developer can run this test
 // locally with: DATABASE_URL=... go test ./internal/orchestrator/
 func openTestPostgres(t *testing.T) *PostgresStateStore {
 	t.Helper()

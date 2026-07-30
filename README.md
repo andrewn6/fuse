@@ -21,7 +21,7 @@ brew install --cask folsomintel/fuse/fuse
 Or without Homebrew, on macOS and Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/folsomintel/fuse/main/scripts/install-fuse.sh | bash
+curl -fsSL https://raw.githubusercontent.com/folsomintel/fuse/main/ops/install-fuse.sh | bash
 ```
 
 The script verifies the release archive against the release's `checksums.txt` before

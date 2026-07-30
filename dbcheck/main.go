@@ -7,7 +7,7 @@
 //
 // Build:
 //
-//	cd apps/orchestrator && go build -o /tmp/dbcheck ./cmd/dbcheck
+//	cd apps/orchestrator && go build -o /tmp/dbcheck ./dbcheck
 //
 // Use (DATABASE_URL must be set):
 //

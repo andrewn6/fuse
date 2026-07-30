@@ -213,7 +213,7 @@ All routes under `/v1/vm`, bearer auth (`Authorization: Bearer $TOKEN`), JSON in
 
 `./fc-bake-rootfs.sh` builds the guest image. **The in-guest agent is baked into the
 image**, so you must (re-)bake before first start and whenever the agent binary changes.
-The reference agent is `fused`, built from this repo's [`cmd/fused`](../cmd/fused) by
+The reference agent is `fused`, built from this repo's [`fused`](../fused) by
 `./fc-build-agent.sh` (output: `host-agent/fused`); its systemd unit `fused.service` ships in
 `host-agent/`. To bake your own agent instead, drop your binary here as `fused` (and replace
 `fused.service`) — see [`FUSE.md`](FUSE.md).
@@ -320,7 +320,7 @@ To pick up a new agent binary, re-run `./fc-bake-rootfs.sh` and `./fc-agent.sh r
 
 ## Co-locating the orchestrator (control plane)
 
-The orchestrator (`bin/fuse`, built from [`cmd/orchestrator/`](../cmd/orchestrator)) is a plain HTTP client to
+The orchestrator (`bin/fuse`, built from [`orchestrator/`](../orchestrator)) is a plain HTTP client to
 this agent, so the simplest production setup runs it on the same host and talks to the agent
 over loopback. One command installs it as a systemd service next to the agent:
 

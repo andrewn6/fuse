@@ -12,7 +12,7 @@
 # before anything is extracted or installed.
 #
 # usage:
-#   curl -fsSL https://raw.githubusercontent.com/folsomintel/fuse/main/scripts/install-fuse.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/folsomintel/fuse/main/ops/install-fuse.sh | bash
 #   ./install-fuse.sh
 #
 # env knobs:
@@ -32,7 +32,7 @@ die()  { printf '[install-fuse] error: %s\n' "$*" >&2; exit 1; }
 # Embedded rather than sourced: this script is meant to be piped from curl on a
 # machine with no checkout, so a sibling library file is not guaranteed to be
 # on disk. The same helper is embedded in host-agent/fc-update.sh,
-# host-agent/fc-agent.sh, and scripts/install-orchestrator.sh; keep the bodies
+# host-agent/fc-agent.sh, and ops/install-orchestrator.sh; keep the bodies
 # in step.
 
 # sha256_of <file> - print the file's lowercase sha256, or fail if no tool.

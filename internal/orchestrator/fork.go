@@ -183,7 +183,7 @@ func (fm *FleetManager) ForkEnvironment(ctx context.Context, srcVMID string, opt
 	// credentials for the fork.
 	//
 	// uploading the files is NOT enough on its own: fused reads --auth-token-file
-	// exactly once at process start (cmd/fused/main.go) and has no reloader, so
+	// exactly once at process start (fused/main.go) and has no reloader, so
 	// the already-running process would keep serving the source's token. StartAgent
 	// is what makes the host agent rewrite the unit's env with the fork's own
 	// vm id and restart fused, which is the step that actually takes effect.

@@ -27,7 +27,7 @@ the HTTP contract, and the networking model are in [`README.md`](README.md).
 
 Fuse does not hardcode a specific in-guest daemon — it uploads a set of files into the
 guest and launches a configurable command (`AgentSpec`; see `../docs/DECOUPLING.md`). The
-**reference** in-guest agent is `fused`, a small Go daemon in [`../cmd/fused`](../cmd/fused):
+**reference** in-guest agent is `fused`, a small Go daemon in [`../fused`](../fused):
 it reads the uploaded `/fuse/manifest.json` + `/fuse/secrets.json`, binds `--listen`
 (`:9550`), serves `/health` + `/v1/info`, and quiesces cleanly on SIGTERM (the drain path).
 

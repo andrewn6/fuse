@@ -27,7 +27,7 @@ echo "[build-agent] building reference agent -> $OUT (linux/amd64, static)"
 # hand-dropped fused is sitting here. clear it first.
 rm -f "$OUT"
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go -C "$REPO_ROOT" build \
-  -ldflags='-s -w' -o "$OUT" ./cmd/fused
+  -ldflags='-s -w' -o "$OUT" ./fused
 
 chmod 0755 "$OUT"
 echo "[build-agent] done: $(cd "$REPO_ROOT/host-agent" && ls -lh fused | awk '{print $5}') static binary"
