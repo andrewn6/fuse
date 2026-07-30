@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sync"
@@ -586,4 +587,45 @@ func waitFor(t *testing.T, timeout time.Duration, fn func() bool, msg string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal(msg)
+}
+
+// TestProvisionAndAssign_placementOnNoHostsPathRejected covers the legacy
+// fallback: with no hosts registered, ProvisionAndAssign boots on the default
+// provider without calling Schedule, so a pin or a selector there could never
+// be honored. It must fail instead of silently booting somewhere else.
+func TestProvisionAndAssign_placementOnNoHostsPathRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		spec Spec
+	}{
+		{"host pin", Spec{CPUs: 2, RamMB: 1024, HostID: "build-3"}},
+		{"label selector", Spec{CPUs: 2, RamMB: 1024, Labels: map[string]string{"disk": "nvme"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newMockProvider()
+			fm := NewFleetManager(FleetConfig{Provider: p, Prefix: "fuse-"})
+			_, err := fm.ProvisionAndAssign(context.Background(), "task-1", tc.spec, []byte(`{}`), nil, BootOptions{})
+			if !errors.Is(err, ErrNoHosts) {
+				t.Fatalf("err = %v, want ErrNoHosts", err)
+			}
+			if vms := fm.ListFleet(); len(vms) != 0 {
+				t.Errorf("fleet = %+v, want no vm left behind", vms)
+			}
+		})
+	}
+}
+
+// TestProvisionAndAssign_noPlacementOnNoHostsPathUnchanged is the control for
+// the guard above: an empty placement still boots on the default provider.
+func TestProvisionAndAssign_noPlacementOnNoHostsPathUnchanged(t *testing.T) {
+	p := newMockProvider()
+	fm := NewFleetManager(FleetConfig{Provider: p, Prefix: "fuse-"})
+	info, err := fm.ProvisionAndAssign(context.Background(), "task-1", Spec{CPUs: 2, RamMB: 1024}, []byte(`{}`), nil, BootOptions{})
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if info.State != VMStateRunning {
+		t.Errorf("state = %q, want running", info.State)
+	}
 }

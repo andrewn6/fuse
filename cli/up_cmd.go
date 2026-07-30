@@ -97,6 +97,8 @@ func newUpCmd() *cobra.Command {
 					GPUs:              c.Spec.GPUs,
 					GPUKind:           c.Spec.GPUKind,
 					GPUProfile:        c.Spec.GPUProfile,
+					HostID:            c.Spec.HostID,
+					Labels:            c.Spec.Labels,
 				},
 				ManifestInline: manifestInline,
 				Secrets:        secretMap,

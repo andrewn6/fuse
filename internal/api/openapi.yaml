@@ -301,6 +301,12 @@ paths:
         must be standard base64; a bad encoding is a 400. Secrets are
         validated against the manifest before provisioning, and secret
         values are redacted from error messages.
+
+        Placement is validated at the boundary too: a malformed
+        `spec.labels` key or value is a 400, and an unknown `spec.host_id`
+        is a 404 before any VM is created. A pin to a real but ineligible
+        host, and a label selector that matches no host, both fail 503 with
+        a message naming the gate that rejected them.
       requestBody:
         required: true
         content:
@@ -316,6 +322,8 @@ paths:
                 $ref: "#/components/schemas/Environment"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
         "500":
@@ -1372,6 +1380,23 @@ components:
             directory). Empty means the provider's default base image.
         region:
           type: string
+        host_id:
+          type: string
+          description: |
+            Pins the environment to an exact host id (the Fusefile's
+            placement.host). A pin is a hard gate, not an override: the
+            host must still be active, run the right backend, and fit the
+            request. An unknown host id is rejected with 404 before any VM
+            is created.
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Placement label selectors (the Fusefile's placement.labels).
+            Every pair must match the target host's operator-declared
+            labels. A selector that matches no host is rejected with 503,
+            never queued.
         max_runtime_seconds:
           type: integer
           format: int64
@@ -1888,6 +1913,14 @@ components:
           description: |
             Virtualization backend. Defaults to "firecracker". Only
             "qemu" hosts may register with capacity.gpus > 0.
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Operator-declared key/value pairs a spec's placement labels can
+            select on. Declared, never probed: they are a claim about the
+            box, like capacity.gpu_kind.
         capacity:
           allOf:
             - $ref: "#/components/schemas/HostCapacity"
@@ -1921,6 +1954,11 @@ components:
           type: string
           enum: [firecracker, qemu]
           description: Virtualization backend the host runs.
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          description: Operator-declared placement labels for this host.
         capacity:
           $ref: "#/components/schemas/HostCapacity"
         allocated:

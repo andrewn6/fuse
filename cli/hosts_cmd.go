@@ -108,6 +108,24 @@ func sortedMIGProfiles(capacity map[string]int) []string {
 	return profiles
 }
 
+// formatHostLabels renders a host's declared labels as a sorted, comma-joined
+// key=value list. Empty in, empty out (rendered as a dash by the caller).
+func formatHostLabels(labels map[string]string) string {
+	if len(labels) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(labels))
+	for key := range labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, key := range keys {
+		parts[i] = key + "=" + labels[key]
+	}
+	return strings.Join(parts, ", ")
+}
+
 // newHostCmd implements `fuse host <id>` (select) plus host subcommands.
 func newHostCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -183,6 +201,7 @@ func renderHostDetail(h *fuse.Host) {
 		{"url", h.URL},
 		{"region", dash(h.Region)},
 		{"backend", dash(h.Backend)},
+		{"labels", dash(formatHostLabels(h.Labels))},
 		{"state", stateStyle(h.State)},
 		{"cpus", fmt.Sprintf("%d / %d", h.Allocated.CPUs, h.Capacity.CPUs)},
 		{"ram mb", fmt.Sprintf("%d / %d", h.Allocated.RamMB, h.Capacity.RamMB)},
@@ -370,6 +389,7 @@ func newHostRegisterCmd() *cobra.Command {
 		gpus        int
 		gpuKind     string
 		migProfiles []string
+		labels      []string
 		noVerify    bool
 	)
 	cmd := &cobra.Command{
@@ -385,7 +405,10 @@ func newHostRegisterCmd() *cobra.Command {
 			"(e.g. a deliberate overcommit or carve-out); a declared value above what was\n" +
 			"probed still registers, with a warning. gpus are probed on qemu hosts;\n" +
 			"a host with no gpus is fine. --max-vms is a scheduling policy, not a hardware\n" +
-			"fact, so it is always required.",
+			"fact, so it is always required.\n\n" +
+			"--label declares operator-chosen key=value pairs a Fusefile's placement.labels\n" +
+			"block can select on (e.g. --label disk=nvme). labels are never probed: they\n" +
+			"are a claim about the box, like --gpu-kind.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			id := args[0]
@@ -421,6 +444,10 @@ func newHostRegisterCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			labelMap, err := parseHostLabels(labels)
+			if err != nil {
+				return err
+			}
 			// The firecracker host agent authenticates the orchestrator with
 			// its FC_AGENT_TOKEN. An empty token is almost always a mistake
 			// that only surfaces at the first `environment create` as an
@@ -443,6 +470,7 @@ func newHostRegisterCmd() *cobra.Command {
 				Token:   token,
 				Region:  region,
 				Backend: backend,
+				Labels:  labelMap,
 				Capacity: fuse.HostCapacity{
 					CPUs:        cpus,
 					RamMB:       ramMB,
@@ -477,7 +505,26 @@ func newHostRegisterCmd() *cobra.Command {
 	cmd.Flags().StringVar(&gpuKind, "gpu-kind", "", "gpu model label override, e.g. a100 (empty = probe from host agent)")
 	cmd.Flags().StringArrayVar(&migProfiles, "mig-profile", nil,
 		"MIG instance capacity as profile=count (e.g. 1g.10gb=4); repeatable, requires --backend qemu")
+	cmd.Flags().StringArrayVar(&labels, "label", nil,
+		"placement label as key=value (e.g. disk=nvme); repeatable, declared not probed")
 	return cmd
+}
+
+// parseHostLabels turns repeated --label key=value flags into the label map
+// the register wire expects. Nil in, nil out.
+func parseHostLabels(entries []string) (map[string]string, error) {
+	if len(entries) == 0 {
+		return nil, nil
+	}
+	out := make(map[string]string, len(entries))
+	for _, entry := range entries {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok || key == "" || value == "" {
+			return nil, fmt.Errorf("invalid --label %q: expected key=value (e.g. disk=nvme)", entry)
+		}
+		out[key] = value
+	}
+	return out, nil
 }
 
 // parseMIGProfiles turns repeated --mig-profile profile=count flags into the

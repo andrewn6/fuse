@@ -30,6 +30,11 @@ type ResourceSpec struct {
 	GPUs              int32
 	GPUKind           string
 	GPUProfile        string
+	// HostID pins the environment to an exact host id (placement.host).
+	HostID string
+	// Labels are the placement label selectors (placement.labels); every
+	// pair must match the host's declared labels.
+	Labels map[string]string
 }
 
 // ExposeSpec requests that a guest port be published as a reachable
@@ -106,6 +111,19 @@ var gpuProfilePattern = regexp.MustCompile(`^[1-7]g\.\d+gb(\+me)?$`)
 // Fusefile authors.
 func ValidGPUProfile(s string) bool {
 	return gpuProfilePattern.MatchString(strings.ToLower(s))
+}
+
+// labelPattern is the accepted form for a placement label key or value:
+// alphanumeric at both ends, dots, dashes, and underscores inside, 63 chars
+// max. Deliberately narrow so a label is safe to render in an error message
+// and to compare byte-for-byte against a host's declared labels.
+var labelPattern = regexp.MustCompile(`^[a-zA-Z0-9]([-._a-zA-Z0-9]{0,61}[a-zA-Z0-9])?$`)
+
+// ValidLabel reports whether s is a well-formed placement label key or value.
+// Shared with the API layer so raw SDK callers and host registration are held
+// to the same vocabulary as Fusefile authors.
+func ValidLabel(s string) bool {
+	return labelPattern.MatchString(s)
 }
 
 // nonMIGCapableKinds are GPU model families that are known NOT to support
@@ -207,6 +225,8 @@ func Compile(f *Fusefile) (*Compiled, error) {
 			GPUs:              int32(f.Resources.GPU),
 			GPUKind:           f.Resources.GPUKind,
 			GPUProfile:        strings.ToLower(f.Resources.GPUProfile),
+			HostID:            f.Placement.Host,
+			Labels:            compileLabels(f.Placement.Labels),
 		},
 		ManifestJSON:    manifestJSON,
 		StartupScript:   compileStartupScript(f),
@@ -215,6 +235,19 @@ func Compile(f *Fusefile) (*Compiled, error) {
 		RequiredSecrets: requiredSecrets,
 		Expose:          compileExpose(f),
 	}, nil
+}
+
+// compileLabels copies the placement label selectors so the compiled spec
+// never aliases the parsed Fusefile. Nil (and empty) in, nil out.
+func compileLabels(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // compileExpose carries Fusefile.Expose through unchanged, one-for-one.

@@ -16,6 +16,13 @@ type Spec struct {
 	Region            string `json:"region,omitempty"`
 	MaxRuntimeSeconds int64  `json:"max_runtime_seconds,omitempty"`
 	Image             string `json:"image,omitempty"`
+	// HostID pins the environment to an exact host id (the Fusefile's
+	// placement.host). The pinned host still has to be active, run the right
+	// backend, and fit the request.
+	HostID string `json:"host_id,omitempty"`
+	// Labels are placement label selectors (the Fusefile's placement.labels):
+	// every pair must match the target host's declared labels.
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // ExposeSpec requests that a guest port be published as a reachable endpoint.
@@ -216,26 +223,30 @@ type MIGInstance struct {
 
 // RegisterHostRequest is the body for client.RegisterHost.
 type RegisterHostRequest struct {
-	ID       string       `json:"id"`
-	URL      string       `json:"url"`
-	Token    string       `json:"token,omitempty"`
-	Region   string       `json:"region,omitempty"`
-	Backend  string       `json:"backend,omitempty"`
-	Capacity HostCapacity `json:"capacity"`
+	ID      string `json:"id"`
+	URL     string `json:"url"`
+	Token   string `json:"token,omitempty"`
+	Region  string `json:"region,omitempty"`
+	Backend string `json:"backend,omitempty"`
+	// Labels are operator-declared key/value pairs matched against a spec's
+	// placement label selectors. They are never probed from the host agent.
+	Labels   map[string]string `json:"labels,omitempty"`
+	Capacity HostCapacity      `json:"capacity"`
 }
 
 // Host is the server's view of a registered host.
 type Host struct {
-	ID        string       `json:"id"`
-	URL       string       `json:"url"`
-	Region    string       `json:"region,omitempty"`
-	State     string       `json:"state"`
-	Backend   string       `json:"backend,omitempty"`
-	Capacity  HostCapacity `json:"capacity"`
-	Allocated HostCapacity `json:"allocated"`
-	LastSeen  time.Time    `json:"last_seen"`
-	CreatedAt time.Time    `json:"created_at"`
-	UpdatedAt time.Time    `json:"updated_at"`
+	ID        string            `json:"id"`
+	URL       string            `json:"url"`
+	Region    string            `json:"region,omitempty"`
+	State     string            `json:"state"`
+	Backend   string            `json:"backend,omitempty"`
+	Labels    map[string]string `json:"labels,omitempty"`
+	Capacity  HostCapacity      `json:"capacity"`
+	Allocated HostCapacity      `json:"allocated"`
+	LastSeen  time.Time         `json:"last_seen"`
+	CreatedAt time.Time         `json:"created_at"`
+	UpdatedAt time.Time         `json:"updated_at"`
 
 	// Warnings carries non-fatal notices from registration (e.g. a
 	// declared capacity value that exceeds what was probed from the host

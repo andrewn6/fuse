@@ -826,3 +826,184 @@ func TestSchedule_migInstanceHostExhaustedFallsBackToCount(t *testing.T) {
 		t.Errorf("err = %v, want ErrNoCapacity (only instance is bound)", err)
 	}
 }
+
+// ── placement: host pin and label selectors (issue #102) ──────────
+
+// labelledHost is a plain cpu host with declared placement labels.
+func labelledHost(id string, labels map[string]string) *Host {
+	h := host(id, 8, 4096, 100, 10, HostActive)
+	h.Labels = labels
+	return h
+}
+
+func TestSchedule_hostPinHonored(t *testing.T) {
+	// h2 is emptier, so spread would pick it without the pin.
+	hosts := []*Host{
+		hostWithAlloc("h1", 8, 4096, 4, 2048),
+		hostWithAlloc("h2", 8, 4096, 0, 0),
+	}
+	s := spec(1, 256, 10)
+	s.HostID = "h1"
+	picked, decision, err := Schedule(s, hosts, PlacementSpread)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if picked.ID != "h1" {
+		t.Errorf("picked %s, want h1 (the pinned host)", picked.ID)
+	}
+	if decision.HostID != "h1" || decision.Candidates != 1 {
+		t.Errorf("decision = %+v, want host h1 with 1 candidate", decision)
+	}
+}
+
+func TestSchedule_hostPinToUnknownHostIsNotFound(t *testing.T) {
+	hosts := []*Host{host("h1", 8, 4096, 100, 10, HostActive)}
+	s := spec(1, 256, 10)
+	s.HostID = "nope"
+	_, _, err := Schedule(s, hosts, PlacementSpread)
+	if !errors.Is(err, ErrHostNotFound) {
+		t.Fatalf("err = %v, want ErrHostNotFound", err)
+	}
+	if !strings.Contains(err.Error(), "nope") {
+		t.Errorf("err = %q, want it to name the requested host", err)
+	}
+}
+
+func TestSchedule_hostPinToCordonedHostNamesTheGate(t *testing.T) {
+	hosts := []*Host{
+		host("h1", 8, 4096, 100, 10, HostCordoned),
+		host("h2", 8, 4096, 100, 10, HostActive),
+	}
+	s := spec(1, 256, 10)
+	s.HostID = "h1"
+	_, _, err := Schedule(s, hosts, PlacementSpread)
+	if !errors.Is(err, ErrHostPinUnschedulable) {
+		t.Fatalf("err = %v, want ErrHostPinUnschedulable", err)
+	}
+	// a pin miss must never read as a capacity shortfall, and must name both
+	// the host and the gate that rejected it.
+	if errors.Is(err, ErrNoCapacity) {
+		t.Errorf("err = %v, must not also be ErrNoCapacity", err)
+	}
+	if !strings.Contains(err.Error(), "h1") || !strings.Contains(err.Error(), string(HostCordoned)) {
+		t.Errorf("err = %q, want it to name host h1 and the cordoned state", err)
+	}
+}
+
+func TestSchedule_hostPinThatDoesNotFitNamesCapacity(t *testing.T) {
+	hosts := []*Host{host("h1", 2, 1024, 50, 10, HostActive)}
+	s := spec(4, 256, 10)
+	s.HostID = "h1"
+	_, _, err := Schedule(s, hosts, PlacementSpread)
+	if !errors.Is(err, ErrHostPinUnschedulable) {
+		t.Fatalf("err = %v, want ErrHostPinUnschedulable", err)
+	}
+	if !strings.Contains(err.Error(), "does not fit") {
+		t.Errorf("err = %q, want it to name the capacity gate", err)
+	}
+}
+
+func TestSchedule_hostPinToWrongLabelsNamesUnmatchedPairs(t *testing.T) {
+	hosts := []*Host{labelledHost("h1", map[string]string{"disk": "ssd"})}
+	s := spec(1, 256, 10)
+	s.HostID = "h1"
+	s.Labels = map[string]string{"disk": "nvme"}
+	_, _, err := Schedule(s, hosts, PlacementSpread)
+	if !errors.Is(err, ErrHostPinUnschedulable) {
+		t.Fatalf("err = %v, want ErrHostPinUnschedulable", err)
+	}
+	if !strings.Contains(err.Error(), "disk=nvme") {
+		t.Errorf("err = %q, want it to name the unmatched pair", err)
+	}
+}
+
+func TestSchedule_labelSelectorPicksMatchingHost(t *testing.T) {
+	// h1 is emptier, so spread would pick it without the selector.
+	h1 := hostWithAlloc("h1", 8, 4096, 0, 0)
+	h2 := hostWithAlloc("h2", 8, 4096, 4, 2048)
+	h2.Labels = map[string]string{"disk": "nvme", "tier": "build"}
+	s := spec(1, 256, 10)
+	s.Labels = map[string]string{"disk": "nvme"}
+	picked, _, err := Schedule(s, []*Host{h1, h2}, PlacementSpread)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if picked.ID != "h2" {
+		t.Errorf("picked %s, want h2 (the only labelled host)", picked.ID)
+	}
+}
+
+func TestSchedule_labelSelectorRequiresEveryPair(t *testing.T) {
+	// every requested pair is a gate: a host with only one of them is out.
+	hosts := []*Host{labelledHost("h1", map[string]string{"disk": "nvme"})}
+	s := spec(1, 256, 10)
+	s.Labels = map[string]string{"disk": "nvme", "tier": "build"}
+	_, _, err := Schedule(s, hosts, PlacementSpread)
+	if !errors.Is(err, ErrNoLabelMatch) {
+		t.Fatalf("err = %v, want ErrNoLabelMatch", err)
+	}
+	if errors.Is(err, ErrNoCapacity) {
+		t.Errorf("err = %v, must not also be ErrNoCapacity", err)
+	}
+	// the message reports the selector and how many hosts were considered.
+	if !strings.Contains(err.Error(), "disk=nvme,tier=build") {
+		t.Errorf("err = %q, want the sorted selector in the message", err)
+	}
+	if !strings.Contains(err.Error(), "1 schedulable hosts") {
+		t.Errorf("err = %q, want the count of hosts considered", err)
+	}
+}
+
+func TestSchedule_labelMissOnFullHostsStillReportsCapacity(t *testing.T) {
+	// a host that matches the labels but has no room is a capacity
+	// shortfall, not a selector mistake.
+	h := labelledHost("h1", map[string]string{"disk": "nvme"})
+	h.Allocated = HostCapacity{CPUs: 8, RamMB: 4096}
+	s := spec(4, 256, 10)
+	s.Labels = map[string]string{"disk": "nvme"}
+	_, _, err := Schedule(s, []*Host{h}, PlacementSpread)
+	if !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("err = %v, want ErrNoCapacity", err)
+	}
+}
+
+func TestSchedule_pinPlusLabelsBothApply(t *testing.T) {
+	h1 := labelledHost("h1", map[string]string{"disk": "nvme"})
+	h2 := labelledHost("h2", map[string]string{"disk": "nvme"})
+	s := spec(1, 256, 10)
+	s.HostID = "h2"
+	s.Labels = map[string]string{"disk": "nvme"}
+	picked, _, err := Schedule(s, []*Host{h1, h2}, PlacementSpread)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if picked.ID != "h2" {
+		t.Errorf("picked %s, want h2", picked.ID)
+	}
+}
+
+func TestSchedule_emptyPlacementIsUnchanged(t *testing.T) {
+	// no pin and no selector: labelled and unlabelled hosts are equally
+	// eligible and the policy alone decides, exactly as before placement.
+	h1 := hostWithAlloc("h1", 8, 4096, 4, 2048)
+	h2 := hostWithAlloc("h2", 8, 4096, 0, 0)
+	h1.Labels = map[string]string{"disk": "nvme"}
+	s := spec(1, 256, 10)
+	picked, decision, err := Schedule(s, []*Host{h1, h2}, PlacementSpread)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if picked.ID != "h2" {
+		t.Errorf("spread picked %s, want h2 (the emptiest)", picked.ID)
+	}
+	if decision.Candidates != 2 {
+		t.Errorf("candidates = %d, want 2 (a host's labels never gate an empty selector)", decision.Candidates)
+	}
+	picked, _, err = Schedule(s, []*Host{h1, h2}, PlacementBinpack)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if picked.ID != "h1" {
+		t.Errorf("binpack picked %s, want h1 (the most packed)", picked.ID)
+	}
+}

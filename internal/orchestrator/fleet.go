@@ -571,6 +571,15 @@ func (fm *FleetManager) ProvisionAndAssign(ctx context.Context, taskID string, s
 		_ = fm.store.DeleteVM(ctx, vmID)
 		return nil, fmt.Errorf("%w: gpu workloads require a registered gpu host", ErrNoCapacity)
 	}
+	// A placement request cannot be honored on the legacy no-hosts path: the
+	// default provider is not a scheduled host, so a pin or a label selector
+	// there would silently boot somewhere else.
+	if len(hosts) == 0 && (spec.HostID != "" || len(spec.Labels) > 0) {
+		delete(fm.vms, vmID)
+		fm.mu.Unlock()
+		_ = fm.store.DeleteVM(ctx, vmID)
+		return nil, fmt.Errorf("%w: placement requires registered hosts", ErrNoHosts)
+	}
 	if len(hosts) > 0 {
 		selectedHost, decision, schedErr := Schedule(spec, hosts, fm.placementPolicy)
 		if schedErr != nil {

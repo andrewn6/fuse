@@ -44,7 +44,9 @@ func classifyFleetError(err error) (status int, code string) {
 		errors.Is(err, orchestrator.ErrSnapshotNotFound):
 		return http.StatusNotFound, CodeNotFound
 	case errors.Is(err, orchestrator.ErrNoCapacity),
-		errors.Is(err, orchestrator.ErrNoHosts):
+		errors.Is(err, orchestrator.ErrNoHosts),
+		errors.Is(err, orchestrator.ErrHostPinUnschedulable),
+		errors.Is(err, orchestrator.ErrNoLabelMatch):
 		return http.StatusServiceUnavailable, CodeUnavailable
 	case errors.Is(err, orchestrator.ErrSnapshotQuotaExceeded),
 		errors.Is(err, orchestrator.ErrSnapshotInvalidState),

@@ -43,6 +43,23 @@ func validate(f *Fusefile) error {
 		errs = append(errs, fmt.Errorf("version: must be 1"))
 	}
 
+	// placement labels: keys are sorted first so the joined message is stable
+	// regardless of map iteration order.
+	labelKeys := make([]string, 0, len(f.Placement.Labels))
+	for key := range f.Placement.Labels {
+		labelKeys = append(labelKeys, key)
+	}
+	sort.Strings(labelKeys)
+
+	for _, key := range labelKeys {
+		if !ValidLabel(key) {
+			errs = append(errs, fmt.Errorf("placement.labels: invalid label key %q", key))
+		}
+		if value := f.Placement.Labels[key]; !ValidLabel(value) {
+			errs = append(errs, fmt.Errorf("placement.labels.%s: invalid label value %q", key, value))
+		}
+	}
+
 	serviceNames := make([]string, 0, len(f.Services))
 	for name := range f.Services {
 		serviceNames = append(serviceNames, name)

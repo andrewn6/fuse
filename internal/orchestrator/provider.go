@@ -69,6 +69,17 @@ type Spec struct {
 	// Mirrors GPUUUIDs for whole devices (issue #41).
 	MIGInstanceUUIDs []string `json:"mig_instance_uuids,omitempty"`
 
+	// HostID pins this sandbox to an exact host id. Unlike GPUUUIDs and
+	// MIGInstanceUUIDs, which allocation fills in, this is caller-settable:
+	// it comes from the Fusefile's placement.host. A pin is a hard gate, not
+	// an override, so the pinned host still has to be active, run the right
+	// backend, and fit the spec.
+	HostID string
+
+	// Labels are placement label selectors: every pair must match the target
+	// host's declared labels. Caller-settable, from placement.labels.
+	Labels map[string]string
+
 	// MaxRuntime overrides FleetConfig.TaskStuckTimeout for this task.
 	// Zero means "use the fleet default". This is a leak-detection ceiling,
 	// not a liveness check — set it higher than any plausible healthy runtime.
