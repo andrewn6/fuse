@@ -32,6 +32,7 @@ which streams until the environment is destroyed or fails.
 | `--secrets-file` | Path to a file of `KEY=VALUE` secret lines. `#`-prefixed lines and blanks are ignored. |
 | `--task-id` | Environment task ID. Default: the Fusefile's parent directory name. |
 | `--no-wait` | Create the environment without streaming provisioning events. |
+| `--from-build` | Boot from a [`fuse build`](/reference/cli/build) artifact instead of a base image. Skips the `setup:` phase. |
 
 ## Path resolution
 
