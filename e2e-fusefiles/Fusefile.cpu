@@ -1,0 +1,22 @@
+version: 1
+
+# cpu-only baseline. proves scheduling, boot, startup script, and expose
+# without involving any gpu code path.
+resources:
+  cpus: 2
+  memory: 2GB
+  storage: 5GB
+  max_runtime: 30m
+
+setup:
+  # note: a setup line containing ": " must be quoted, or yaml parses it as a map.
+  - 'echo "fuse-e2e setup ran" > /tmp/e2e-setup.marker'
+
+# the startup script runs SYNCHRONOUSLY during create. a run: that never
+# returns (a server, sleep infinity) hangs the create until the server's 60s
+# timeout and fails with a 500. background anything long-lived.
+run: |
+  echo "fuse-e2e run ran" > /tmp/e2e-run.marker
+  nohup sleep 3600 >/dev/null 2>&1 &
+
+workspace: /workspace

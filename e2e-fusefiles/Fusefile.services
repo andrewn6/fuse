@@ -1,0 +1,25 @@
+version: 1
+
+# services + secrets. proves manifest compilation and secret plumbing.
+resources:
+  cpus: 2
+  memory: 2GB
+  storage: 5GB
+  max_runtime: 30m
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports: [6379]
+  postgres:
+    image: postgres:16
+    ports: [5432]
+    env:
+      POSTGRES_PASSWORD: { secret: pg_password }
+
+expose:
+  - port: 6379
+    as: redis
+
+secrets:
+  - pg_password

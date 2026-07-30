@@ -1,0 +1,16 @@
+version: 1
+
+# fractional gpu. with gpu_profile set, `gpu` counts MIG instances of that
+# profile rather than whole devices (decision D5).
+resources:
+  cpus: 2
+  memory: 4GB
+  storage: 10GB
+  gpu: 1
+  gpu_kind: a100
+  gpu_profile: "1g.10gb"
+  max_runtime: 30m
+
+run: |
+  nvidia-smi -L > /tmp/e2e-mig.txt 2>&1 || echo "no nvidia-smi" > /tmp/e2e-mig.txt
+  sleep infinity

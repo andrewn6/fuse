@@ -1,0 +1,15 @@
+version: 1
+
+# whole-device gpu passthrough. gpu is a device count with no gpu_profile,
+# so this consumes an entire vfio-bound card.
+resources:
+  cpus: 4
+  memory: 8GB
+  storage: 20GB
+  gpu: 1
+  gpu_kind: a100
+  max_runtime: 30m
+
+run: |
+  nvidia-smi -L > /tmp/e2e-gpu.txt 2>&1 || echo "no nvidia-smi" > /tmp/e2e-gpu.txt
+  sleep infinity
