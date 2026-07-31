@@ -255,6 +255,21 @@ func TestLayerKeysCarryScriptAndIndex(t *testing.T) {
 	}
 }
 
+// a workdir is part of the fragment the step emits, so adding one has to
+// invalidate that step's layer: the same command in a different directory
+// builds a different rootfs.
+func TestLayerKeysWorkdirChangesTheKey(t *testing.T) {
+	plain := keysOf(t, cached(Step{Run: "a"}), nil)
+	scoped := keysOf(t, cached(Step{Run: "a", Workdir: "web"}), nil)
+
+	if scoped[0].Script != "(cd 'web'; a)" {
+		t.Errorf("script = %q, want the subshell form", scoped[0].Script)
+	}
+	if plain[0].Key == scoped[0].Key {
+		t.Errorf("a workdir did not change the layer key")
+	}
+}
+
 func TestLayerKeysNoSetup(t *testing.T) {
 	keys, err := LayerKeys(cached(), nil, LayerOptions{})
 	if err != nil {

@@ -68,6 +68,11 @@ setup:
   #     - package.json
   #     - package-lock.json
 
+  # 'workdir' scopes one step to a directory. relative paths resolve against
+  # the workspace, and the change does not leak into the next step.
+  # - workdir: web
+  #   run: npm run build
+
   # a step that reads /fuse/secrets.json or has effects outside the rootfs must
   # opt out, or its layer would be reused with stale secret material.
   # - run: ./scripts/register.sh
@@ -87,6 +92,9 @@ services:
 # the main task entrypoint. compiles into startup_script (after setup).
 run: ./start.sh
 
+# where setup and run execute. absolute path, created with mkdir -p. this is
+# the default, so the line can be deleted. services and 'fuse environment
+# exec'/'shell' do not inherit it.
 workspace: /workspace
 
 # ports published to the outside world (ingress).

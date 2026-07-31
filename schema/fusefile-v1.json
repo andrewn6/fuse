@@ -39,7 +39,9 @@
     },
     "workspace": {
       "type": "string",
-      "description": "Working directory inside the guest. Defaults to /workspace."
+      "description": "Working directory inside the guest, created with mkdir -p; setup and run execute there. Must be an absolute path with no '..' segments. Defaults to /workspace.",
+      "pattern": "^/",
+      "not": { "pattern": "(^|/)\\.\\.(/|$)" }
     },
     "expose": {
       "type": "array",
@@ -194,6 +196,12 @@
             "cache": {
               "type": "boolean",
               "description": "Set false to make the step uncacheable. Required for a step that reads secrets or has effects outside the rootfs."
+            },
+            "workdir": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Directory this one step runs in. A relative path resolves against workspace. The step is wrapped in a subshell, so the directory does not leak into the next step. No '..' segments.",
+              "not": { "pattern": "(^|/)\\.\\.(/|$)" }
             }
           }
         }

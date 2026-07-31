@@ -357,6 +357,32 @@ setup:
 	}
 }
 
+// the mapping form's workdir scopes one step; a relative path is accepted (it
+// resolves against the workspace) and so is an absolute one.
+func TestParseSetupStepWorkdir(t *testing.T) {
+	src := `version: 1
+setup:
+  - npm ci
+  - workdir: web
+    run: npm run build
+  - workdir: /opt/tools
+    run: ./install.sh
+`
+	f, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Setup[0].Workdir != "" {
+		t.Errorf("setup[0].workdir: got %q, want empty", f.Setup[0].Workdir)
+	}
+	if f.Setup[1].Workdir != "web" || f.Setup[1].Run != "npm run build" {
+		t.Errorf("setup[1]: got %+v", f.Setup[1])
+	}
+	if f.Setup[2].Workdir != "/opt/tools" {
+		t.Errorf("setup[2].workdir: got %q", f.Setup[2].Workdir)
+	}
+}
+
 // a custom UnmarshalYAML does not inherit the decoder's KnownFields(true), so
 // the step mapping needs its own unknown-key check or a typo parses as an
 // empty step.
@@ -415,6 +441,16 @@ func TestParseRejectsBadSetupSteps(t *testing.T) {
 			name:        "step is a list",
 			src:         "version: 1\nsetup:\n  - [a, b]\n",
 			wantContain: "must be a string or a mapping",
+		},
+		{
+			name:        "traversing workdir",
+			src:         "version: 1\nsetup:\n  - run: x\n    workdir: ../etc\n",
+			wantContain: `setup[0].workdir: must not contain ".." segments`,
+		},
+		{
+			name:        "workdir with a newline",
+			src:         "version: 1\nsetup:\n  - run: x\n    workdir: \"web\\nrm -rf /\"\n",
+			wantContain: "setup[0].workdir: must not contain newlines",
 		},
 	}
 

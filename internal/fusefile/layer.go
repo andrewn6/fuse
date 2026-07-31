@@ -86,7 +86,7 @@ type LayerKey struct {
 //	layer_key(i) = sha256(
 //	    "fusefile-layer/v1\n" +
 //	    parent_key(i) + "\n" +   // layer_key(i-1), or the base key for i == 0
-//	    step_script(i) + "\n" +  // the step's `run` string, byte for byte
+//	    step_script(i) + "\n" +  // the fragment the step emits, byte for byte
 //	    inputs_digest(i) + "\n" +
 //	    workspace + "\n" +       // setup runs after `cd <workspace>`
 //	    arch)
@@ -107,10 +107,7 @@ func LayerKeys(f *Fusefile, inputs InputDigester, opts LayerOptions) ([]LayerKey
 	if baseKey == "" {
 		baseKey = BaseKey(f.Image, f.Files)
 	}
-	workspace := f.Workspace
-	if workspace == "" {
-		workspace = defaultWorkspace
-	}
+	workspace := workspaceOf(f)
 
 	scripts := setupScripts(f)
 	out := make([]LayerKey, len(f.Setup))
