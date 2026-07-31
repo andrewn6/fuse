@@ -38,7 +38,7 @@ host. It then prints the token and the exact `fuse connect` line to run from you
 laptop.
 
 ```bash
-git clone <this repo> ~/fc && cd ~/fc/host-agent
+git clone <this repo> ~/fc && cd ~/fc/host-agent/firecracker
 sudo ./fc-agent.sh bootstrap
 ```
 
@@ -49,7 +49,7 @@ step-by-step equivalent, use it when you want to run or skip individual stages.
 ## Manual, step-by-step setup
 
 ```bash
-git clone <this repo> ~/fc && cd ~/fc/host-agent
+git clone <this repo> ~/fc && cd ~/fc/host-agent/firecracker
 
 # 0. Install host dependencies (podman, python3, e2fsprogs, ...) and verify them.
 ./fc-deps.sh
@@ -57,9 +57,9 @@ git clone <this repo> ~/fc && cd ~/fc/host-agent
 # 1. Fetch firecracker binary + CI kernel + base rootfs + SSH key.
 ./fc-install.sh
 
-# 2. Build the reference in-guest agent (produces host-agent/fused). Needs Go.
+# 2. Build the reference in-guest agent (produces host-agent/firecracker/fused). Needs Go.
 #    To run your own agent instead, drop your binary here as `fused` and skip this.
-./fc-build-agent.sh
+../shared/fc-build-agent.sh
 
 # 3. Bake the guest rootfs (rootfs-fused.ext4). Bakes in `fused` + fused.service.
 #    Re-run whenever the agent binary changes -- the agent is baked into the image.
@@ -185,7 +185,7 @@ never shells out to `fused --version` to make that decision:
 ./fc-agent.sh uninstall-updater
 ```
 
-No token needed (public repo). Optional `host-agent/.fc-updater.env` can set
+No token needed (public repo). Optional `host-agent/firecracker/.fc-updater.env` can set
 `GH_TOKEN=...` to dodge API rate limits, or `FUSE_ORCH_SERVICE`/`FUSE_ORCH_BIN` to
 also update a co-located orchestrator. Override the source repo with
 `FUSE_REPO=owner/name`.

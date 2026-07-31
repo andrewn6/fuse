@@ -115,7 +115,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Checksum verification tests
-        run: ./host-agent/test-verify-checksum.sh
+        run: ./host-agent/firecracker/test-verify-checksum.sh
 
   # Validate the GoReleaser config on every PR so a CD-breaking change is caught
   # here instead of only when a release tag is pushed.
@@ -193,7 +193,7 @@ jobs:
       - name: Test
         run: uv run pytest
 
-  # QEMU host agent (host-agent/test_qemu_agent.py): a stdlib-only unittest
+  # QEMU host agent (host-agent/qemu/test_qemu_agent.py): a stdlib-only unittest
   # suite that needs no VMs or virtualization, so it runs here and keeps the
   # image path-containment regressions from silently rotting. Scoped to this
   # file: test_fc_agent_attach.py drives a real pty/ssh relay and does not pass
@@ -203,7 +203,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: host-agent
+        working-directory: host-agent/qemu
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

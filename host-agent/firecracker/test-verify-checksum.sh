@@ -8,10 +8,10 @@
 # truncated one, a missing checksums file, an empty one, a missing entry, and a
 # host with no checksum tool on PATH.
 #
-# No network, no root, no VMs:  ./host-agent/test-verify-checksum.sh
+# No network, no root, no VMs:  ./host-agent/firecracker/test-verify-checksum.sh
 set -uo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 BEGIN='# >>> fuse release-asset checksum verification >>>'
 END='# <<< fuse release-asset checksum verification <<<'
 
@@ -36,9 +36,9 @@ rc() { "$@" >/dev/null 2>&1; echo $?; }
 extract() { awk -v b="$BEGIN" -v e="$END" '$0==b{f=1} f{print} $0==e{f=0}' "$1"; }
 
 printf '\n== helper copies are in sync ==\n'
-A="$ROOT/host-agent/fc-update.sh"
+A="$ROOT/host-agent/firecracker/fc-update.sh"
 B="$ROOT/ops/install-orchestrator.sh"
-C="$ROOT/host-agent/fc-agent.sh"
+C="$ROOT/host-agent/firecracker/fc-agent.sh"
 extract "$A" > "$WORK/a.sh"
 extract "$B" > "$WORK/b.sh"
 extract "$C" > "$WORK/c.sh"

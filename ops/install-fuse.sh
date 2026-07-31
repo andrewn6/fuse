@@ -31,8 +31,8 @@ die()  { printf '[install-fuse] error: %s\n' "$*" >&2; exit 1; }
 # >>> fuse release-asset checksum verification >>>
 # Embedded rather than sourced: this script is meant to be piped from curl on a
 # machine with no checkout, so a sibling library file is not guaranteed to be
-# on disk. The same helper is embedded in host-agent/fc-update.sh,
-# host-agent/fc-agent.sh, and ops/install-orchestrator.sh; keep the bodies
+# on disk. The same helper is embedded in host-agent/firecracker/fc-update.sh,
+# host-agent/firecracker/fc-agent.sh, and ops/install-orchestrator.sh; keep the bodies
 # in step.
 
 # sha256_of <file> - print the file's lowercase sha256, or fail if no tool.

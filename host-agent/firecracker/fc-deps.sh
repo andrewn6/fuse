@@ -103,4 +103,4 @@ if [ "$WITH_GO" -eq 1 ]; then
   fi
 fi
 
-printf '\n\033[1;32m[deps] done.\033[0m next: ./fc-install.sh  (then ./fc-build-agent.sh && ./fc-bake-rootfs.sh)\n'
+printf '\n\033[1;32m[deps] done.\033[0m next: ./fc-install.sh  (then ../shared/fc-build-agent.sh && ./fc-bake-rootfs.sh)\n'

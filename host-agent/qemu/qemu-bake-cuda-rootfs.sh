@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Reference bake: builds a CUDA-capable rootfs (qcow2) from an Ubuntu cloud image
 # by injecting NVIDIA driver + CUDA toolkit + fused + podman + docker-compose +
-# iptables. Sibling to fc-bake-rootfs.sh; uses qemu-nbd for qcow2 instead of
-# loopback mount.
+# iptables. QEMU counterpart to ../firecracker/fc-bake-rootfs.sh; uses qemu-nbd
+# for qcow2 instead of loopback mount.
 #
 # Usage: ./qemu-bake-cuda-rootfs.sh <driver-version>
 #   driver-version   NVIDIA driver branch (e.g. 535, 550, 560). Required.
@@ -48,8 +48,8 @@ need() { command -v "$1" >/dev/null 2>&1 || { echo "missing: $1" >&2; exit 1; };
 for c in sudo qemu-nbd curl resize2fs parted; do need "$c"; done
 
 [ -f "$BASE" ] || { echo "$BASE not found -- run ./qemu-install.sh first" >&2; exit 1; }
-[ -f fused ]   || { echo "fused not found -- run ./fc-build-agent.sh (or drop your own agent binary named 'fused' here)" >&2; exit 1; }
-[ -f fused.service ] || { echo "fused.service not found -- it ships in host-agent/" >&2; exit 1; }
+[ -f fused ]   || { echo "fused not found -- run ../shared/fc-build-agent.sh (or drop your own agent binary named 'fused' here)" >&2; exit 1; }
+[ -f fused.service ] || { echo "fused.service not found -- it ships in host-agent/qemu/" >&2; exit 1; }
 [ -f ubuntu.id_rsa.pub ] || { echo "ubuntu.id_rsa.pub not found -- run ./qemu-install.sh first" >&2; exit 1; }
 
 cleanup() {

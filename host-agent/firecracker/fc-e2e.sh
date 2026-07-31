@@ -5,14 +5,14 @@
 #
 # Modes:
 #   (default)      local — in-memory stub provider, no host/KVM needed.
-#   FUSE_E2E_REMOTE=1   deploy real microVMs against the host in ../.env
+#   FUSE_E2E_REMOTE=1   deploy real microVMs against the host in ../../.env
 #                       (FIRECRACKER_BASE_URL / FIRECRACKER_TOKEN). Network +
 #                       a Fuse-compatible host required.
 #
 # Exit 0 = everything works. Any failed assertion exits non-zero.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 PORT="${FUSE_E2E_PORT:-18080}"

@@ -40,7 +40,7 @@ fi
 
 # 4. fused binary
 if [ ! -f fused ]; then
-  log "note: place your fused binary here (run fc-build-agent.sh or copy one)"
+  log "note: place your fused binary here (run ../shared/fc-build-agent.sh or copy one)"
   log "      the bake step (qemu-bake-cuda-rootfs.sh) requires it"
 fi
 
