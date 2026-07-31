@@ -161,9 +161,18 @@ func buildFusedCommand(creds *secrets.VMCredentials, opts BootOptions) string {
 func composeFromManifest(manifestJSON []byte, secretMap map[string]string) ([]byte, bool) {
 	var m struct {
 		Services map[string]struct {
-			Image string `json:"image"`
-			Ports []int  `json:"ports"`
-			Env   map[string]struct {
+			Image   string   `json:"image"`
+			Ports   []int    `json:"ports"`
+			Command []string `json:"command"`
+			Restart string   `json:"restart"`
+			Health  *struct {
+				Test     []string `json:"test"`
+				Interval string   `json:"interval"`
+				Timeout  string   `json:"timeout"`
+				Retries  int      `json:"retries"`
+			} `json:"healthcheck"`
+			DependsOn []string `json:"depends_on"`
+			Env       map[string]struct {
 				Value  string `json:"value"`
 				Secret string `json:"secret"`
 			} `json:"env"`
@@ -173,21 +182,44 @@ func composeFromManifest(manifestJSON []byte, secretMap map[string]string) ([]by
 		return nil, false
 	}
 
+	type composeHealthCheck struct {
+		Test     []string `yaml:"test,omitempty"`
+		Interval string   `yaml:"interval,omitempty"`
+		Timeout  string   `yaml:"timeout,omitempty"`
+		Retries  int      `yaml:"retries,omitempty"`
+	}
 	type composeService struct {
-		Image       string            `yaml:"image"`
-		Ports       []string          `yaml:"ports,omitempty"`
-		Environment map[string]string `yaml:"environment,omitempty"`
+		Image       string              `yaml:"image"`
+		Ports       []string            `yaml:"ports,omitempty"`
+		Environment map[string]string   `yaml:"environment,omitempty"`
+		Command     []string            `yaml:"command,omitempty"`
+		Restart     string              `yaml:"restart,omitempty"`
+		HealthCheck *composeHealthCheck `yaml:"healthcheck,omitempty"`
+		DependsOn   []string            `yaml:"depends_on,omitempty"`
 	}
 	proj := struct {
 		Services map[string]composeService `yaml:"services"`
 	}{Services: make(map[string]composeService, len(m.Services))}
 
 	for name, svc := range m.Services {
-		cs := composeService{Image: svc.Image}
+		cs := composeService{
+			Image:     svc.Image,
+			Command:   svc.Command,
+			Restart:   svc.Restart,
+			DependsOn: svc.DependsOn,
+		}
 		for _, p := range svc.Ports {
 			// publish to the vm's loopback so the main task and peer
 			// services reach it at localhost:<port>.
 			cs.Ports = append(cs.Ports, fmt.Sprintf("%d:%d", p, p))
+		}
+		if svc.Health != nil {
+			cs.HealthCheck = &composeHealthCheck{
+				Test:     svc.Health.Test,
+				Interval: svc.Health.Interval,
+				Timeout:  svc.Health.Timeout,
+				Retries:  svc.Health.Retries,
+			}
 		}
 		if len(svc.Env) > 0 {
 			cs.Environment = make(map[string]string, len(svc.Env))
