@@ -59,7 +59,7 @@ func TestStreamPlainStopsAtRunning(t *testing.T) {
 	var state string
 	_, err := captureWithDeadline(t, 5*time.Second, func() error {
 		var err error
-		state, err = streamPlain(ch, fuse.IsSettledState)
+		state, err = streamPlain(ch, fuse.IsSettledState, nil)
 		return err
 	})
 	if err != nil {
@@ -81,7 +81,7 @@ func TestStreamPlainTerminalPredicateIgnoresRunning(t *testing.T) {
 	var state string
 	_, err := captureWithDeadline(t, 5*time.Second, func() error {
 		var err error
-		state, err = streamPlain(ch, fuse.IsTerminalState)
+		state, err = streamPlain(ch, fuse.IsTerminalState, nil)
 		return err
 	})
 	if err != nil {

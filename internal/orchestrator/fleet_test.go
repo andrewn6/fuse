@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -586,4 +588,92 @@ func waitFor(t *testing.T, timeout time.Duration, fn func() bool, msg string) {
 		time.Sleep(10 * time.Millisecond)
 	}
 	t.Fatal(msg)
+}
+
+// TestProvisionAndAssign_placementOnNoHostsPathRejected covers the legacy
+// fallback: with no hosts registered, ProvisionAndAssign boots on the default
+// provider without calling Schedule, so a pin or a selector there could never
+// be honored. It must fail instead of silently booting somewhere else.
+func TestProvisionAndAssign_placementOnNoHostsPathRejected(t *testing.T) {
+	cases := []struct {
+		name string
+		spec Spec
+	}{
+		{"host pin", Spec{CPUs: 2, RamMB: 1024, HostID: "build-3"}},
+		{"label selector", Spec{CPUs: 2, RamMB: 1024, Labels: map[string]string{"disk": "nvme"}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := newMockProvider()
+			fm := NewFleetManager(FleetConfig{Provider: p, Prefix: "fuse-"})
+			_, err := fm.ProvisionAndAssign(context.Background(), "task-1", tc.spec, []byte(`{}`), nil, BootOptions{})
+			if !errors.Is(err, ErrNoHosts) {
+				t.Fatalf("err = %v, want ErrNoHosts", err)
+			}
+			if vms := fm.ListFleet(); len(vms) != 0 {
+				t.Errorf("fleet = %+v, want no vm left behind", vms)
+			}
+		})
+	}
+}
+
+// TestProvisionAndAssign_noPlacementOnNoHostsPathUnchanged is the control for
+// the guard above: an empty placement still boots on the default provider.
+func TestProvisionAndAssign_noPlacementOnNoHostsPathUnchanged(t *testing.T) {
+	p := newMockProvider()
+	fm := NewFleetManager(FleetConfig{Provider: p, Prefix: "fuse-"})
+	info, err := fm.ProvisionAndAssign(context.Background(), "task-1", Spec{CPUs: 2, RamMB: 1024}, []byte(`{}`), nil, BootOptions{})
+	if err != nil {
+		t.Fatalf("provision: %v", err)
+	}
+	if info.State != VMStateRunning {
+		t.Errorf("state = %q, want running", info.State)
+	}
+}
+
+// A caller-supplied startup script bound above the fleet's ceiling is refused
+// rather than clamped, so the caller can tell "my script is slow" apart from
+// "my bound was never honored".
+func TestProvisionAndAssignStartupScriptTimeoutCeiling(t *testing.T) {
+	fm := NewFleetManager(FleetConfig{
+		Provider:                newMockProvider(),
+		Prefix:                  "fuse-",
+		MaxStartupScriptTimeout: 45 * time.Second,
+	})
+
+	_, err := fm.ProvisionAndAssign(context.Background(), "task-1", Spec{}, []byte(`{}`), nil,
+		BootOptions{StartupScriptTimeout: 10 * time.Minute})
+	if !errors.Is(err, ErrStartupScriptTimeoutTooLarge) {
+		t.Fatalf("err = %v, want ErrStartupScriptTimeoutTooLarge", err)
+	}
+	if !strings.Contains(err.Error(), "45s") {
+		t.Errorf("error %q does not name the ceiling the caller must fit under", err)
+	}
+}
+
+func TestProvisionAndAssignStartupScriptTimeoutWithinCeiling(t *testing.T) {
+	fm := NewFleetManager(FleetConfig{
+		Provider:                newMockProvider(),
+		Prefix:                  "fuse-",
+		MaxStartupScriptTimeout: 45 * time.Second,
+	})
+
+	if _, err := fm.ProvisionAndAssign(context.Background(), "task-1", Spec{}, []byte(`{}`), nil,
+		BootOptions{StartupScriptTimeout: 40 * time.Second}); err != nil {
+		t.Fatalf("provision with an in-range timeout: %v", err)
+	}
+}
+
+// A ceiling below the default would leave the default itself unrequestable, so
+// NewFleetManager raises it instead of starting in a self-contradictory state.
+func TestNewFleetManagerCeilingNeverBelowDefault(t *testing.T) {
+	fm := NewFleetManager(FleetConfig{
+		Provider:                newMockProvider(),
+		StartupScriptTimeout:    30 * time.Second,
+		MaxStartupScriptTimeout: 5 * time.Second,
+	})
+	if fm.maxStartupScriptTimeout != 30*time.Second {
+		t.Errorf("maxStartupScriptTimeout = %s, want it raised to the default bound (30s)",
+			fm.maxStartupScriptTimeout)
+	}
 }

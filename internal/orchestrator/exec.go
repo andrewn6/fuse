@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync"
+	"time"
 )
 
 // Exec runs argv inside a running VM's guest and reports the result.
@@ -34,6 +36,10 @@ func (fm *FleetManager) Exec(ctx context.Context, vmID string, cmd []string, opt
 		opts.Timeout = MaxExecTimeout
 	}
 
+	// an exec attempt is activity whether or not the command succeeds: the
+	// caller is clearly still using the environment.
+	fm.touchActivity(vmID)
+
 	res, err := env.Exec(ctx, cmd, opts)
 	if err != nil {
 		return ExecResult{}, fmt.Errorf("exec in vm %s: %w", vmID, err)
@@ -61,7 +67,60 @@ func (fm *FleetManager) Attach(ctx context.Context, vmID string, spec AttachSpec
 	if err != nil {
 		return nil, fmt.Errorf("attach to vm %s: %w", vmID, err)
 	}
-	return stream, nil
+
+	// an open attach session counts as activity for as long as it is open, not
+	// just at the moment it opens: an interactive shell can sit quiet for
+	// hours and is still in use. the session is released when the caller
+	// closes the stream, which also restarts the idle window.
+	fm.openAttachSession(vmID)
+	return &activityStream{ReadWriteCloser: stream, release: func() { fm.closeAttachSession(vmID) }}, nil
+}
+
+// activityStream releases a VM's attach session exactly once, when the caller
+// closes the stream it owns.
+type activityStream struct {
+	io.ReadWriteCloser
+	once    sync.Once
+	release func()
+}
+
+func (s *activityStream) Close() error {
+	err := s.ReadWriteCloser.Close()
+	s.once.Do(s.release)
+	return err
+}
+
+// touchActivity records control-plane activity against a VM, restarting its
+// idle window. Unknown VM ids are ignored.
+func (fm *FleetManager) touchActivity(vmID string) {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	if v, ok := fm.vms[vmID]; ok {
+		v.lastActivityAt = time.Now()
+	}
+}
+
+// openAttachSession marks a VM as holding one more live attach session.
+func (fm *FleetManager) openAttachSession(vmID string) {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	if v, ok := fm.vms[vmID]; ok {
+		v.attachSessions++
+		v.lastActivityAt = time.Now()
+	}
+}
+
+// closeAttachSession releases one live attach session and restarts the idle
+// window from the moment the session ended.
+func (fm *FleetManager) closeAttachSession(vmID string) {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	if v, ok := fm.vms[vmID]; ok {
+		if v.attachSessions > 0 {
+			v.attachSessions--
+		}
+		v.lastActivityAt = time.Now()
+	}
 }
 
 // guestEnvironment resolves a VM id to a live Environment handle, enforcing

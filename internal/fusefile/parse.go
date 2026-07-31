@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"path"
+	"path/filepath"
 	"sort"
+	"strings"
 
 	"gopkg.in/yaml.v3"
 )
@@ -14,6 +17,21 @@ import (
 // fields are rejected) and then validates the result. It returns the parsed
 // Fusefile only if it is structurally valid.
 func Parse(data []byte) (*Fusefile, error) {
+	f, err := Decode(data)
+	if err != nil {
+		return nil, err
+	}
+	if err := Validate(f); err != nil {
+		return nil, err
+	}
+	return f, nil
+}
+
+// Decode decodes a Fusefile from yaml with a strict decoder without validating
+// it. Parse is the normal entry point; Decode is separate so a caller that
+// wants to report structural and compile problems together (`fuse validate`)
+// can run Validate and Compile over the same decoded file.
+func Decode(data []byte) (*Fusefile, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 
@@ -21,13 +39,12 @@ func Parse(data []byte) (*Fusefile, error) {
 	if err := dec.Decode(&f); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("parse fusefile: %w", err)
 	}
-
-	if err := validate(&f); err != nil {
-		return nil, err
-	}
-
 	return &f, nil
 }
+
+// Validate reports every structural rule violation in f, joined into a single
+// error.
+func Validate(f *Fusefile) error { return validate(f) }
 
 // validate checks structural rules that yaml decoding alone cannot enforce.
 // all violations are collected and returned together (via errors.Join) so a
@@ -41,6 +58,42 @@ func validate(f *Fusefile) error {
 
 	if f.Version != 1 {
 		errs = append(errs, fmt.Errorf("version: must be 1"))
+	}
+
+	// placement labels: keys are sorted first so the joined message is stable
+	// regardless of map iteration order.
+	labelKeys := make([]string, 0, len(f.Placement.Labels))
+	for key := range f.Placement.Labels {
+		labelKeys = append(labelKeys, key)
+	}
+	sort.Strings(labelKeys)
+
+	for _, key := range labelKeys {
+		if !ValidLabel(key) {
+			errs = append(errs, fmt.Errorf("placement.labels: invalid label key %q", key))
+		}
+		if value := f.Placement.Labels[key]; !ValidLabel(value) {
+			errs = append(errs, fmt.Errorf("placement.labels.%s: invalid label value %q", key, value))
+		}
+	}
+
+	for i, step := range f.Setup {
+		if strings.TrimSpace(step.Run) == "" {
+			errs = append(errs, fmt.Errorf("setup[%d].run: is required", i))
+		}
+		if !step.cacheable() && len(step.Inputs) > 0 {
+			errs = append(errs, fmt.Errorf("setup[%d].inputs: not allowed on a step with cache: false", i))
+		}
+		for j, in := range step.Inputs {
+			switch {
+			case strings.TrimSpace(in) == "":
+				errs = append(errs, fmt.Errorf("setup[%d].inputs[%d]: must not be empty", i, j))
+			case path.IsAbs(in) || filepath.IsAbs(in):
+				errs = append(errs, fmt.Errorf("setup[%d].inputs[%d]: must be relative to the Fusefile, got %q", i, j, in))
+			case escapesRoot(in):
+				errs = append(errs, fmt.Errorf("setup[%d].inputs[%d]: must not traverse outside the Fusefile's directory, got %q", i, j, in))
+			}
+		}
 	}
 
 	serviceNames := make([]string, 0, len(f.Services))
@@ -73,6 +126,18 @@ func validate(f *Fusefile) error {
 		}
 	}
 
+	// Which body a file carries is checked here rather than at compile time:
+	// ResolveFiles folds Source into Content in between, after which the two
+	// cases are indistinguishable.
+	for i, file := range f.Files {
+		switch {
+		case file.Source != "" && file.Content != "":
+			errs = append(errs, fmt.Errorf("files[%d]: source and content are mutually exclusive", i))
+		case file.Source == "" && file.Content == "":
+			errs = append(errs, fmt.Errorf("files[%d]: source or content is required", i))
+		}
+	}
+
 	for i, exp := range f.Expose {
 		if exp.Port < 1 || exp.Port > 65535 {
 			errs = append(errs, fmt.Errorf("expose[%d].port: must be between 1 and 65535", i))
@@ -80,4 +145,12 @@ func validate(f *Fusefile) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// escapesRoot reports whether a relative input path climbs out of the
+// directory it is resolved against. slashes are normalized first so a
+// windows-authored `..\x` is caught too.
+func escapesRoot(p string) bool {
+	clean := path.Clean(filepath.ToSlash(p))
+	return clean == ".." || strings.HasPrefix(clean, "../")
 }

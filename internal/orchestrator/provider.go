@@ -69,10 +69,28 @@ type Spec struct {
 	// Mirrors GPUUUIDs for whole devices (issue #41).
 	MIGInstanceUUIDs []string `json:"mig_instance_uuids,omitempty"`
 
+	// HostID pins this sandbox to an exact host id. Unlike GPUUUIDs and
+	// MIGInstanceUUIDs, which allocation fills in, this is caller-settable:
+	// it comes from the Fusefile's placement.host. A pin is a hard gate, not
+	// an override, so the pinned host still has to be active, run the right
+	// backend, and fit the spec.
+	HostID string
+
+	// Labels are placement label selectors: every pair must match the target
+	// host's declared labels. Caller-settable, from placement.labels.
+	Labels map[string]string
+
 	// MaxRuntime overrides FleetConfig.TaskStuckTimeout for this task.
 	// Zero means "use the fleet default". This is a leak-detection ceiling,
 	// not a liveness check — set it higher than any plausible healthy runtime.
 	MaxRuntime time.Duration
+
+	// IdleTimeout destroys this VM once it has gone this long with no exec
+	// and no attach session. Zero means "use FleetConfig.DefaultIdleTimeout"
+	// (itself zero by default, i.e. no idle expiry). Unlike MaxRuntime this
+	// is a liveness check, but only over control-plane activity: in-guest CPU
+	// and network traffic are not observed.
+	IdleTimeout time.Duration
 
 	// Image names a base rootfs for the provider to boot from, resolved by
 	// the provider (e.g. the firecracker host agent looks it up in its own
@@ -288,6 +306,22 @@ type BootOptions struct {
 // the default 60s HTTP write timeout so the API can answer with a classified
 // error rather than having the response cut off mid-flight.
 const DefaultStartupScriptTimeout = 30 * time.Second
+
+// DefaultMaxStartupScriptTimeout is the largest bound a caller may request via
+// BootOptions.StartupScriptTimeout when FleetConfig.MaxStartupScriptTimeout is
+// unset.
+//
+// The ceiling exists because the bound is caller-supplied but the cost is paid
+// by the server: the script runs synchronously inside the create request, so a
+// caller-chosen timeout is really a caller-chosen hold on a connection. 55s
+// keeps the whole create under the default 60s HTTP write timeout while still
+// giving authors most of a minute, nearly double the default.
+//
+// Raising it requires raising --write-timeout to match; an operator who does
+// both gets a longer setup budget, and one who raises only this gets a
+// truncated response instead of a classified error, which main.go refuses at
+// startup rather than discovering per request.
+const DefaultMaxStartupScriptTimeout = 55 * time.Second
 
 // EndpointReporter is implemented by environments that can report additional
 // network endpoints published during StartAgent (e.g. via ingress/expose).

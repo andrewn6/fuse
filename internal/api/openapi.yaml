@@ -301,6 +301,12 @@ paths:
         must be standard base64; a bad encoding is a 400. Secrets are
         validated against the manifest before provisioning, and secret
         values are redacted from error messages.
+
+        Placement is validated at the boundary too: a malformed
+        `spec.labels` key or value is a 400, and an unknown `spec.host_id`
+        is a 404 before any VM is created. A pin to a real but ineligible
+        host, and a label selector that matches no host, both fail 503 with
+        a message naming the gate that rejected them.
       requestBody:
         required: true
         content:
@@ -316,6 +322,8 @@ paths:
                 $ref: "#/components/schemas/Environment"
         "400":
           $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
         "409":
           $ref: "#/components/responses/Conflict"
         "500":
@@ -1372,6 +1380,23 @@ components:
             directory). Empty means the provider's default base image.
         region:
           type: string
+        host_id:
+          type: string
+          description: |
+            Pins the environment to an exact host id (the Fusefile's
+            placement.host). A pin is a hard gate, not an override: the
+            host must still be active, run the right backend, and fit the
+            request. An unknown host id is rejected with 404 before any VM
+            is created.
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Placement label selectors (the Fusefile's placement.labels).
+            Every pair must match the target host's operator-declared
+            labels. A selector that matches no host is rejected with 503,
+            never queued.
         max_runtime_seconds:
           type: integer
           format: int64
@@ -1379,6 +1404,17 @@ components:
             Leak-detection ceiling for this task. Zero means "use the
             fleet default". The orchestrator tears down tasks that
             exceed this age with no state transitions.
+        idle_timeout_seconds:
+          type: integer
+          format: int64
+          description: |
+            Destroys the environment once it has gone this long with no
+            exec and no attach session. Zero means "use the fleet
+            default", which is no idle expiry unless the operator
+            configured one. Measured from the last exec or attach, not
+            from create, and must be at least 60 (idle detection runs on
+            the reconcile loop). In-guest CPU use and traffic on exposed
+            ports are not observed.
 
     ExposeSpec:
       type: object
@@ -1433,6 +1469,16 @@ components:
         startup_script:
           type: string
           description: Optional script run inside the guest at boot.
+        startup_script_timeout_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Bound on `startup_script`. Omit or send 0 for the
+            orchestrator's default (30s). The script runs synchronously
+            inside this request, so a value above the orchestrator's
+            configured maximum (`-max-startup-script-timeout`, 55s by
+            default) is rejected with 400 rather than clamped.
         gateway_url:
           type: string
         gateway_token:
@@ -1888,6 +1934,14 @@ components:
           description: |
             Virtualization backend. Defaults to "firecracker". Only
             "qemu" hosts may register with capacity.gpus > 0.
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Operator-declared key/value pairs a spec's placement labels can
+            select on. Declared, never probed: they are a claim about the
+            box, like capacity.gpu_kind.
         capacity:
           allOf:
             - $ref: "#/components/schemas/HostCapacity"
@@ -1921,6 +1975,11 @@ components:
           type: string
           enum: [firecracker, qemu]
           description: Virtualization backend the host runs.
+        labels:
+          type: object
+          additionalProperties:
+            type: string
+          description: Operator-declared placement labels for this host.
         capacity:
           $ref: "#/components/schemas/HostCapacity"
         allocated:

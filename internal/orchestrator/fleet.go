@@ -91,6 +91,14 @@ var (
 	// caller saw an opaque 500. Long-lived processes belong in `services`,
 	// or must be backgrounded by the script itself.
 	ErrStartupScriptTimeout = errors.New("startup script did not complete in time")
+
+	// ErrStartupScriptTimeoutTooLarge is returned by ProvisionAndAssign when
+	// the caller asks for a startup script bound above the fleet's ceiling.
+	// The request is refused rather than clamped: a caller that silently got
+	// 55s when it asked for 10m would read the resulting
+	// ErrStartupScriptTimeout as "my script is slow" instead of "my bound was
+	// never honored".
+	ErrStartupScriptTimeoutTooLarge = errors.New("startup script timeout exceeds the configured maximum")
 )
 
 // VMState represents the lifecycle state of a managed VM.
@@ -134,7 +142,16 @@ type vm struct {
 	endpoints          []Endpoint // published endpoints (e.g. ingress), if the provider reported any
 	createdAt          time.Time
 	updatedAt          time.Time
-	err                string
+	// lastActivityAt is the clock the idle detector reads: the last time a
+	// caller exec'd or attached to this VM (create counts as activity). It is
+	// deliberately separate from updatedAt, which only moves on state
+	// transitions and would make every healthy VM look permanently idle.
+	// Not persisted: an orchestrator restart resets the idle window.
+	lastActivityAt time.Time
+	// attachSessions counts live attach streams. A VM holding at least one is
+	// never idle, however quiet the stream is.
+	attachSessions int
+	err            string
 }
 
 func (v *vm) toInfo() VMInfo {
@@ -187,6 +204,8 @@ type ReconcileSummary struct {
 	OrphansDeadLettered int
 	StuckTasksSuspected int
 	StuckTasksFailed    int
+	IdleVMsSuspected    int
+	IdleVMsFailed       int
 	VMsMissingProvider  int
 	Duration            time.Duration
 }
@@ -204,6 +223,13 @@ type FleetConfig struct {
 	// Spec.MaxRuntime to override this. Default 2h.
 	TaskStuckTimeout time.Duration
 
+	// DefaultIdleTimeout applies to VMs whose Spec.IdleTimeout is zero. It is
+	// how long a Running VM may go with no exec and no attach session before
+	// it is destroyed. Unlike TaskStuckTimeout this is a liveness check, but
+	// only over control-plane activity. Zero (the default) disables idle
+	// expiry for VMs that do not ask for it.
+	DefaultIdleTimeout time.Duration
+
 	// OrphanDestroyMaxRetries is the number of consecutive reconcile cycles
 	// an orphan VM may fail to destroy before being dead-lettered and
 	// skipped on subsequent cycles. Default 5.
@@ -214,6 +240,13 @@ type FleetConfig struct {
 	// DefaultStartupScriptTimeout. Keep it under the HTTP write timeout so
 	// a create that trips it still returns a classified error.
 	StartupScriptTimeout time.Duration
+
+	// MaxStartupScriptTimeout is the largest bound a caller may request via
+	// BootOptions.StartupScriptTimeout. Default
+	// DefaultMaxStartupScriptTimeout. A request above it is refused with
+	// ErrStartupScriptTimeoutTooLarge. Keep it under the HTTP write timeout
+	// for the same reason StartupScriptTimeout is kept under it.
+	MaxStartupScriptTimeout time.Duration
 
 	// DefaultSnapshotRetention applies to snapshots created without an
 	// explicit retention window. Zero leaves snapshots unbounded until
@@ -259,11 +292,13 @@ type FleetManager struct {
 	logger   *slog.Logger
 	metrics  ReconcileMetrics
 
-	startupScriptTimeout time.Duration
+	startupScriptTimeout    time.Duration
+	maxStartupScriptTimeout time.Duration
 
 	reconcileInterval time.Duration
 
 	taskStuckTimeout         time.Duration
+	defaultIdleTimeout       time.Duration
 	orphanDestroyMaxRetries  int
 	defaultSnapshotRetention time.Duration
 	snapshotQuotaMaxCount    int
@@ -278,6 +313,11 @@ type FleetManager struct {
 	// two strikes before it is failed, which guards against single-cycle
 	// clock skew or transient scheduling pauses.
 	stuckStrikes map[string]int
+
+	// idleStrikes mirrors stuckStrikes for the idle detector: a VM must be
+	// observed idle on two consecutive reconcile cycles before it is torn
+	// down, so a single delayed cycle cannot kill a live environment.
+	idleStrikes map[string]int
 
 	// ── Scheduler / multi-host fields ────────────────────────────
 	//
@@ -337,6 +377,15 @@ func NewFleetManager(cfg FleetConfig) *FleetManager {
 	if cfg.StartupScriptTimeout <= 0 {
 		cfg.StartupScriptTimeout = DefaultStartupScriptTimeout
 	}
+	if cfg.MaxStartupScriptTimeout <= 0 {
+		cfg.MaxStartupScriptTimeout = DefaultMaxStartupScriptTimeout
+	}
+	// A ceiling below the default would make the default itself unrequestable
+	// and, worse, silently unreachable for callers that set nothing. Raise it
+	// to the default rather than starting in a state where the two disagree.
+	if cfg.MaxStartupScriptTimeout < cfg.StartupScriptTimeout {
+		cfg.MaxStartupScriptTimeout = cfg.StartupScriptTimeout
+	}
 
 	return &FleetManager{
 		provider:                 cfg.Provider,
@@ -346,14 +395,17 @@ func NewFleetManager(cfg FleetConfig) *FleetManager {
 		logger:                   cfg.Logger,
 		metrics:                  cfg.Metrics,
 		startupScriptTimeout:     cfg.StartupScriptTimeout,
+		maxStartupScriptTimeout:  cfg.MaxStartupScriptTimeout,
 		reconcileInterval:        cfg.ReconcileInterval,
 		taskStuckTimeout:         cfg.TaskStuckTimeout,
+		defaultIdleTimeout:       cfg.DefaultIdleTimeout,
 		orphanDestroyMaxRetries:  cfg.OrphanDestroyMaxRetries,
 		defaultSnapshotRetention: cfg.DefaultSnapshotRetention,
 		snapshotQuotaMaxCount:    cfg.SnapshotQuotaMaxCount,
 		snapshotQuotaMaxBytes:    cfg.SnapshotQuotaMaxBytes,
 		orphanRetries:            make(map[string]int),
 		stuckStrikes:             make(map[string]int),
+		idleStrikes:              make(map[string]int),
 		hosts:                    make(map[string]*Host),
 		hostProviders:            make(map[string]Provider),
 		tokenEncryptionKey:       cfg.TokenEncryptionKey,
@@ -482,9 +534,14 @@ func (fm *FleetManager) Stop() {
 // Blocks until the VM is ready or an error occurs.
 func (fm *FleetManager) ProvisionAndAssign(ctx context.Context, taskID string, spec Spec, manifest []byte, secretMap map[string]string, opts BootOptions) (*VMInfo, error) {
 	// Callers that do not pick their own bound inherit the fleet's, so a
-	// startup script can never hang a create indefinitely.
+	// startup script can never hang a create indefinitely. A caller that does
+	// pick one is held to the fleet's ceiling, since the bound is really a
+	// hold on the create connection.
 	if opts.StartupScriptTimeout <= 0 {
 		opts.StartupScriptTimeout = fm.startupScriptTimeout
+	} else if opts.StartupScriptTimeout > fm.maxStartupScriptTimeout {
+		return nil, fmt.Errorf("%w: requested %s, maximum is %s",
+			ErrStartupScriptTimeoutTooLarge, opts.StartupScriptTimeout, fm.maxStartupScriptTimeout)
 	}
 
 	// Check for duplicate task.
@@ -503,12 +560,13 @@ func (fm *FleetManager) ProvisionAndAssign(ctx context.Context, taskID string, s
 	now := time.Now()
 
 	v := &vm{
-		id:        vmID,
-		state:     VMStateProvisioning,
-		taskID:    taskID,
-		spec:      spec,
-		createdAt: now,
-		updatedAt: now,
+		id:             vmID,
+		state:          VMStateProvisioning,
+		taskID:         taskID,
+		spec:           spec,
+		createdAt:      now,
+		updatedAt:      now,
+		lastActivityAt: now,
 	}
 
 	fm.mu.Lock()
@@ -570,6 +628,15 @@ func (fm *FleetManager) ProvisionAndAssign(ctx context.Context, taskID string, s
 		fm.mu.Unlock()
 		_ = fm.store.DeleteVM(ctx, vmID)
 		return nil, fmt.Errorf("%w: gpu workloads require a registered gpu host", ErrNoCapacity)
+	}
+	// A placement request cannot be honored on the legacy no-hosts path: the
+	// default provider is not a scheduled host, so a pin or a label selector
+	// there would silently boot somewhere else.
+	if len(hosts) == 0 && (spec.HostID != "" || len(spec.Labels) > 0) {
+		delete(fm.vms, vmID)
+		fm.mu.Unlock()
+		_ = fm.store.DeleteVM(ctx, vmID)
+		return nil, fmt.Errorf("%w: placement requires registered hosts", ErrNoHosts)
 	}
 	if len(hosts) > 0 {
 		selectedHost, decision, schedErr := Schedule(spec, hosts, fm.placementPolicy)
@@ -1084,6 +1151,7 @@ func (fm *FleetManager) reconcile(ctx context.Context) {
 	// in reconcile.go so that fleet.go stays focused on the lifecycle API.
 	fm.reconcileOrphans(ctx, envs, envProviders, tracked, &summary)
 	fm.reconcileStuckTasks(ctx, &summary)
+	fm.reconcileIdleVMs(ctx, &summary)
 	fm.reconcileSnapshots(ctx)
 
 	// Sweep VMs that have been marked destroying and are no longer present
@@ -1210,7 +1278,10 @@ func (fm *FleetManager) recoverState(ctx context.Context) error {
 			endpoints:    record.Endpoints,
 			createdAt:    record.CreatedAt,
 			updatedAt:    record.UpdatedAt,
-			err:          record.LastError,
+			// activity is not persisted, so recovery restarts the idle
+			// window rather than inheriting a stale one.
+			lastActivityAt: time.Now(),
+			err:            record.LastError,
 		}
 
 		if recoveredVM.state == VMStateRunning {

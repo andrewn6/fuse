@@ -17,7 +17,19 @@ export interface Spec {
   gpu_profile?: string;
   region?: string;
   max_runtime_seconds?: number;
+  /** Destroys the environment after this many seconds with no exec and no
+   * attach session. Omitted or 0 means no idle expiry. Unlike
+   * max_runtime_seconds (a ceiling measured from create), this is measured
+   * from the last exec or attach. */
+  idle_timeout_seconds?: number;
   image?: string;
+  /** Pins the environment to an exact host id (the Fusefile's
+   * placement.host). The pinned host still has to be active, run the right
+   * backend, and fit the request. */
+  host_id?: string;
+  /** Placement label selectors (the Fusefile's placement.labels): every pair
+   * must match the target host's declared labels. */
+  labels?: Record<string, string>;
 }
 
 /** ExposeSpec requests that a guest port be published at boot. */
@@ -106,13 +118,29 @@ export interface ExecResult {
  */
 export interface Event {
   id: string;
-  /** Event kind. v1 only emits "state". */
+  /** Event kind: "state" (an omitted kind means "state") or "step". */
   event: string;
   vm_id: string;
   state: string;
   url?: string;
   error?: string;
   updated_at: string;
+  /** index of the setup step, 1-based. step events only. */
+  index?: number;
+  /** total number of setup steps. step events only. */
+  total?: number;
+  /** layer cache key for the step. step events only. */
+  key?: string;
+  /** whether the step was served from the layer cache. step events only. */
+  cached?: boolean;
+  /** why the step missed the cache. step events only. */
+  miss_reason?: string;
+  /** what changed, e.g. the input paths. step events only. */
+  miss_detail?: string[];
+  /** wall-clock duration of the step in milliseconds. step events only. */
+  duration_ms?: number;
+  /** exit code of the step. step events only. */
+  exit_code?: number;
 }
 
 /** SnapshotRequest is the optional body for snapshots.create. */
@@ -213,6 +241,9 @@ export interface RegisterHostRequest {
   token?: string;
   region?: string;
   backend?: string;
+  /** Operator-declared key/value pairs matched against a spec's placement
+   * label selectors. Never probed from the host agent. */
+  labels?: Record<string, string>;
   capacity?: HostCapacity;
 }
 
@@ -223,6 +254,7 @@ export interface Host {
   region?: string;
   state: string;
   backend?: string;
+  labels?: Record<string, string>;
   capacity: HostCapacity;
   allocated: HostCapacity;
   last_seen: string;

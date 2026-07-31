@@ -28,15 +28,18 @@ func toAPIEnvironment(v orchestrator.VMInfo) Environment {
 // wire contract uses seconds for ergonomics (no Go-specific parser).
 func toAPIResourceSpec(s orchestrator.Spec) ResourceSpec {
 	return ResourceSpec{
-		CPUs:              int32(s.CPUs),
-		RamMB:             int32(s.RamMB),
-		StorageGB:         int32(s.StorageGB),
-		Region:            s.Region,
-		MaxRuntimeSeconds: int64(s.MaxRuntime.Seconds()),
-		Image:             s.Image,
-		GPUs:              s.GPUs,
-		GPUKind:           s.GPUKind,
-		GPUProfile:        s.GPUProfile,
+		CPUs:               int32(s.CPUs),
+		RamMB:              int32(s.RamMB),
+		StorageGB:          int32(s.StorageGB),
+		Region:             s.Region,
+		MaxRuntimeSeconds:  int64(s.MaxRuntime.Seconds()),
+		IdleTimeoutSeconds: int64(s.IdleTimeout.Seconds()),
+		Image:              s.Image,
+		GPUs:               s.GPUs,
+		GPUKind:            s.GPUKind,
+		GPUProfile:         s.GPUProfile,
+		HostID:             s.HostID,
+		Labels:             copyLabels(s.Labels),
 	}
 }
 
@@ -45,16 +48,33 @@ func toAPIResourceSpec(s orchestrator.Spec) ResourceSpec {
 // case-insensitive end to end.
 func toOrchestratorSpec(s ResourceSpec) orchestrator.Spec {
 	return orchestrator.Spec{
-		CPUs:       int(s.CPUs),
-		RamMB:      int(s.RamMB),
-		StorageGB:  int(s.StorageGB),
-		Region:     s.Region,
-		MaxRuntime: time.Duration(s.MaxRuntimeSeconds) * time.Second,
-		Image:      s.Image,
-		GPUs:       s.GPUs,
-		GPUKind:    s.GPUKind,
-		GPUProfile: strings.ToLower(s.GPUProfile),
+		CPUs:        int(s.CPUs),
+		RamMB:       int(s.RamMB),
+		StorageGB:   int(s.StorageGB),
+		Region:      s.Region,
+		MaxRuntime:  time.Duration(s.MaxRuntimeSeconds) * time.Second,
+		IdleTimeout: time.Duration(s.IdleTimeoutSeconds) * time.Second,
+		Image:       s.Image,
+		GPUs:        s.GPUs,
+		GPUKind:     s.GPUKind,
+		GPUProfile:  strings.ToLower(s.GPUProfile),
+		HostID:      s.HostID,
+		Labels:      copyLabels(s.Labels),
 	}
+}
+
+// copyLabels clones a label map so neither side of a conversion aliases the
+// other. Nil (and empty) in, nil out, so the json omitempty behavior and the
+// scheduler's "no selector" fast path are both preserved.
+func copyLabels(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // toOrchestratorExpose converts wire expose entries into the orchestrator type.
@@ -88,6 +108,7 @@ func toAPIHost(h orchestrator.Host) HostInfo {
 		URL:     h.URL,
 		Region:  h.Region,
 		Backend: string(h.Backend),
+		Labels:  copyLabels(h.Labels),
 		State:   string(h.State),
 		Capacity: HostCapacity{
 			CPUs:         h.Capacity.CPUs,

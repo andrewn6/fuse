@@ -1,0 +1,32 @@
+version: 1
+
+image: ghcr.io/acme/worker:latest
+
+resources:
+  cpus: 2
+  memory: 2GB
+  storage: 10GB
+  max_runtime: 1h
+
+setup:
+  - apt-get update -qq
+
+services:
+  postgres:
+    image: postgres:16
+    ports: [5432]
+    env:
+      POSTGRES_PASSWORD: { secret: pg_password }
+      POSTGRES_DB: { value: app }
+
+run: ./start.sh
+
+workspace: /workspace
+
+expose:
+  - port: 8080
+    as: http
+
+secrets:
+  - pg_password
+  - api_token

@@ -28,7 +28,7 @@ fuse host register gpu-1 \
 
 ```yaml
 version: 1
-image: ghcr.io/acme/training:latest
+image: cuda-12 # a rootfs baked on the host, not an OCI ref
 
 resources:
   cpus: 16
@@ -38,6 +38,18 @@ resources:
 
 run: python train.py --epochs 50
 ```
+
+:::warning[`image` names a host rootfs, not a container image]
+A GPU guest needs the NVIDIA driver and CUDA toolkit installed in its own
+rootfs, and `image` is how you pick which baked rootfs to boot: the host agent
+resolves the name against the images on that host. It is not an OCI reference,
+and pointing it at `ghcr.io/...` fails the create with `base image not found`.
+
+Bake one with
+[`qemu-bake-cuda-rootfs.sh <driver-version>`](/docs/cloud/gpu-host-setup) and
+place it in the agent's images directory. `services[].image` _is_ an OCI
+reference, since those run as containers inside the guest.
+:::
 
 ```bash
 fuse up

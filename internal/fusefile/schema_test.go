@@ -6,8 +6,8 @@ func TestFusefileFieldsPresent(t *testing.T) {
 	f := Fusefile{
 		Version:   1,
 		Image:     "img:tag",
-		Resources: Resources{CPUs: 2, Memory: "2GB", Storage: "10GB", MaxRuntime: "1h"},
-		Setup:     []string{"echo hi"},
+		Resources: Resources{CPUs: 2, Memory: "2GB", Storage: "10GB", MaxRuntime: "1h", IdleTimeout: "15m"},
+		Setup:     []Step{{Run: "echo hi"}},
 		Services:  map[string]Service{"db": {Image: "postgres:16", Ports: []int{5432}, Env: map[string]EnvValue{"PGPASSWORD": {Secret: "pg_password"}, "PGUSER": {Value: "admin"}}}},
 		Run:       "./start.sh",
 		Workspace: "/workspace",
@@ -38,9 +38,12 @@ func TestFusefileFieldsPresent(t *testing.T) {
 	if f.Resources.MaxRuntime != "1h" {
 		t.Errorf("resources.max_runtime: got %q, want %q", f.Resources.MaxRuntime, "1h")
 	}
+	if f.Resources.IdleTimeout != "15m" {
+		t.Errorf("resources.idle_timeout: got %q, want %q", f.Resources.IdleTimeout, "15m")
+	}
 
 	// setup field
-	if len(f.Setup) != 1 || f.Setup[0] != "echo hi" {
+	if len(f.Setup) != 1 || f.Setup[0].Run != "echo hi" {
 		t.Errorf("setup: got %v, want [echo hi]", f.Setup)
 	}
 

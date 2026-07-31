@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"time"
 
@@ -234,6 +235,7 @@ func (h *Handler) resolver() Resolver {
 //	@Param			body	body		CreateEnvironmentRequest	true	"Environment spec"
 //	@Success		201		{object}	Environment
 //	@Failure		400		{object}	Error
+//	@Failure		404		{object}	Error
 //	@Failure		409		{object}	Error
 //	@Failure		500		{object}	Error
 //	@Failure		503		{object}	Error
@@ -250,6 +252,31 @@ func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateGPUSpec(req.Spec); err != nil {
 		writeError(w, http.StatusBadRequest, CodeInvalidArgument, err.Error(), nil)
+		return
+	}
+	if err := validatePlacementSpec(req.Spec); err != nil {
+		writeError(w, http.StatusBadRequest, CodeInvalidArgument, err.Error(), nil)
+		return
+	}
+	// An unknown pin is a caller mistake, not a capacity shortfall: fail it
+	// here as a 404 so no VM row is ever created for a host that cannot exist.
+	if req.Spec.HostID != "" {
+		if _, ok := h.Fleet.GetHost(req.Spec.HostID); !ok {
+			writeError(w, http.StatusNotFound, CodeNotFound,
+				fmt.Sprintf("spec.host_id: host %q is not registered", req.Spec.HostID), nil)
+			return
+		}
+	}
+	if err := validateTimeoutSpec(req.Spec); err != nil {
+		writeError(w, http.StatusBadRequest, CodeInvalidArgument, err.Error(), nil)
+		return
+	}
+	// A negative bound would reach the fleet as "unset" and quietly restore
+	// the default, so it is refused here where the sign is still visible.
+	// The upper bound is the fleet's to enforce, since it owns the ceiling.
+	if req.StartupScriptTimeoutSeconds < 0 {
+		writeError(w, http.StatusBadRequest, CodeInvalidArgument,
+			"startup_script_timeout_seconds must not be negative", nil)
 		return
 	}
 
@@ -293,10 +320,11 @@ func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		spec.PinnedHostID = record.HostID
 	}
 	info, err := h.Fleet.ProvisionAndAssign(r.Context(), req.TaskID, spec, manifest, req.Secrets, orchestrator.BootOptions{
-		StartupScript: req.StartupScript,
-		GatewayURL:    req.GatewayURL,
-		GatewayToken:  req.GatewayToken,
-		Expose:        toOrchestratorExpose(req.Expose),
+		StartupScript:        req.StartupScript,
+		StartupScriptTimeout: time.Duration(req.StartupScriptTimeoutSeconds) * time.Second,
+		GatewayURL:           req.GatewayURL,
+		GatewayToken:         req.GatewayToken,
+		Expose:               toOrchestratorExpose(req.Expose),
 	})
 	if err != nil {
 		writeFleetErrorRedacted(w, err, req.Secrets)
@@ -327,6 +355,45 @@ func validateGPUSpec(s ResourceSpec) error {
 		if !fusefile.KindSupportsMIG(s.GPUKind) {
 			return fmt.Errorf("spec.gpu_profile %q is not valid for gpu_kind %q (that gpu does not support MIG)", s.GPUProfile, s.GPUKind)
 		}
+	}
+	return nil
+}
+
+// validatePlacementSpec enforces the placement vocabulary at the API boundary
+// so raw SDK/API callers are held to the same label rules as Fusefile authors.
+// Whether a pin or a selector can actually be satisfied is the scheduler's
+// call; this only rejects labels that could never match anything.
+func validatePlacementSpec(s ResourceSpec) error {
+	keys := make([]string, 0, len(s.Labels))
+	for key := range s.Labels {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for _, key := range keys {
+		if !fusefile.ValidLabel(key) {
+			return fmt.Errorf("spec.labels: invalid label key %q", key)
+		}
+		if value := s.Labels[key]; !fusefile.ValidLabel(value) {
+			return fmt.Errorf("spec.labels[%s]: invalid label value %q", key, value)
+		}
+	}
+	return nil
+}
+
+// validateTimeoutSpec enforces the duration invariants at the API boundary,
+// mirroring what the fusefile compiler applies client-side: no negative
+// windows, and no sub-minute idle timeout (idle expiry is detected on the
+// reconcile loop, so a shorter window promises accuracy it cannot deliver).
+func validateTimeoutSpec(s ResourceSpec) error {
+	if s.MaxRuntimeSeconds < 0 {
+		return errors.New("spec.max_runtime_seconds must not be negative")
+	}
+	if s.IdleTimeoutSeconds < 0 {
+		return errors.New("spec.idle_timeout_seconds must not be negative")
+	}
+	if s.IdleTimeoutSeconds > 0 && time.Duration(s.IdleTimeoutSeconds)*time.Second < fusefile.MinIdleTimeout {
+		return fmt.Errorf("spec.idle_timeout_seconds must be at least %d (idle detection runs on the reconcile loop)",
+			int64(fusefile.MinIdleTimeout.Seconds()))
 	}
 	return nil
 }
@@ -773,6 +840,21 @@ func (h *Handler) registerHost(w http.ResponseWriter, r *http.Request) {
 			"mig_profiles requires backend \"qemu\"", nil)
 		return
 	}
+	// Labels are declared, never probed, so the only check possible here is
+	// the vocabulary one: reject anything that could not be written as a
+	// placement selector in a Fusefile.
+	for key, value := range req.Labels {
+		if !fusefile.ValidLabel(key) {
+			writeError(w, http.StatusBadRequest, CodeInvalidArgument,
+				fmt.Sprintf("labels: invalid label key %q", key), nil)
+			return
+		}
+		if !fusefile.ValidLabel(value) {
+			writeError(w, http.StatusBadRequest, CodeInvalidArgument,
+				fmt.Sprintf("labels[%s]: invalid label value %q", key, value), nil)
+			return
+		}
+	}
 	for profile, count := range req.Capacity.MIGProfiles {
 		if !fusefile.ValidGPUProfile(profile) {
 			writeError(w, http.StatusBadRequest, CodeInvalidArgument,
@@ -880,6 +962,7 @@ func (h *Handler) registerHost(w http.ResponseWriter, r *http.Request) {
 		Token:    req.Token,
 		Region:   req.Region,
 		Backend:  backend,
+		Labels:   copyLabels(req.Labels),
 		Capacity: capacity,
 	}
 

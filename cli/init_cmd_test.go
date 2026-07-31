@@ -35,12 +35,35 @@ func TestInitWritesParseableFusefile(t *testing.T) {
 	if f.Version != 1 {
 		t.Errorf("version = %d, want 1", f.Version)
 	}
+	if !f.Cache.Enabled {
+		t.Errorf("cache.enabled = false, want the scaffold to opt in")
+	}
+	if len(f.Setup) != 1 {
+		t.Errorf("setup = %v, want the one uncommented step", f.Setup)
+	}
 	svc, ok := f.Services["postgres"]
 	if !ok {
 		t.Fatalf("services.postgres missing from scaffold")
 	}
 	if svc.Image != "postgres:16" {
 		t.Errorf("services.postgres.image = %q, want postgres:16", svc.Image)
+	}
+
+	// Parsing is not enough: the scaffold is what a new user runs `fuse up`
+	// on, so it must survive compilation too.
+	c, err := fusefile.Compile(f)
+	if err != nil {
+		t.Fatalf("fusefile.Compile rejected scaffold: %v", err)
+	}
+	if c.StartupTimeoutSeconds == 0 {
+		t.Error("scaffold's startup_timeout did not compile to a bound")
+	}
+
+	// The top-level image names a host-baked rootfs, not an OCI ref. The
+	// scaffold shipped `ghcr.io/acme/worker:latest` for a while, which fails
+	// every create with "base image not found".
+	if strings.Contains(string(data), "\nimage: ghcr.io/") {
+		t.Error("scaffold sets a top-level image to an OCI reference; it names a host rootfs")
 	}
 }
 

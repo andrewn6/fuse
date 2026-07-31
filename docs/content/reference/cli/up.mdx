@@ -33,6 +33,13 @@ which streams until the environment is destroyed or fails.
 | `--task-id` | Environment task ID. Default: the Fusefile's parent directory name. |
 | `--no-wait` | Create the environment without streaming provisioning events. |
 | `--from-build` | Boot from a [`fuse build`](/reference/cli/build) artifact instead of a base image. Skips the `setup:` phase. |
+| `--plan` | Print the derived [setup layer cache](/docs/concepts/fusefile#the-setup-layer-cache) plan and exit without creating anything. |
+| `--no-cache` | Ignore the Fusefile's `cache` block and run every setup step. |
+
+`--from-build` is mutually exclusive with both `--plan` and `--no-cache`: a
+`--from-build` boot runs no setup steps, so there is no layer plan for it to
+print and nothing for it to re-run. Use those flags on
+[`fuse build`](/reference/cli/build), which is where the setup phase runs.
 
 ## Path resolution
 
@@ -76,5 +83,7 @@ fuse up --no-wait
 # `fuse environment watch <id>`
 ```
 
-See [Fusefile](/docs/concepts/fusefile) for the full field reference and
-[`fuse init`](/reference/cli/init) to scaffold one.
+See [Fusefile](/docs/concepts/fusefile) for the full field reference,
+[`fuse init`](/reference/cli/init) to scaffold one, and
+[`fuse compile`](/reference/cli/compile) to print what one compiles into without
+creating anything.

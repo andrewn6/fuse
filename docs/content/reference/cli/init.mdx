@@ -14,6 +14,13 @@ disk, documenting the common v1 fields with an explanatory comment on each. The
 GPU fields under `resources` (`gpu`, `gpu_kind`, `gpu_profile`) are not part of
 the scaffold, see [Fusefile](/docs/concepts/fusefile) for those.
 
+The scaffold is deliberately larger than a working file. It names every field so
+you can see what exists, which also means it is not runnable as written: it
+declares a secret you have to supply at `up` time, and an `image` that must
+already be baked on the host. If you want the opposite, the fewest lines that
+boot with a bare `fuse up`, see
+[Your first Fusefile](/docs/learn/first-fusefile).
+
 ## Flags
 
 | Flag | Purpose |

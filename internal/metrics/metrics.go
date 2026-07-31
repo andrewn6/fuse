@@ -20,6 +20,8 @@ type PrometheusMetrics struct {
 	orphansDeadLettered prometheus.Counter
 	stuckTasksSuspected prometheus.Counter
 	stuckTasksFailed    prometheus.Counter
+	idleVMsSuspected    prometheus.Counter
+	idleVMsFailed       prometheus.Counter
 	vmsMissingProvider  prometheus.Counter
 
 	// HTTP handler metrics (used by the middleware).
@@ -88,6 +90,18 @@ func NewPrometheusMetrics(reg prometheus.Registerer) *PrometheusMetrics {
 			Name:      "stuck_tasks_failed_total",
 			Help:      "Total tasks failed due to being stuck (second strike).",
 		}),
+		idleVMsSuspected: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "orchestrator",
+			Subsystem: "reconcile",
+			Name:      "idle_vms_suspected_total",
+			Help:      "Total VMs suspected idle (first strike).",
+		}),
+		idleVMsFailed: prometheus.NewCounter(prometheus.CounterOpts{
+			Namespace: "orchestrator",
+			Subsystem: "reconcile",
+			Name:      "idle_vms_failed_total",
+			Help:      "Total VMs torn down for exceeding their idle timeout (second strike).",
+		}),
 		vmsMissingProvider: prometheus.NewCounter(prometheus.CounterOpts{
 			Namespace: "orchestrator",
 			Subsystem: "reconcile",
@@ -126,6 +140,8 @@ func NewPrometheusMetrics(reg prometheus.Registerer) *PrometheusMetrics {
 		m.orphansDeadLettered,
 		m.stuckTasksSuspected,
 		m.stuckTasksFailed,
+		m.idleVMsSuspected,
+		m.idleVMsFailed,
 		m.vmsMissingProvider,
 		m.HTTPRequestsTotal,
 		m.HTTPRequestDuration,
@@ -147,5 +163,7 @@ func (m *PrometheusMetrics) ReconcileCompleted(s orchestrator.ReconcileSummary) 
 	m.orphansDeadLettered.Add(float64(s.OrphansDeadLettered))
 	m.stuckTasksSuspected.Add(float64(s.StuckTasksSuspected))
 	m.stuckTasksFailed.Add(float64(s.StuckTasksFailed))
+	m.idleVMsSuspected.Add(float64(s.IdleVMsSuspected))
+	m.idleVMsFailed.Add(float64(s.IdleVMsFailed))
 	m.vmsMissingProvider.Add(float64(s.VMsMissingProvider))
 }

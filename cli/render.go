@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"time"
@@ -24,8 +25,11 @@ var (
 )
 
 // printJSON writes v to stdout as indented json.
-func printJSON(v any) error {
-	enc := json.NewEncoder(os.Stdout)
+func printJSON(v any) error { return writeJSON(os.Stdout, v) }
+
+// writeJSON writes v to w as indented json.
+func writeJSON(w io.Writer, v any) error {
+	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
 	return enc.Encode(v)
@@ -166,6 +170,19 @@ func humanBytes(n int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %cB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+// stepLineStyle colors a setup step line. the verdict word already carries the
+// verdict, so color is decoration and never the only signal.
+func stepLineStyle(e stepEntry) lipgloss.Style {
+	switch {
+	case e.exitCode != 0:
+		return styleBad
+	case e.cached:
+		return styleGood
+	default:
+		return lipgloss.NewStyle()
+	}
 }
 
 // stateStyle colors a lifecycle state for detail views.

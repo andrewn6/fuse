@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -352,11 +353,15 @@ func gpuKindMatches(gpuKind string, d GPUDevice, hostKind string) bool {
 // Host is a registered compute host in the fleet. It represents a
 // single Firecracker host agent that can provision VMs.
 type Host struct {
-	ID        string
-	URL       string // base URL of the host agent (e.g. https://agent-1.local)
-	Token     string // bearer token for this host's agent
-	Region    string
-	Backend   HostBackend // "firecracker" or "qemu"; empty means firecracker (default)
+	ID      string
+	URL     string // base URL of the host agent (e.g. https://agent-1.local)
+	Token   string // bearer token for this host's agent
+	Region  string
+	Backend HostBackend // "firecracker" or "qemu"; empty means firecracker (default)
+	// Labels are operator-declared key/value pairs supplied at registration
+	// and matched against a spec's placement label selectors. They are never
+	// probed from the host agent, the same trust model as Capacity.GPUKind.
+	Labels    map[string]string
 	Capacity  HostCapacity
 	Allocated HostCapacity
 	State     HostState
@@ -395,6 +400,18 @@ var ErrNoCapacity = errors.New("no host has sufficient capacity")
 // ErrNoHosts is returned by Schedule when the host registry is empty.
 var ErrNoHosts = errors.New("no hosts registered")
 
+// ErrHostPinUnschedulable is returned by Schedule when spec.HostID names a
+// registered host that no longer clears one of the other gates (cordoned,
+// wrong region or backend, mismatched labels, or full). The wrapped message
+// names the gate that rejected it. The REST handler maps this to 503; an
+// unknown host id is rejected earlier, at the API boundary, as a 404.
+var ErrHostPinUnschedulable = errors.New("pinned host cannot take this environment")
+
+// ErrNoLabelMatch is returned by Schedule when spec.Labels matched no
+// schedulable host at all, which is a selector mistake rather than a capacity
+// shortfall. The REST handler maps this to 503.
+var ErrNoLabelMatch = errors.New("no host matches the requested placement labels")
+
 // PlacementDecision records why the scheduler picked a particular
 // host. It is attached to the VM record for debugging.
 type PlacementDecision struct {
@@ -411,15 +428,37 @@ type PlacementDecision struct {
 // and persisting the decision.
 //
 // Filter pipeline:
-//  1. Exclude non-schedulable hosts (cordoned, draining).
-//  2. If spec.Region is non-empty, exclude hosts in a different region.
-//  3. Exclude hosts that don't fit the spec (capacity - allocated < spec).
-//  4. Among survivors, pick by policy (binpack or spread).
+//  1. If spec.HostID is non-empty, consider only that host; a pin that clears
+//     none of the gates below fails with ErrHostPinUnschedulable naming the
+//     gate that rejected it.
+//  2. Exclude non-schedulable hosts (cordoned, draining).
+//  3. If spec.Region is non-empty, exclude hosts in a different region.
+//  4. Exclude hosts whose backend cannot serve a GPU request.
+//  5. If spec.Labels is non-empty, exclude hosts missing any requested pair.
+//  6. Exclude hosts that don't fit the spec (capacity - allocated < spec).
+//  7. Among survivors, pick by policy (binpack or spread).
 //
 // Ties within a policy are broken by host ID for determinism.
 func Schedule(spec Spec, hosts []*Host, policy PlacementPolicy) (*Host, PlacementDecision, error) {
 	if len(hosts) == 0 {
 		return nil, PlacementDecision{}, ErrNoHosts
+	}
+
+	// A pin narrows the candidate set to one host and reports the gate that
+	// rejected it, so "pinned to build-3" never fails as a vague capacity
+	// shortfall. An unknown host id is caught at the API boundary, but stay
+	// defensive: an unregistered pin here is a not-found, not a pin miss.
+	if spec.HostID != "" {
+		pinned := hostByID(hosts, spec.HostID)
+		if pinned == nil {
+			return nil, PlacementDecision{}, fmt.Errorf(
+				"%w: placement.host %q is not registered", ErrHostNotFound, spec.HostID)
+		}
+		if reason := hostRejection(pinned, spec); reason != "" {
+			return nil, PlacementDecision{}, fmt.Errorf(
+				"%w: host %q %s", ErrHostPinUnschedulable, pinned.ID, reason)
+		}
+		hosts = []*Host{pinned}
 	}
 
 	// Filter to eligible candidates.
@@ -430,19 +469,7 @@ func Schedule(spec Spec, hosts []*Host, policy PlacementPolicy) (*Host, Placemen
 	var candidates []candidate
 
 	for _, h := range hosts {
-		if !h.schedulable() {
-			continue
-		}
-		if spec.Region != "" && h.Region != spec.Region {
-			continue
-		}
-		// gpu envs may only land on qemu hosts (D3). registration rejects
-		// gpus > 0 on firecracker hosts, but the scheduler stays defensive
-		// against a stale or hand-edited host record.
-		if spec.GPUs > 0 && h.Backend != BackendQEMU {
-			continue
-		}
-		if !fits(h.Capacity, h.Allocated, spec) {
+		if hostRejection(h, spec) != "" {
 			continue
 		}
 		// Score: total "free" resources as a single comparable int.
@@ -455,6 +482,13 @@ func Schedule(spec Spec, hosts []*Host, policy PlacementPolicy) (*Host, Placemen
 	}
 
 	if len(candidates) == 0 {
+		// A label selector that matched nothing is a selector mistake, not a
+		// capacity shortfall: say so, and say how many hosts were considered.
+		if len(spec.Labels) > 0 && !anyHostMatchesLabels(hosts, spec.Labels) {
+			return nil, PlacementDecision{}, fmt.Errorf(
+				"%w: %s matched none of %d schedulable hosts",
+				ErrNoLabelMatch, formatLabels(spec.Labels), countSchedulable(hosts))
+		}
 		return nil, PlacementDecision{}, fmt.Errorf(
 			"%w: need %dCPU/%dMB/%dGB, no eligible host fits",
 			ErrNoCapacity, spec.CPUs, spec.RamMB, spec.StorageGB)
@@ -488,4 +522,101 @@ func Schedule(spec Spec, hosts []*Host, policy PlacementPolicy) (*Host, Placemen
 	}
 
 	return best.host, decision, nil
+}
+
+// hostRejection returns a human-readable reason why h cannot take spec, or ""
+// if it can. It is the single definition of the filter gates: the main loop
+// uses it as a boolean, and the host-pin path turns the reason into an error
+// message so a pin miss names the gate that rejected it.
+func hostRejection(h *Host, spec Spec) string {
+	switch {
+	case !h.schedulable():
+		return fmt.Sprintf("is %s, not %s", h.State, HostActive)
+	case spec.Region != "" && h.Region != spec.Region:
+		return fmt.Sprintf("is in region %q, the spec requires %q", h.Region, spec.Region)
+	// gpu envs may only land on qemu hosts (D3). registration rejects
+	// gpus > 0 on firecracker hosts, but the scheduler stays defensive
+	// against a stale or hand-edited host record.
+	case spec.GPUs > 0 && h.Backend != BackendQEMU:
+		return fmt.Sprintf("has backend %q, gpu environments require %q", h.Backend, BackendQEMU)
+	case !labelsMatch(h.Labels, spec.Labels):
+		return "does not have labels " + formatLabels(unmatchedLabels(h.Labels, spec.Labels))
+	case !fits(h.Capacity, h.Allocated, spec):
+		return fmt.Sprintf("does not fit %dCPU/%dMB/%dGB", spec.CPUs, spec.RamMB, spec.StorageGB)
+	}
+	return ""
+}
+
+// hostByID returns the host with the given id, or nil if it is not in the
+// slice.
+func hostByID(hosts []*Host, id string) *Host {
+	for _, h := range hosts {
+		if h.ID == id {
+			return h
+		}
+	}
+	return nil
+}
+
+// labelsMatch reports whether every requested pair is present on the host
+// with the same value. An empty selector matches every host, so a spec
+// without placement labels behaves exactly as before.
+func labelsMatch(hostLabels, selector map[string]string) bool {
+	for k, v := range selector {
+		if hostLabels[k] != v {
+			return false
+		}
+	}
+	return true
+}
+
+// unmatchedLabels returns the subset of the selector the host does not
+// satisfy, so an error can name the pairs that actually failed.
+func unmatchedLabels(hostLabels, selector map[string]string) map[string]string {
+	out := make(map[string]string, len(selector))
+	for k, v := range selector {
+		if hostLabels[k] != v {
+			out[k] = v
+		}
+	}
+	return out
+}
+
+// anyHostMatchesLabels reports whether any schedulable host satisfies the
+// selector, ignoring the other gates. Used only to distinguish a selector
+// mistake from a capacity shortfall.
+func anyHostMatchesLabels(hosts []*Host, selector map[string]string) bool {
+	for _, h := range hosts {
+		if h.schedulable() && labelsMatch(h.Labels, selector) {
+			return true
+		}
+	}
+	return false
+}
+
+// countSchedulable returns how many hosts cleared the state gate, which is
+// the "hosts considered" number an unmatched selector reports.
+func countSchedulable(hosts []*Host) int {
+	n := 0
+	for _, h := range hosts {
+		if h.schedulable() {
+			n++
+		}
+	}
+	return n
+}
+
+// formatLabels renders a label map as a sorted, comma-separated key=value
+// list so error messages are stable across runs.
+func formatLabels(labels map[string]string) string {
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, len(keys))
+	for i, k := range keys {
+		parts[i] = k + "=" + labels[k]
+	}
+	return strings.Join(parts, ",")
 }

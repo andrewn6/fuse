@@ -5,39 +5,67 @@ sidebar:
 description: How the orchestrator picks a host for an environment
 ---
 
-When you create an environment you never name a host. You describe what the
-workload needs, and the orchestrator picks a host that can satisfy it. This page
-explains how that choice is made, and just as importantly, what it does not
-consider.
+By default you never name a host. You describe what the workload needs, and the
+orchestrator picks a host that can satisfy it. This page explains how that choice
+is made, and just as importantly, what it does not consider.
 
-## Placement is always orchestrator-side
+## Constraining placement
 
-There is no way to pin an environment to a host. The create request has no host
-field, and nothing in the scheduler can be bypassed.
+A self-hosted operator who knows their boxes by name can constrain the choice
+with a Fusefile `placement` block:
 
-`fuse host <id>` looks like pinning but isn't. It sets a **client-side** scope
-that filters what `fuse environment list` shows you, nothing more. Create
-deliberately ignores it and says so:
-
-```bash
-note: create is orchestrator-scheduled; the active host "gpu-1" does not pin placement
+```yaml
+placement:
+  host: build-3       # exact host id
+  labels:             # every pair must match the host's declared labels
+    disk: nvme
+    tier: build
 ```
 
-If you need a workload on one specific host, the only lever is to make that host
-the only one that survives the filters below, by cordoning the others or by
-giving the environment a region only it serves.
+`fuse environment create --host build-3 --label disk=nvme` is the imperative
+equivalent.
+
+Both fields are **hard gates, not preferences**. They narrow the candidate set
+before scoring; they never override the gates below. A pinned host still has to
+be `active`, run the right backend, and have room, and a request that matches no
+host is rejected now rather than queued.
+
+Labels come from the operator at registration
+(`fuse host register build-3 --label disk=nvme`) and are never probed from the
+host agent, the same trust model as `--gpu-kind`.
+
+A pin is a constraint, not a reservation: two environments pinned to the same
+host draw down the same capacity, and the second fails if it no longer fits.
+
+`fuse host <id>` is still **not** pinning. It sets a client-side scope that
+filters what `fuse environment list` shows you, nothing more, and create says so
+when you have one set:
+
+```bash
+note: create is orchestrator-scheduled; the active host "gpu-1" does not pin placement (pass --host gpu-1 to pin it)
+```
+
+Forks are an exception to all of this: a fork is already pinned to its source's
+host (the seed snapshot's rootfs is host-local) and bypasses the scheduler, so it
+does not inherit the source's `placement`.
 
 ## The filter chain
 
-Every registered host is tested against four gates, in order. A host that fails
+Every registered host is tested against these gates, in order. A host that fails
 any of them is out; there is no partial credit and no fallback tier.
 
 | Gate | Rule |
 | --- | --- |
+| Host pin | If the spec names a `host_id` (`placement.host`), only that host is considered. An unknown id is a `404` before any VM is created; a real but ineligible host fails with the gate that rejected it. |
 | State | The host must be `active`. Both `cordoned` and `draining` are excluded. |
 | Region | If the spec names a region, the host's region must match it exactly. An empty region disables the gate rather than preferring anything. |
 | Backend | A spec asking for GPUs is only placed on a `qemu` host. |
+| Labels | If the spec names `labels` (`placement.labels`), every pair must match the host's declared labels. An empty selector disables the gate. |
 | Capacity | The host must have room, see below. |
+
+Region lives under `resources`, not `placement`, for historical reasons: it
+predates the block and a second spelling of the same selector would be worse than
+the split.
 
 The backend gate is defensive. Registration already refuses GPU capacity on a
 Firecracker host, so this second check exists to catch a stale or hand-edited
@@ -141,16 +169,31 @@ surfaced as a `503`. Fuse does not queue the request or wait for room to appear,
 a placement either succeeds now or is rejected now.
 
 :::warning[Known limitation]
-The rejection message reports only the CPU, RAM, and storage that were
+The capacity rejection message reports only the CPU, RAM, and storage that were
 requested. A request rejected because of its region or its GPU kind still
 produces a message about CPU and memory, so it can read as a capacity problem
 when it is really a matching problem. Check the host's region and GPU inventory
-before adding hardware.
+before adding hardware. Host pins and label selectors are exempt: they report
+the gate that rejected them.
 :::
+
+Placement failures are reported distinctly rather than as capacity shortfalls:
+
+- An unknown `placement.host` is a `404` (`host ... is not registered`), raised at
+  the API boundary before a VM row exists.
+- A pin to a real but ineligible host is a `503` naming the host and the gate
+  (`host "build-3" is cordoned, not active`).
+- A label selector that matches nothing is a `503` reporting the selector and how
+  many hosts were considered
+  (`disk=nvme,tier=build matched none of 4 schedulable hosts`).
+- A pinned or labelled host that matches but has no room falls back to the normal
+  capacity message: that really is a capacity problem.
 
 A GPU request made when no GPU host is registered at all fails differently, with
 `gpu workloads require a registered gpu host`, rather than reporting a capacity
-shortfall on hosts that could never have served it.
+shortfall on hosts that could never have served it. A placement request with no
+hosts registered at all fails with `placement requires registered hosts`, because
+the legacy single-provider path is not a scheduled host.
 
 ## Read next
 

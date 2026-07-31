@@ -36,7 +36,15 @@ class Spec(_Model):
     gpu_profile: Optional[str] = None
     region: Optional[str] = None
     max_runtime_seconds: Optional[int] = None
+    # destroys the environment after this many seconds with no exec and no
+    # attach session. none or 0 means no idle expiry.
+    idle_timeout_seconds: Optional[int] = None
     image: Optional[str] = None
+    # pins the environment to an exact host id (the fusefile's placement.host).
+    host_id: Optional[str] = None
+    # placement label selectors (the fusefile's placement.labels); every pair
+    # must match the target host's declared labels.
+    labels: Optional[dict[str, str]] = None
 
 
 class ExposeSpec(_Model):
@@ -124,6 +132,17 @@ class Event(BaseModel):
     error: str = ""
     updated_at: Optional[datetime] = None
     err: Optional[Exception] = Field(default=None, exclude=True)
+
+    # set only on "step" events, which report one setup step's boundary,
+    # timing, and cache verdict. zero on state events.
+    index: int = 0
+    total: int = 0
+    key: str = ""
+    cached: bool = False
+    miss_reason: str = ""
+    miss_detail: list[str] = Field(default_factory=list)
+    duration_ms: int = 0
+    exit_code: int = 0
 
 
 class SnapshotRequest(_Model):
@@ -222,6 +241,9 @@ class RegisterHostRequest(_Model):
     token: Optional[str] = None
     region: Optional[str] = None
     backend: Optional[str] = None
+    # operator-declared key/value pairs matched against a spec's placement
+    # label selectors. never probed from the host agent.
+    labels: Optional[dict[str, str]] = None
     capacity: HostCapacity = Field(default_factory=HostCapacity)
 
 
@@ -232,6 +254,7 @@ class Host(_Model):
     region: str = ""
     state: str = ""
     backend: str = ""
+    labels: dict[str, str] = Field(default_factory=dict)
     capacity: HostCapacity = Field(default_factory=HostCapacity)
     allocated: HostCapacity = Field(default_factory=HostCapacity)
     last_seen: Optional[datetime] = None

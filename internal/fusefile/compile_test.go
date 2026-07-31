@@ -92,6 +92,48 @@ func TestCompileMaxRuntime(t *testing.T) {
 	}
 }
 
+func TestCompileIdleTimeout(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  int64
+	}{
+		{"unset", "", 0},
+		{"one minute", "1m", 60},
+		{"fifteen minutes", "15m", 900},
+		{"two hours", "2h", 7200},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &Fusefile{Version: 1, Resources: Resources{IdleTimeout: tc.input}}
+			c, err := Compile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Spec.IdleTimeoutSeconds != tc.want {
+				t.Fatalf("idle_timeout_seconds = %d, want %d", c.Spec.IdleTimeoutSeconds, tc.want)
+			}
+		})
+	}
+}
+
+// idle_timeout and max_runtime are independent knobs: one is a ceiling from
+// create, the other a window from the last exec or attach.
+func TestCompileIdleTimeoutAndMaxRuntimeCoexist(t *testing.T) {
+	f := &Fusefile{Version: 1, Resources: Resources{MaxRuntime: "4h", IdleTimeout: "15m"}}
+	c, err := Compile(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Spec.MaxRuntimeSeconds != 14400 {
+		t.Errorf("max_runtime_seconds = %d, want 14400", c.Spec.MaxRuntimeSeconds)
+	}
+	if c.Spec.IdleTimeoutSeconds != 900 {
+		t.Errorf("idle_timeout_seconds = %d, want 900", c.Spec.IdleTimeoutSeconds)
+	}
+}
+
 func TestCompileCPUsPassthrough(t *testing.T) {
 	f := &Fusefile{Version: 1, Resources: Resources{CPUs: 4}}
 	c, err := Compile(f)
@@ -177,7 +219,7 @@ func TestCompileEmptyResources(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if c.Spec.CPUs != 0 || c.Spec.RamMB != 0 || c.Spec.StorageGB != 0 || c.Spec.MaxRuntimeSeconds != 0 || c.Spec.Region != "" || c.Spec.GPUs != 0 || c.Spec.GPUKind != "" {
+	if c.Spec.CPUs != 0 || c.Spec.RamMB != 0 || c.Spec.StorageGB != 0 || c.Spec.MaxRuntimeSeconds != 0 || c.Spec.IdleTimeoutSeconds != 0 || c.Spec.Region != "" || c.Spec.GPUs != 0 || c.Spec.GPUKind != "" {
 		t.Fatalf("expected zero spec, got %+v", c.Spec)
 	}
 }
@@ -225,6 +267,26 @@ func TestCompileInvalid(t *testing.T) {
 			name:        "invalid duration",
 			resources:   Resources{MaxRuntime: "1 hour"},
 			wantContain: `resources.max_runtime: `,
+		},
+		{
+			name:        "negative max_runtime",
+			resources:   Resources{MaxRuntime: "-1h"},
+			wantContain: `resources.max_runtime: must not be negative`,
+		},
+		{
+			name:        "invalid idle_timeout duration",
+			resources:   Resources{IdleTimeout: "15 minutes"},
+			wantContain: `resources.idle_timeout: `,
+		},
+		{
+			name:        "negative idle_timeout",
+			resources:   Resources{IdleTimeout: "-15m"},
+			wantContain: `resources.idle_timeout: must not be negative`,
+		},
+		{
+			name:        "sub-minute idle_timeout",
+			resources:   Resources{IdleTimeout: "10s"},
+			wantContain: `resources.idle_timeout: must be at least 1m0s`,
 		},
 		{
 			name:        "negative gpu count",
@@ -380,13 +442,13 @@ func TestCompileStartupScript(t *testing.T) {
 	cases := []struct {
 		name      string
 		workspace string
-		setup     []string
+		setup     []Step
 		run       string
 		want      string
 	}{
-		{"setup and run", "", []string{"a", "b"}, "./c", prelude + "a\nb\n./c\n"},
+		{"setup and run", "", []Step{{Run: "a"}, {Run: "b"}}, "./c", prelude + "a\nb\n./c\n"},
 		{"run only", "", nil, "./c", prelude + "./c\n"},
-		{"setup only", "", []string{"a"}, "", prelude + "a\n"},
+		{"setup only", "", []Step{{Run: "a"}}, "", prelude + "a\n"},
 		{"neither", "", nil, "", ""},
 		{
 			"custom workspace",
@@ -430,13 +492,13 @@ func TestCompileBuildAndRunScripts(t *testing.T) {
 		"mkdir -p '/workspace'\ncd '/workspace'\n"
 	cases := []struct {
 		name      string
-		setup     []string
+		setup     []Step
 		run       string
 		wantBuild string
 		wantRun   string
 	}{
-		{"setup and run", []string{"a", "b"}, "./c", prelude + "a\nb\n", prelude + "./c\n"},
-		{"setup only", []string{"a"}, "", prelude + "a\n", ""},
+		{"setup and run", []Step{{Run: "a"}, {Run: "b"}}, "./c", prelude + "a\nb\n", prelude + "./c\n"},
+		{"setup only", []Step{{Run: "a"}}, "", prelude + "a\n", ""},
 		{"run only", nil, "./c", "", prelude + "./c\n"},
 		{"neither", nil, "", "", ""},
 	}
@@ -460,6 +522,33 @@ func TestCompileBuildAndRunScripts(t *testing.T) {
 				t.Fatalf("build script %q contains the run command %q", c.BuildScript, tc.run)
 			}
 		})
+	}
+}
+
+// the mapping form of a setup step must emit the same fragment the bare scalar
+// form does, in every generated script. layer keys are derived from that same
+// fragment, so a build that ran something else than the key covered would serve
+// a stale layer.
+func TestCompileMappingStepsEmitRunOnly(t *testing.T) {
+	cacheOff := false
+	f := &Fusefile{Version: 1, Setup: []Step{
+		{Run: "apt-get update -qq"},
+		{Run: "npm ci", Inputs: []string{"package.json"}},
+		{Run: "./register.sh", Cache: &cacheOff},
+	}}
+	c, err := Compile(f)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	const prelude = "set -eu\nif (set -o pipefail) 2>/dev/null; then set -o pipefail; fi\n" +
+		"mkdir -p '/workspace'\ncd '/workspace'\n"
+	want := prelude + "apt-get update -qq\nnpm ci\n./register.sh\n"
+	if c.BuildScript != want {
+		t.Errorf("build script = %q, want %q", c.BuildScript, want)
+	}
+	if c.StartupScript != want {
+		t.Errorf("startup script = %q, want %q", c.StartupScript, want)
 	}
 }
 
@@ -570,5 +659,97 @@ func TestParseSize(t *testing.T) {
 				t.Fatalf("mb = %d, want %d", mb, tc.wantMB)
 			}
 		})
+	}
+}
+
+func TestCompilePlacement(t *testing.T) {
+	f := &Fusefile{
+		Version: 1,
+		Placement: Placement{
+			Host:   "build-3",
+			Labels: map[string]string{"disk": "nvme"},
+		},
+	}
+	c, err := Compile(f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Spec.HostID != "build-3" {
+		t.Errorf("spec.HostID = %q, want build-3", c.Spec.HostID)
+	}
+	if !reflect.DeepEqual(c.Spec.Labels, map[string]string{"disk": "nvme"}) {
+		t.Errorf("spec.Labels = %v, want disk=nvme", c.Spec.Labels)
+	}
+	// the compiled spec must not alias the Fusefile's map.
+	c.Spec.Labels["disk"] = "ssd"
+	if f.Placement.Labels["disk"] != "nvme" {
+		t.Errorf("compile aliased the fusefile label map")
+	}
+}
+
+func TestCompileEmptyPlacementLeavesSpecEmpty(t *testing.T) {
+	c, err := Compile(&Fusefile{Version: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Spec.HostID != "" || c.Spec.Labels != nil {
+		t.Errorf("spec placement = %q/%v, want empty (nil labels keep the scheduler fast path)",
+			c.Spec.HostID, c.Spec.Labels)
+	}
+}
+
+func TestValidLabel(t *testing.T) {
+	valid := []string{"a", "nvme", "disk", "tier-1", "a.b_c-d", "A1", strings.Repeat("x", 63)}
+	for _, s := range valid {
+		if !ValidLabel(s) {
+			t.Errorf("ValidLabel(%q) = false, want true", s)
+		}
+	}
+	invalid := []string{"", " ", "-lead", "trail-", "has space", "has/slash", "has=eq", strings.Repeat("x", 64)}
+	for _, s := range invalid {
+		if ValidLabel(s) {
+			t.Errorf("ValidLabel(%q) = true, want false", s)
+		}
+	}
+}
+
+func TestCompileStartupTimeout(t *testing.T) {
+	cases := []struct {
+		in   string
+		want int64
+	}{
+		{"", 0},       // unset: the orchestrator's default applies
+		{"45s", 45},   //
+		{"2m", 120},   //
+		{"1500ms", 2}, // rounded up, never floored to the "unset" zero
+	}
+	for _, tc := range cases {
+		c, err := Compile(&Fusefile{Version: 1, StartupTimeout: tc.in})
+		if err != nil {
+			t.Fatalf("Compile(%q): %v", tc.in, err)
+		}
+		if c.StartupTimeoutSeconds != tc.want {
+			t.Errorf("Compile(%q) = %d seconds, want %d", tc.in, c.StartupTimeoutSeconds, tc.want)
+		}
+	}
+}
+
+func TestCompileStartupTimeoutErrors(t *testing.T) {
+	cases := []struct {
+		in          string
+		wantContain string
+	}{
+		{"1 minute", "startup_timeout: "},
+		{"0s", `startup_timeout: must be positive`},
+		{"-5s", `startup_timeout: must be positive`},
+	}
+	for _, tc := range cases {
+		_, err := Compile(&Fusefile{Version: 1, StartupTimeout: tc.in})
+		if err == nil {
+			t.Fatalf("Compile(%q): expected error, got nil", tc.in)
+		}
+		if !strings.Contains(err.Error(), tc.wantContain) {
+			t.Errorf("Compile(%q) error %q does not contain %q", tc.in, err.Error(), tc.wantContain)
+		}
 	}
 }

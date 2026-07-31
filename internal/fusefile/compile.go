@@ -26,10 +26,18 @@ type ResourceSpec struct {
 	StorageGB         int32
 	Region            string
 	MaxRuntimeSeconds int64
-	Image             string
-	GPUs              int32
-	GPUKind           string
-	GPUProfile        string
+	// IdleTimeoutSeconds destroys the environment after this many seconds
+	// with no exec and no attach session. Zero means no idle expiry.
+	IdleTimeoutSeconds int64
+	Image              string
+	GPUs               int32
+	GPUKind            string
+	GPUProfile         string
+	// HostID pins the environment to an exact host id (placement.host).
+	HostID string
+	// Labels are the placement label selectors (placement.labels); every
+	// pair must match the host's declared labels.
+	Labels map[string]string
 }
 
 // ExposeSpec requests that a guest port be published as a reachable
@@ -58,11 +66,37 @@ type Compiled struct {
 	// already baked into a seed rootfs (`fuse up --from-build`). Replaying
 	// setup there would redo the work the artifact exists to skip.
 	RunScript string
+
+	// StartupTimeoutSeconds carries Fusefile.StartupTimeout to the wire.
+	// Zero means the author did not ask for one and the orchestrator's
+	// default applies.
+	StartupTimeoutSeconds int64
 }
+
+// MaxFilesBytes caps the total decoded size of Fusefile.Files.
+//
+// The binding constraint is not the 1 MiB create body (api.MaxEnvironmentBodyBytes)
+// but the way the script is delivered: the orchestrator runs it as
+// `sh -lc <script>` and the host agent joins that into one shell word before
+// handing it to ssh, so the whole script ends up as a single argv element.
+// Linux caps one argument at MAX_ARG_STRLEN, 128 KiB, and overflowing it fails
+// the boot with a bare E2BIG rather than anything an author could act on.
+//
+// 64 KiB of files becomes roughly 88 KiB of base64 once wrapped, which leaves
+// around 40 KiB for the prelude, setup, and run. Exceeding the cap is a compile
+// error rather than a runtime failure, so the author learns at `fuse up` time
+// which file pushed them over.
+const MaxFilesBytes = 64 << 10
 
 // defaultWorkspace is used for manifest.machine.workspace when Fusefile.Workspace
 // is unset.
 const defaultWorkspace = "/workspace"
+
+// MinIdleTimeout is the smallest meaningful resources.idle_timeout. Idle
+// expiry is detected on the orchestrator's reconcile loop (30s default) and
+// requires two consecutive observations, so anything shorter than this
+// promises a precision the loop cannot deliver.
+const MinIdleTimeout = time.Minute
 
 // manifest is the compiler-local marshal type for the guest-facing manifest
 // json. it mirrors DefaultFusedManifest (internal/orchestrator/agent_profile.go)
@@ -106,6 +140,19 @@ var gpuProfilePattern = regexp.MustCompile(`^[1-7]g\.\d+gb(\+me)?$`)
 // Fusefile authors.
 func ValidGPUProfile(s string) bool {
 	return gpuProfilePattern.MatchString(strings.ToLower(s))
+}
+
+// labelPattern is the accepted form for a placement label key or value:
+// alphanumeric at both ends, dots, dashes, and underscores inside, 63 chars
+// max. Deliberately narrow so a label is safe to render in an error message
+// and to compare byte-for-byte against a host's declared labels.
+var labelPattern = regexp.MustCompile(`^[a-zA-Z0-9]([-._a-zA-Z0-9]{0,61}[a-zA-Z0-9])?$`)
+
+// ValidLabel reports whether s is a well-formed placement label key or value.
+// Shared with the API layer so raw SDK callers and host registration are held
+// to the same vocabulary as Fusefile authors.
+func ValidLabel(s string) bool {
+	return labelPattern.MatchString(s)
 }
 
 // nonMIGCapableKinds are GPU model families that are known NOT to support
@@ -158,16 +205,56 @@ func Compile(f *Fusefile) (*Compiled, error) {
 	var maxRuntimeSeconds int64
 	if f.Resources.MaxRuntime != "" {
 		d, err := time.ParseDuration(f.Resources.MaxRuntime)
-		if err != nil {
+		switch {
+		case err != nil:
 			errs = append(errs, fmt.Errorf("resources.max_runtime: %w", err))
-		} else {
+		case d < 0:
+			errs = append(errs, fmt.Errorf("resources.max_runtime: must not be negative"))
+		default:
 			maxRuntimeSeconds = int64(d.Seconds())
+		}
+	}
+
+	var idleTimeoutSeconds int64
+	if f.Resources.IdleTimeout != "" {
+		d, err := time.ParseDuration(f.Resources.IdleTimeout)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("resources.idle_timeout: %w", err))
+		case d < 0:
+			errs = append(errs, fmt.Errorf("resources.idle_timeout: must not be negative"))
+		case d > 0 && d < MinIdleTimeout:
+			// idle expiry is only as accurate as the reconcile tick plus the
+			// two-strike rule, so sub-minute windows would be misleading.
+			errs = append(errs, fmt.Errorf(
+				"resources.idle_timeout: must be at least %s (idle detection runs on the reconcile loop)",
+				MinIdleTimeout))
+		default:
+			idleTimeoutSeconds = int64(d.Seconds())
+		}
+	}
+
+	var startupTimeoutSeconds int64
+	if f.StartupTimeout != "" {
+		d, err := time.ParseDuration(f.StartupTimeout)
+		switch {
+		case err != nil:
+			errs = append(errs, fmt.Errorf("startup_timeout: %w", err))
+		case d <= 0:
+			errs = append(errs, fmt.Errorf("startup_timeout: must be positive, got %q", f.StartupTimeout))
+		default:
+			// Round up so a sub-second request is never floored to zero,
+			// which the wire reads as "unset" and would silently hand back
+			// the orchestrator default instead of the bound asked for.
+			startupTimeoutSeconds = int64((d + time.Second - 1) / time.Second)
 		}
 	}
 
 	if f.Resources.GPU < 0 {
 		errs = append(errs, fmt.Errorf("resources.gpu: must not be negative"))
 	}
+
+	errs = append(errs, validateFiles(f.Files)...)
 
 	if f.Resources.GPUProfile != "" {
 		if !ValidGPUProfile(f.Resources.GPUProfile) {
@@ -201,20 +288,37 @@ func Compile(f *Fusefile) (*Compiled, error) {
 			RamMB: ramMB,
 			// round up so any positive storage request is never silently zeroed
 			// (e.g. "512MB" must provision 1GB, not floor to 0).
-			StorageGB:         int32((int64(storageMB) + 1023) / 1024),
-			MaxRuntimeSeconds: maxRuntimeSeconds,
-			Image:             f.Image,
-			GPUs:              int32(f.Resources.GPU),
-			GPUKind:           f.Resources.GPUKind,
-			GPUProfile:        strings.ToLower(f.Resources.GPUProfile),
+			StorageGB:          int32((int64(storageMB) + 1023) / 1024),
+			MaxRuntimeSeconds:  maxRuntimeSeconds,
+			IdleTimeoutSeconds: idleTimeoutSeconds,
+			Image:              f.Image,
+			GPUs:               int32(f.Resources.GPU),
+			GPUKind:            f.Resources.GPUKind,
+			GPUProfile:         strings.ToLower(f.Resources.GPUProfile),
+			HostID:             f.Placement.Host,
+			Labels:             compileLabels(f.Placement.Labels),
 		},
-		ManifestJSON:    manifestJSON,
-		StartupScript:   compileStartupScript(f),
-		BuildScript:     compileBuildScript(f),
-		RunScript:       compileRunScript(f),
-		RequiredSecrets: requiredSecrets,
-		Expose:          compileExpose(f),
+		ManifestJSON:          manifestJSON,
+		StartupScript:         compileStartupScript(f),
+		BuildScript:           compileBuildScript(f),
+		RunScript:             compileRunScript(f),
+		RequiredSecrets:       requiredSecrets,
+		Expose:                compileExpose(f),
+		StartupTimeoutSeconds: startupTimeoutSeconds,
 	}, nil
+}
+
+// compileLabels copies the placement label selectors so the compiled spec
+// never aliases the parsed Fusefile. Nil (and empty) in, nil out.
+func compileLabels(in map[string]string) map[string]string {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(in))
+	for k, v := range in {
+		out[k] = v
+	}
+	return out
 }
 
 // compileExpose carries Fusefile.Expose through unchanged, one-for-one.
@@ -288,9 +392,23 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
-// compileStartupScript joins setup lines and the run command into a single
-// shell script with a strict-mode prelude. if there is nothing to run (no
-// setup lines and no run command), it returns "" rather than a bare prelude.
+// setupScripts returns the shell fragment emitted for each setup step, in
+// order. compileStartupScript concatenates exactly this, and layer key
+// derivation hashes exactly this, so the key and the emitted script cannot
+// drift apart. a step's fragment is its `run` string byte for byte: no
+// normalization, because guessing at semantic equivalence is how a cache
+// serves a stale rootfs.
+func setupScripts(f *Fusefile) []string {
+	if len(f.Setup) == 0 {
+		return nil
+	}
+	out := make([]string, len(f.Setup))
+	for i, step := range f.Setup {
+		out[i] = step.Run
+	}
+	return out
+}
+
 // scriptPrelude renders the strict-mode header and the workspace cd that every
 // generated script shares.
 //
@@ -314,39 +432,63 @@ func scriptPrelude(f *Fusefile) string {
 	return b.String()
 }
 
-// compileBuildScript renders the setup lines alone, without the run command.
-// an empty setup phase yields "" rather than a bare prelude, matching
-// compileStartupScript.
+// compileBuildScript renders the file block and the setup steps, without the
+// run command. an empty setup phase yields "" rather than a bare prelude:
+// `fuse build` exists to bake setup, and files alone are re-materialized on
+// every boot anyway, so there is nothing to bake.
+//
+// after the file block it emits exactly the fragments layer keys are derived
+// from, so a `fuse build` runs the same bytes the plan hashed. the files
+// themselves are folded into the base key instead, since they are part of the
+// state the first step builds on rather than a step of their own.
 func compileBuildScript(f *Fusefile) string {
 	if len(f.Setup) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString(scriptPrelude(f))
-	for _, line := range f.Setup {
-		b.WriteString(line)
+	b.WriteString(renderFiles(f.Files))
+	for _, script := range setupScripts(f) {
+		b.WriteString(script)
 		b.WriteString("\n")
 	}
 	return b.String()
 }
 
-// compileRunScript renders the run command alone, without the setup lines.
+// compileRunScript renders the file block and the run command, without the
+// setup steps.
+//
+// Files are re-materialized here even though a `fuse build` artifact already
+// carries the copy written during the bake: they are authoring inputs that may
+// have been edited since, and rewriting a few KiB is cheap. Setup is the
+// expensive work --from-build exists to skip; files are not.
 func compileRunScript(f *Fusefile) string {
-	if f.Run == "" {
+	if f.Run == "" && len(f.Files) == 0 {
 		return ""
 	}
-	return scriptPrelude(f) + f.Run + "\n"
+	var b strings.Builder
+	b.WriteString(scriptPrelude(f))
+	b.WriteString(renderFiles(f.Files))
+	if f.Run != "" {
+		b.WriteString(f.Run)
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
+// compileStartupScript joins the setup steps and the run command into a single
+// shell script with a strict-mode prelude. if there is nothing to run (no
+// setup steps and no run command), it returns "" rather than a bare prelude.
 func compileStartupScript(f *Fusefile) string {
-	if len(f.Setup) == 0 && f.Run == "" {
+	if len(f.Setup) == 0 && f.Run == "" && len(f.Files) == 0 {
 		return ""
 	}
 
 	var b strings.Builder
 	b.WriteString(scriptPrelude(f))
-	for _, line := range f.Setup {
-		b.WriteString(line)
+	b.WriteString(renderFiles(f.Files))
+	for _, script := range setupScripts(f) {
+		b.WriteString(script)
 		b.WriteString("\n")
 	}
 	if f.Run != "" {

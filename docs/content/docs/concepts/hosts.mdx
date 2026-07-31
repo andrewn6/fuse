@@ -53,6 +53,25 @@ than hardware facts the agent can observe: `--max-vms` is a ceiling you choose, 
 `--mig-profile profile=count` describes MIG instances that must already have been
 created on the host before Fuse ever sees them.
 
+## Labels
+
+A host can carry operator-chosen labels that a Fusefile's `placement.labels`
+selector matches on:
+
+```bash
+fuse host register build-3 --url https://build-3.internal:8080 \
+  --max-vms 8 --label disk=nvme --label tier=build
+```
+
+Labels are **declared, never probed**. Fuse does not verify that `disk=nvme`
+describes the box, exactly as it does not verify `--gpu-kind a100`: they are your
+claim about the hardware, and a wrong claim sends work to the wrong place. Keys
+and values are alphanumeric with `.`, `-`, and `_` inside, up to 63 characters.
+
+`fuse host get <id>` shows a host's labels. See
+[Scheduling and placement](/docs/concepts/scheduling) for how the selector gate
+works.
+
 A GPU host therefore tracks two independent pools: whole devices, and MIG instances
 counted per profile. They do not draw down on each other, a MIG placement never
 consumes a whole device. Because the GPU inventory is per-device rather than a bare

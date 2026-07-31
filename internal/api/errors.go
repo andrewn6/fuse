@@ -44,7 +44,9 @@ func classifyFleetError(err error) (status int, code string) {
 		errors.Is(err, orchestrator.ErrSnapshotNotFound):
 		return http.StatusNotFound, CodeNotFound
 	case errors.Is(err, orchestrator.ErrNoCapacity),
-		errors.Is(err, orchestrator.ErrNoHosts):
+		errors.Is(err, orchestrator.ErrNoHosts),
+		errors.Is(err, orchestrator.ErrHostPinUnschedulable),
+		errors.Is(err, orchestrator.ErrNoLabelMatch):
 		return http.StatusServiceUnavailable, CodeUnavailable
 	case errors.Is(err, orchestrator.ErrSnapshotQuotaExceeded),
 		errors.Is(err, orchestrator.ErrSnapshotInvalidState),
@@ -58,7 +60,8 @@ func classifyFleetError(err error) (status int, code string) {
 		errors.Is(err, orchestrator.ErrSnapshotUnsupported):
 		return http.StatusNotImplemented, CodeUnimplemented
 	case errors.Is(err, secrets.ErrSecretsValidation),
-		errors.Is(err, orchestrator.ErrStartupScriptTimeout):
+		errors.Is(err, orchestrator.ErrStartupScriptTimeout),
+		errors.Is(err, orchestrator.ErrStartupScriptTimeoutTooLarge):
 		return http.StatusBadRequest, CodeInvalidArgument
 	default:
 		return http.StatusInternalServerError, CodeInternal

@@ -82,11 +82,36 @@ The practical effect is that the real time-to-failure is the ceiling plus one
 interval, and a `task.stuck_suspected` event fires on the first strike, giving
 you roughly 30 seconds of warning in the event stream.
 
+## Idle environments
+
+Idle detection is the liveness check stuck-task detection is not. An environment
+is a candidate when its VM is `running`, no attach session is open, and it has
+gone longer than its idle timeout with no exec and no attach. The timeout is the
+environment's own `idle_timeout` when set, and otherwise the fleet default, which
+is unset: an environment that does not ask for idle expiry never gets it.
+
+**The clock measures time since the last activity**, not total lifetime, and
+activity means exactly two things: an `exec` call, and an open attach session. An
+attach session counts for as long as it stays open, however quiet, and the window
+restarts when it closes. In-guest CPU use and traffic on exposed ports are not
+observed, because the loop has no channel for either. A VM busy computing with
+nobody attached is idle as far as this predicate is concerned.
+
+Detection is two-strike like stuck-task detection, with a `vm.idle_suspected`
+event on the first strike, so resolution is bounded by roughly two intervals.
+There is no pause or suspend in the stack, so the second strike destroys the
+environment down the same path a stuck task takes: the VM goes to `destroying`,
+its task (if any) is failed, and an `idle_timeout` dead letter is recorded.
+
+The activity clock lives in memory only. Restarting the orchestrator restarts
+every environment's idle window rather than inheriting a stale one.
+
 ## Dead letters
 
-Orphans that exhaust their retries and tasks failed for being stuck are both
-recorded in a dead-letter queue, keyed by kind and entity so repeated failures
-update one row rather than piling up duplicates.
+Orphans that exhaust their retries, tasks failed for being stuck, and
+environments torn down for being idle are all recorded in a dead-letter queue,
+keyed by kind and entity so repeated failures update one row rather than piling
+up duplicates.
 
 The queue is an **inspection surface only**. Nothing drains it, nothing retries
 from it, and writes to it are best-effort, a failure to record a dead letter is

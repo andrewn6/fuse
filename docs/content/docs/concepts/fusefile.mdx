@@ -14,13 +14,29 @@ A Fusefile is parsed and compiled entirely client-side (by the CLI) into the
 orchestrator's wire format. The orchestrator itself never sees a Fusefile, only the
 compiled `CreateEnvironmentRequest`.
 
+Everything below is the complete field reference. If you have not written one
+before, start with [Your first Fusefile](/docs/learn/first-fusefile), which is
+the smallest file that boots, explained line by line.
+
 ## Full field reference
 
 ```yaml
 version: 1
 
-# base environment. an oci image ref, or omitted to use the baked base rootfs.
-image: ghcr.io/acme/worker:latest
+# base rootfs to boot, by name. NOT an oci ref -- the host agent resolves it
+# against the rootfs images baked on that host. omit for the host's default.
+image: worker-base
+
+# files materialized in the guest before setup runs. config and small code only;
+# the combined size is capped at 64KiB.
+files:
+  - path: config/app.yaml # relative paths resolve against the workspace
+    source: ./app.yaml # read relative to this Fusefile, not the cwd
+  - path: entrypoint.sh
+    content: | # or inline the body instead of naming a source
+      #!/bin/sh
+      echo hello
+    mode: "0755" # optional octal mode
 
 resources:
   cpus: 2
@@ -29,12 +45,35 @@ resources:
   gpu_profile: 1g.10gb # optional MIG profile; omit for whole devices
   memory: 2GB         # accepts MB/GB suffixes, compiles to ram_mb
   storage: 10GB       # compiles to storage_gb
-  max_runtime: 1h     # accepts go duration, compiles to max_runtime_seconds
+  max_runtime: 1h     # hard ttl from create; a leak ceiling, not a budget
+  idle_timeout: 15m   # destroyed after this long with no exec and no attach
+
+# hard placement constraints for a self-hosted fleet. every field is a gate,
+# not a preference: a request that matches no host is rejected, never queued.
+placement:
+  host: build-3       # exact host id. still has to clear the other gates.
+  labels:             # every pair must match the host's declared labels (AND).
+    disk: nvme
+    tier: build
+
+# opt in to the setup layer cache. off by default.
+cache:
+  enabled: true
 
 # convenience layer run once at boot, before run. compiles into startup_script.
 setup:
-  - apt-get update -qq
-  - apt-get install -y --no-install-recommends ripgrep
+  # bare string form: one step, keyed on its bytes plus the step before it.
+  - apt-get update -qq && apt-get install -y --no-install-recommends ripgrep
+
+  # mapping form: `inputs` are hashed into the step's cache key.
+  - run: npm ci
+    inputs:
+      - package.json
+      - package-lock.json
+
+  # a step that reads secrets or has effects outside the rootfs must opt out.
+  - run: ./scripts/register-with-vault.sh
+    cache: false
 
 # services brought up inside the vm. compiles to manifest.services then a compose project.
 services:
@@ -46,6 +85,10 @@ services:
   redis:
     image: redis:7
     ports: [6379]
+
+# bound on setup + run. default 30s, ceiling is an operator setting (55s out of
+# the box). headroom for a slow setup, not a budget for a long one.
+startup_timeout: 55s
 
 # the main task entrypoint. compiles into startup_script (after setup).
 run: ./start.sh
@@ -68,21 +111,135 @@ secrets:
 | Field | Type | Notes |
 | --- | --- | --- |
 | `version` | int | Currently always `1`. |
-| `image` | string | OCI image ref. Omit to use the baked base rootfs. |
+| `image` | string | Name of a rootfs pre-baked on the host, **not** an OCI image ref. There is no OCI pull: fc-agent resolves it to `<IMAGES_DIR>/<image>.ext4` and qemu-agent to `<IMAGES_DIR>/<image>.qcow2`, and returns a 400 if no such file exists. An operator bakes and places it out of band (e.g. with `fc-bake-rootfs.sh`). Omit to use the baked base rootfs. See [Base images](#base-images-are-not-oci-images). |
+| `files` | list of `{path, source \| content, mode}` | Files written into the guest before `setup` runs. See [Files](#files). |
 | `resources.cpus` | int | vCPU count. |
 | `resources.gpu` | int | Device count. Whole GPUs by default, or MIG instances when `gpu_profile` is set. Requires a host registered with the `qemu` backend. |
 | `resources.gpu_kind` | string | Optional GPU model match, e.g. `a100`. See [Providers](/docs/concepts/providers). |
 | `resources.gpu_profile` | string | Optional MIG profile, e.g. `1g.10gb`. Requests a fractional slice of a GPU instead of whole devices. See [GPU workloads](/docs/guides/gpu-workloads). |
 | `resources.memory` | string | Accepts `MB`/`GB` suffixes; compiles to `ram_mb`. |
 | `resources.storage` | string | Accepts `MB`/`GB` suffixes; compiles to `storage_gb`. |
-| `resources.max_runtime` | string | Go duration (`1h`, `30m`); compiles to `max_runtime_seconds`. |
-| `setup` | list of strings | Commands run once at boot, before `run`. Compiled into `startup_script`. |
+| `resources.max_runtime` | string | Go duration (`1h`, `30m`); compiles to `max_runtime_seconds`. A leak-detection ceiling measured from create, *not* a task budget. See [Reconciliation](/docs/concepts/reconcile). |
+| `resources.idle_timeout` | string | Go duration, minimum `1m`; compiles to `idle_timeout_seconds`. Destroys the environment once it has gone this long with no exec and no attach session. Omit for no idle expiry. |
+| `placement.host` | string | Pins the environment to an exact host id. A pin is not an override: the host must still be active, run the right backend, and fit the request. An unknown host id fails fast with a 404. |
+| `placement.labels` | map | Label selectors matched against the labels an operator declared with `fuse host register --label key=value`. Every pair must match (AND). A selector that matches no host is rejected immediately. |
+| `cache.enabled` | bool | Opt in to the setup layer cache. Off by default. |
+| `setup` | list of strings or steps | Commands run once at boot, before `run`. Compiled into `startup_script`. Each entry is either a bare string or a `{run, inputs, cache}` mapping. |
+| `setup[].run` | string | The step's shell command. Required in the mapping form. |
+| `setup[].inputs` | list of strings | Files (or directories, or globs) whose contents are hashed into the step's cache key. Relative to the Fusefile's directory; absolute and `..`-traversing paths are rejected. |
+| `setup[].cache` | bool | Set `false` to make the step uncacheable. Required for a step that reads secrets or has effects outside the rootfs. |
 | `services` | map | In-VM services, each with `image`, `ports`, and `env`. Compiles to `manifest.services` plus a compose project. |
 | `services.*.env.*` | literal or secret ref | Exactly one of `value` or `secret` must be set per entry. `{ secret: name }` resolves from the `secrets` you supply at `up` time. |
 | `run` | string | The main entrypoint, compiled into `startup_script` after `setup`. |
+| `startup_timeout` | string | Go duration bounding `setup` + `run`. Omit for the orchestrator default (30s). See [Startup timeout](#startup-timeout). |
 | `workspace` | string | Working directory inside the guest. |
 | `expose` | list of `{port, as}` | Guest ports published externally. |
 | `secrets` | list of strings | Secret *names* this environment requires. Values are supplied out-of-band via `--secret key=value` or `--secrets-file`, never written into the Fusefile itself. |
+
+## Lifetime fields
+
+`max_runtime` and `idle_timeout` answer different questions and neither replaces
+the other.
+
+`max_runtime` is a **ceiling measured from create**. The reconcile loop uses it to
+find leaks: a VM older than its ceiling that still carries a task is destroyed. It
+is not a budget and not a health check, so making progress does not spare a VM and
+being wedged does not doom one. Set it above any plausible healthy runtime.
+
+`idle_timeout` is a **window measured from the last activity**. An environment is
+idle when nobody has exec'd into it and no attach session is open. Once the window
+elapses the environment is destroyed. There is no pause or suspend anywhere in the
+stack, so idle expiry means teardown, not scale-to-zero.
+
+Activity means exactly two things: an `exec` call, and an open attach session. An
+attach session counts for as long as it stays open, however quiet it is, and the
+window restarts when it closes. In-guest CPU use and traffic on exposed ports are
+**not** observed, so a VM computing hard with nobody attached will still be torn
+down once its window elapses. If that is your workload, do not set `idle_timeout`.
+
+Detection runs on the reconcile loop (30s ticks) and requires two consecutive
+observations, so real teardown lands roughly one to two ticks after the window
+elapses. That is why the minimum accepted value is `1m`.
+## Base images are not OCI images
+
+`image` names a rootfs that has already been baked onto the host, and the host
+agent resolves that name against the images stored there. It is not a container
+reference, and there is no registry pull: `image: ghcr.io/acme/worker:latest`
+fails the create with `base image not found`.
+
+The distinction is per-field, not global. `services[].image` **is** an OCI
+reference, because services run as containers inside the guest via podman and
+compose. Only the top-level `image`, which decides what disk the VM boots from,
+is a host-local rootfs name.
+
+To get a custom base, either bake a rootfs on the host (`fc-bake-rootfs.sh`, or
+`qemu-bake-cuda-rootfs.sh` for GPU hosts) or run
+[`fuse build`](/reference/cli/build), which runs your `setup` phase once and
+snapshots the result into a bootable artifact.
+
+## Files
+
+`files` writes files into the guest before `setup` runs, so setup and run can
+read config, scripts, and small source trees that live next to the Fusefile
+rather than being fetched at boot.
+
+```yaml
+files:
+  - path: config/app.yaml
+    source: ./app.yaml
+  - path: entrypoint.sh
+    content: |
+      #!/bin/sh
+      exec python -m app
+    mode: "0755"
+```
+
+Each entry sets exactly one of `source` (a path on your machine, resolved
+relative to the Fusefile, not your working directory) and `content` (an inline
+literal). `path` is where it lands in the guest; a relative one resolves against
+the `workspace`. `mode` is an optional octal string.
+
+Entries compile into the startup script as base64 blocks, so content is carried
+verbatim: binary data, quotes, and shell metacharacters all survive, and nothing
+in a file is expanded by the shell.
+
+:::warning[This is a config transport, not a data transport]
+The startup script reaches the guest as a single shell argument, which Linux
+caps at 128 KiB, so the combined size of `files` is capped at **64 KiB**.
+Exceeding it is a compile error at `fuse up`, not a boot failure. Model weights,
+datasets, and container layers do not belong here. Fetch those from `setup` (or
+bake them in with `fuse build`), where they stream directly into the guest.
+:::
+
+Files are rewritten on every boot, including a `fuse up --from-build` boot that
+skips `setup`, since they are authoring inputs that may have changed since the
+artifact was baked.
+
+## Startup timeout
+
+`setup` and `run` compile into one `startup_script` that the orchestrator runs
+**synchronously inside the create request**. `startup_timeout` bounds it:
+
+```yaml
+startup_timeout: 55s
+```
+
+Omit it and the orchestrator's default (30s) applies. Exceed it and the create
+fails with `startup script did not complete in time`.
+
+Because the script runs inside the request, the bound is capped by an operator
+setting (`-max-startup-script-timeout`, 55s by default, which must stay under
+the server's `-write-timeout`). Asking for more than the ceiling is refused with
+a 400 naming the maximum, rather than being silently clamped to it.
+
+So this field is headroom for a setup phase that is a little slow, not a budget
+for one that is genuinely long. A setup that installs packages or pulls a model
+will not fit under any allowed value. Move that work into an image instead:
+
+```bash
+fuse build                    # runs setup once, on the 600s exec path
+fuse up --from-build <id>     # boots the result, skipping setup entirely
+```
 
 ## GPU fields
 
@@ -123,6 +280,73 @@ that kind. Hosts that report no per-device inventory fall back to their declared
 `gpu_kind`, and a host that declares neither is left for the qemu agent to accept
 or reject. See [GPU workloads](/docs/guides/gpu-workloads).
 
+## The setup layer cache
+
+`setup` steps compile into one startup script that re-runs in full on every
+`fuse up`. `cache: {enabled: true}` opts the Fusefile into content-addressed
+layers, so a step whose inputs have not changed can be skipped instead of rerun.
+Caching is opt-in: a layer is a rootfs captured mid-provisioning, so it is a
+deliberate choice, never a default.
+
+Each step gets a key derived from the step before it, which is what makes
+invalidation directional:
+
+```
+layer_key(i) = sha256(
+    "fusefile-layer/v1\n" +
+    parent_key(i) + "\n" +     // layer_key(i-1); the base key for i == 0
+    step_script(i) + "\n" +    // the step's `run` string, byte for byte
+    inputs_digest(i) + "\n" +
+    workspace + "\n" +         // setup runs after `cd <workspace>`
+    arch)                      // an ext4 rootfs is not portable across arch
+
+base_key      = "image:" + sha256(<base image reference>)
+inputs_digest = sha256 over the sorted list of
+                (relative path, mode & 0o111, sha256(content)); "" when unset
+```
+
+Edit step *N* and steps *N..end* all get new keys; steps before *N* are
+untouched. The same chaining is why a miss cascades: step *N+1*'s key is defined
+in terms of step *N*'s, so a step whose parent is unknown cannot be keyed at all,
+and neither can anything after it.
+
+Deliberately **not** in the key: secret values, the task ID, `run:` (it is the
+entrypoint, not a layer), and every `resources` field other than the
+architecture, since none of them change the filesystem. There is no
+normalization either: a byte change in a step is a miss, because guessing at
+semantic equivalence is how a cache serves a stale rootfs.
+
+A step that reads `/fuse/secrets.json`, or has effects outside the rootfs, must
+set `cache: false`. Secrets are written to disk before `setup` runs, so a layer
+captured after such a step would bake secret material into a rootfs keyed on
+content that excludes those secrets, and a later `up` with rotated values would
+get a hit. Declaring `inputs` on an uncacheable step is an error.
+
+Two other limits: a GPU environment gets no caching at all (GPU environments run
+on the qemu backend, whose snapshot endpoints hard-501 because a vfio device
+cannot be checkpointed), and layers are host-local, so there is no cross-host
+sharing.
+
+To see the derived keys without creating anything:
+
+```bash
+fuse up --plan
+fuse build --plan
+```
+
+Both print the same plan: there is one key derivation, shared by the two commands
+that run the setup phase. `--no-cache` on either ignores the `cache` block for
+one run.
+
+[`fuse build`](/reference/cli/build) is the more useful of the two, since it is
+the command that runs `setup:` on its own and captures the result. On a
+[`fuse up --from-build`](/reference/cli/up) boot, `setup:` does not run at all,
+so there is no layer plan for it and `--plan` and `--no-cache` are rejected
+there rather than silently ignored.
+
+Every step currently reports as a miss: key derivation and the plan land ahead of
+the layer store they will be looked up in.
+
 ## Scaffolding one
 
 ```bash
@@ -132,6 +356,37 @@ fuse init
 writes a commented starter Fusefile to `./Fusefile` (or a path passed via
 `-f`/`--file`). Pass `--force` to overwrite an existing file. The scaffold covers the
 common CPU case and omits the GPU fields, add them by hand from the reference above.
+
+The scaffold is intentionally maximal: its value is naming every field with a
+comment, not being the shortest thing that runs. It is not a working file as
+written, it declares a secret you must supply and an `image` that has to exist
+on the host first. For the minimum that boots with a bare `fuse up`, see
+[Your first Fusefile](/docs/learn/first-fusefile).
+
+## Checking one
+
+```bash
+fuse validate
+```
+
+parses and compiles a Fusefile and reports every problem it finds, then exits `0`
+if the file is valid and `1` if it is not. It creates nothing and makes no
+request, so it runs before `fuse connect` and in CI with no orchestrator
+reachable. Pass `-o json` for a machine-readable report, or `--quiet` for the
+exit code alone. See [`fuse validate`](/reference/cli/validate).
+
+## Seeing what it compiles into
+
+```bash
+fuse compile
+```
+
+prints the resource spec, startup script, decoded manifest, exposed ports, and
+required secret names a Fusefile produces, without creating anything and without
+contacting the orchestrator. `--format json` or `--format yaml` prints the create
+request body itself, which is what to diff when reviewing a Fusefile change.
+Secret values are never accepted or printed, only the names. See
+[`fuse compile`](/reference/cli/compile).
 
 ## Bringing it up
 
@@ -146,5 +401,6 @@ provisioning events until a terminal state, unless `--no-wait` is passed. If any
 secret named in `secrets` is missing from the resolved set, `up` fails fast with the
 list of missing names rather than creating a broken environment.
 
-See [`fuse up`](/reference/cli/up) and [`fuse init`](/reference/cli/init)
-for the full flag reference.
+See [`fuse up`](/reference/cli/up), [`fuse init`](/reference/cli/init), and
+[`fuse compile`](/reference/cli/compile), and
+[`fuse validate`](/reference/cli/validate) for the full flag reference.

@@ -1,0 +1,291 @@
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"io"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"runtime"
+	"sort"
+	"strings"
+
+	"github.com/folsomintel/fuse/internal/fusefile"
+)
+
+// layerPlan is the derived cache plan for a Fusefile's setup steps. It is the
+// single place layer keys are computed for the CLI, so `--plan` and per-step
+// cache reporting cannot disagree about what a step's key is.
+type layerPlan struct {
+	BaseKey      string                `json:"base_key"`
+	Arch         string                `json:"arch"`
+	CacheEnabled bool                  `json:"cache_enabled"`
+	Steps        []fusefile.LayerKey   `json:"steps"`
+	Statuses     []layerPlanStepStatus `json:"-"`
+}
+
+// layerPlanStepStatus is the per-step outcome. Increment 1 has no layer index
+// to consult, so a cacheable step is always a miss; the field exists so a
+// later change can report a hit without reshaping the plan.
+type layerPlanStepStatus string
+
+const (
+	layerStatusMiss = layerPlanStepStatus("miss")
+	layerStatusSkip = layerPlanStepStatus("skip")
+)
+
+// planSetupLayers derives the plan for the commands that run the setup phase
+// (`fuse up` and `fuse build`), or returns (nil, nil) when there is no reason
+// to. show is the caller's --plan: it forces derivation so the plan can be
+// printed. otherwise the plan is only derived when caching is enabled, where
+// its value is failing on a bad `inputs` entry before anything is provisioned
+// rather than mid-build.
+func planSetupLayers(fusefilePath string, f *fusefile.Fusefile, show bool) (*layerPlan, error) {
+	if !show && !f.Cache.Enabled {
+		return nil, nil
+	}
+	lp, err := buildLayerPlan(fusefilePath, f)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", fusefilePath, err)
+	}
+	return lp, nil
+}
+
+// buildLayerPlan derives the layer key of every setup step. fusefilePath is
+// the Fusefile's path; declared `inputs` are resolved relative to its
+// directory, which is the only directory the CLI will read project files from.
+func buildLayerPlan(fusefilePath string, f *fusefile.Fusefile) (*layerPlan, error) {
+	dir := filepath.Dir(fusefilePath)
+	// the target host's architecture is not knowable client-side today, so the
+	// client's is used. an ext4 layer is not portable across architectures, so
+	// this component must become the host's arch when layers are actually
+	// stored on a host.
+	opts := fusefile.LayerOptions{Arch: runtime.GOARCH}
+
+	keys, err := fusefile.LayerKeys(f, inputDigester(dir), opts)
+	if err != nil {
+		return nil, err
+	}
+
+	plan := &layerPlan{
+		BaseKey:      fusefile.BaseKey(f.Image, f.Files),
+		Arch:         opts.Arch,
+		CacheEnabled: f.Cache.Enabled,
+		Steps:        keys,
+		Statuses:     make([]layerPlanStepStatus, len(keys)),
+	}
+	for i, k := range keys {
+		if k.Cacheable {
+			plan.Statuses[i] = layerStatusMiss
+		} else {
+			plan.Statuses[i] = layerStatusSkip
+		}
+	}
+	return plan, nil
+}
+
+// renderLayerPlan prints the derived plan. Every cacheable step reports as a
+// miss: there is no layer store to look keys up in yet.
+func renderLayerPlan(p *layerPlan) error {
+	if app.isJSON() {
+		return printJSON(p.jsonView())
+	}
+
+	renderDetail([][2]string{
+		{"base key", p.BaseKey},
+		{"arch", p.Arch},
+		{"cache", map[bool]string{true: "enabled", false: "disabled"}[p.CacheEnabled]},
+	})
+	if len(p.Steps) == 0 {
+		fmt.Fprintln(os.Stderr, styleFaint.Render("no setup steps"))
+		return nil
+	}
+
+	rows := make([][]string, 0, len(p.Steps))
+	for i, k := range p.Steps {
+		note := k.Reason
+		if k.Cacheable {
+			note = "no layer store yet"
+		}
+		rows = append(rows, []string{
+			fmt.Sprintf("%d", k.Index),
+			string(p.Statuses[i]),
+			dash(shortKey(k.Key)),
+			truncateScript(k.Script),
+			note,
+		})
+	}
+	renderTable([]string{"#", "STATUS", "KEY", "STEP", "NOTE"}, rows)
+	return nil
+}
+
+// layerPlanJSON is the machine-readable plan; the status is flattened onto each
+// step so a consumer does not have to zip two slices.
+type layerPlanJSON struct {
+	BaseKey      string              `json:"base_key"`
+	Arch         string              `json:"arch"`
+	CacheEnabled bool                `json:"cache_enabled"`
+	Steps        []layerPlanStepJSON `json:"steps"`
+}
+
+type layerPlanStepJSON struct {
+	Index        int    `json:"index"`
+	Script       string `json:"script"`
+	Key          string `json:"key,omitempty"`
+	ParentKey    string `json:"parent_key,omitempty"`
+	InputsDigest string `json:"inputs_digest,omitempty"`
+	Cacheable    bool   `json:"cacheable"`
+	Status       string `json:"status"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+func (p *layerPlan) jsonView() layerPlanJSON {
+	out := layerPlanJSON{
+		BaseKey:      p.BaseKey,
+		Arch:         p.Arch,
+		CacheEnabled: p.CacheEnabled,
+		Steps:        make([]layerPlanStepJSON, 0, len(p.Steps)),
+	}
+	for i, k := range p.Steps {
+		out.Steps = append(out.Steps, layerPlanStepJSON{
+			Index:        k.Index,
+			Script:       k.Script,
+			Key:          k.Key,
+			ParentKey:    k.ParentKey,
+			InputsDigest: k.InputsDigest,
+			Cacheable:    k.Cacheable,
+			Status:       string(p.Statuses[i]),
+			Reason:       k.Reason,
+		})
+	}
+	return out
+}
+
+// shortKey trims a hex layer key to a readable prefix.
+func shortKey(key string) string {
+	if len(key) <= 12 {
+		return key
+	}
+	return key[:12]
+}
+
+// truncateScript renders a step's script on one line for table display.
+func truncateScript(s string) string {
+	s = strings.Join(strings.Fields(s), " ")
+	if len(s) <= 48 {
+		return s
+	}
+	return s[:45] + "..."
+}
+
+// inputDigester returns the digester LayerKeys calls for a step's declared
+// inputs. Patterns are globbed relative to root and every match must stay
+// inside it: this is the first time the CLI reads project files beyond the
+// Fusefile and the secrets file, so containment is checked on the resolved
+// path rather than assumed from the pattern.
+//
+// The digest is sha256 over the sorted list of
+// (relative path, mode & 0o111, sha256(content)), so it is stable across runs
+// and across machines, and changes when a file's contents or its executable
+// bit change.
+func inputDigester(root string) fusefile.InputDigester {
+	return func(patterns []string) (string, error) {
+		absRoot, err := filepath.Abs(root)
+		if err != nil {
+			return "", fmt.Errorf("resolve %s: %w", root, err)
+		}
+
+		// path -> digest line, so patterns that overlap contribute once.
+		lines := map[string]string{}
+
+		for _, pattern := range patterns {
+			matches, err := filepath.Glob(filepath.Join(absRoot, filepath.FromSlash(pattern)))
+			if err != nil {
+				return "", fmt.Errorf("bad pattern %q: %w", pattern, err)
+			}
+			if len(matches) == 0 {
+				// a pattern that matches nothing would silently drop out of
+				// the key, so it is an error rather than an empty contribution.
+				return "", fmt.Errorf("no files matched %q", pattern)
+			}
+			for _, match := range matches {
+				if err := digestPath(absRoot, match, lines); err != nil {
+					return "", err
+				}
+			}
+		}
+
+		rels := make([]string, 0, len(lines))
+		for rel := range lines {
+			rels = append(rels, rel)
+		}
+		sort.Strings(rels)
+
+		h := sha256.New()
+		for _, rel := range rels {
+			h.Write([]byte(lines[rel]))
+		}
+		return hex.EncodeToString(h.Sum(nil)), nil
+	}
+}
+
+// digestPath adds path to lines, walking it if it is a directory.
+func digestPath(root, path string, lines map[string]string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return fmt.Errorf("stat input: %w", err)
+	}
+	if info.IsDir() {
+		return filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
+			if err != nil {
+				return err
+			}
+			if d.IsDir() {
+				return nil
+			}
+			return digestFile(root, p, d.Type(), lines)
+		})
+	}
+	return digestFile(root, path, info.Mode().Type(), lines)
+}
+
+// digestFile hashes one regular file into lines. Anything that is not a
+// regular file (a symlink, a device, a socket) is rejected: a symlink's target
+// can point outside root, and hashing what it resolves to would silently widen
+// what the key covers.
+func digestFile(root, path string, typ fs.FileMode, lines map[string]string) error {
+	rel, err := filepath.Rel(root, path)
+	if err != nil {
+		return fmt.Errorf("resolve input %s: %w", path, err)
+	}
+	rel = filepath.ToSlash(rel)
+	if rel == ".." || strings.HasPrefix(rel, "../") {
+		return fmt.Errorf("input %s is outside the Fusefile's directory", rel)
+	}
+	if typ != 0 {
+		return fmt.Errorf("input %s is not a regular file", rel)
+	}
+
+	f, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("read input %s: %w", rel, err)
+	}
+	defer func() { _ = f.Close() }()
+
+	info, err := f.Stat()
+	if err != nil {
+		return fmt.Errorf("stat input %s: %w", rel, err)
+	}
+
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return fmt.Errorf("read input %s: %w", rel, err)
+	}
+
+	// only the executable bits are folded in: the rest of the mode is noise
+	// that varies with umask and checkout tooling.
+	lines[rel] = fmt.Sprintf("%s\x00%o\x00%s\n", rel, info.Mode().Perm()&0o111, hex.EncodeToString(h.Sum(nil)))
+	return nil
+}

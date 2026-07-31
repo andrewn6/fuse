@@ -15,7 +15,19 @@ type Spec struct {
 	GPUProfile        string `json:"gpu_profile,omitempty"`
 	Region            string `json:"region,omitempty"`
 	MaxRuntimeSeconds int64  `json:"max_runtime_seconds,omitempty"`
-	Image             string `json:"image,omitempty"`
+	// IdleTimeoutSeconds destroys the environment after this many seconds
+	// with no exec and no attach session. Zero means no idle expiry. Unlike
+	// MaxRuntimeSeconds (a ceiling measured from create), this is measured
+	// from the last exec or attach.
+	IdleTimeoutSeconds int64  `json:"idle_timeout_seconds,omitempty"`
+	Image              string `json:"image,omitempty"`
+	// HostID pins the environment to an exact host id (the Fusefile's
+	// placement.host). The pinned host still has to be active, run the right
+	// backend, and fit the request.
+	HostID string `json:"host_id,omitempty"`
+	// Labels are placement label selectors (the Fusefile's placement.labels):
+	// every pair must match the target host's declared labels.
+	Labels map[string]string `json:"labels,omitempty"`
 }
 
 // ExposeSpec requests that a guest port be published as a reachable endpoint.
@@ -41,6 +53,11 @@ type CreateRequest struct {
 	GatewayURL     string            `json:"gateway_url,omitempty"`
 	GatewayToken   string            `json:"gateway_token,omitempty"`
 	Expose         []ExposeSpec      `json:"expose,omitempty"`
+
+	// StartupScriptTimeoutSeconds bounds StartupScript. Zero uses the
+	// orchestrator's default. A value above the orchestrator's configured
+	// maximum is rejected rather than clamped.
+	StartupScriptTimeoutSeconds int64 `json:"startup_script_timeout_seconds,omitempty"`
 
 	// SeedSnapshotID boots the environment from an existing snapshot artifact
 	// instead of Spec.Image. The two are mutually exclusive. The artifact is
@@ -102,7 +119,49 @@ type Event struct {
 	Error     string    `json:"error,omitempty"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Err       error     `json:"-"`
+
+	// fields below are set only on EventKindStep events, which report one
+	// setup step's boundary, timing, and cache verdict. they are zero on
+	// state events, and on step events from a server that does not report
+	// caching yet.
+	Index      int      `json:"index,omitempty"`
+	Total      int      `json:"total,omitempty"`
+	Key        string   `json:"key,omitempty"`
+	Cached     bool     `json:"cached,omitempty"`
+	MissReason string   `json:"miss_reason,omitempty"`
+	MissDetail []string `json:"miss_detail,omitempty"`
+	DurationMS int64    `json:"duration_ms,omitempty"`
+	ExitCode   int      `json:"exit_code,omitempty"`
 }
+
+// Event kinds carried in Event.Kind. An empty kind means "state": older
+// servers omit the field.
+const (
+	EventKindState = "state"
+	EventKindStep  = "step"
+)
+
+// IsStateEvent reports whether kind is a lifecycle state event, which is the
+// only kind that advances an environment's state. An empty kind counts as a
+// state event for compatibility with servers that omit it.
+func IsStateEvent(kind string) bool {
+	return kind == "" || kind == EventKindState
+}
+
+// Cache miss reasons carried in Event.MissReason. The set is closed so
+// clients can render them, but unknown values must pass through rather than
+// be treated as an error.
+const (
+	MissReasonNoEntry      = "no-entry"
+	MissReasonStepChanged  = "step-changed"
+	MissReasonInputsChange = "inputs-changed"
+	MissReasonParentChange = "parent-changed"
+	MissReasonBaseChanged  = "base-changed"
+	MissReasonUncacheable  = "uncacheable"
+	MissReasonDisabled     = "disabled"
+	MissReasonNotOnHost    = "not-on-host"
+	MissReasonUnsupported  = "unsupported"
+)
 
 // ForkOptions is the optional body for env.Fork.
 type ForkOptions struct {
@@ -216,26 +275,30 @@ type MIGInstance struct {
 
 // RegisterHostRequest is the body for client.RegisterHost.
 type RegisterHostRequest struct {
-	ID       string       `json:"id"`
-	URL      string       `json:"url"`
-	Token    string       `json:"token,omitempty"`
-	Region   string       `json:"region,omitempty"`
-	Backend  string       `json:"backend,omitempty"`
-	Capacity HostCapacity `json:"capacity"`
+	ID      string `json:"id"`
+	URL     string `json:"url"`
+	Token   string `json:"token,omitempty"`
+	Region  string `json:"region,omitempty"`
+	Backend string `json:"backend,omitempty"`
+	// Labels are operator-declared key/value pairs matched against a spec's
+	// placement label selectors. They are never probed from the host agent.
+	Labels   map[string]string `json:"labels,omitempty"`
+	Capacity HostCapacity      `json:"capacity"`
 }
 
 // Host is the server's view of a registered host.
 type Host struct {
-	ID        string       `json:"id"`
-	URL       string       `json:"url"`
-	Region    string       `json:"region,omitempty"`
-	State     string       `json:"state"`
-	Backend   string       `json:"backend,omitempty"`
-	Capacity  HostCapacity `json:"capacity"`
-	Allocated HostCapacity `json:"allocated"`
-	LastSeen  time.Time    `json:"last_seen"`
-	CreatedAt time.Time    `json:"created_at"`
-	UpdatedAt time.Time    `json:"updated_at"`
+	ID        string            `json:"id"`
+	URL       string            `json:"url"`
+	Region    string            `json:"region,omitempty"`
+	State     string            `json:"state"`
+	Backend   string            `json:"backend,omitempty"`
+	Labels    map[string]string `json:"labels,omitempty"`
+	Capacity  HostCapacity      `json:"capacity"`
+	Allocated HostCapacity      `json:"allocated"`
+	LastSeen  time.Time         `json:"last_seen"`
+	CreatedAt time.Time         `json:"created_at"`
+	UpdatedAt time.Time         `json:"updated_at"`
 
 	// Warnings carries non-fatal notices from registration (e.g. a
 	// declared capacity value that exceeds what was probed from the host

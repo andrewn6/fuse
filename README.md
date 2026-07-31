@@ -41,6 +41,7 @@ agent running before it can do anything. `sudo ./fc-agent.sh bootstrap` in
 ```bash
 fuse quickstart   # connect an orchestrator, register a host
 fuse init         # scaffold a Fusefile
+fuse validate     # check it offline, without creating anything
 fuse up --secret pg_password=devpassword
 
 fuse environment list
