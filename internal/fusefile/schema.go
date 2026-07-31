@@ -87,7 +87,7 @@ type Cache struct {
 // Step is one setup step. it accepts two yaml forms: a bare scalar
 // ("apt-get update -qq"), equivalent to {run: ...} and unchanged from v1's
 // list of strings; and a mapping ({run: npm ci, inputs: [package.json]}),
-// which adds inputs and cache.
+// which adds inputs, cache, and workdir.
 //
 // Cache is a pointer so "unset" is distinguishable from an explicit
 // "cache: false": a step that reads secrets or writes outside the rootfs must
@@ -96,13 +96,20 @@ type Step struct {
 	Run    string   `yaml:"run"`
 	Inputs []string `yaml:"inputs,omitempty"`
 	Cache  *bool    `yaml:"cache,omitempty"`
+
+	// Workdir scopes this one step to a directory. a relative path resolves
+	// against Fusefile.Workspace, since every step starts there. the step is
+	// emitted as a subshell, so the directory change does not leak into the
+	// next step; only the directory is scoped, not the shell (see the note on
+	// setupScripts). empty means the step runs in the workspace, unchanged.
+	Workdir string `yaml:"workdir,omitempty"`
 }
 
 // stepFields is the set of keys the mapping form accepts. Parse's decoder runs
 // with KnownFields(true), but a custom UnmarshalYAML decodes through a
 // yaml.Node and does not inherit that, so unknown keys are rejected here or
 // `- ruh: npm ci` would silently parse as an empty step.
-var stepFields = map[string]bool{"run": true, "inputs": true, "cache": true}
+var stepFields = map[string]bool{"run": true, "inputs": true, "cache": true, "workdir": true}
 
 // UnmarshalYAML decodes either a bare scalar (the legacy form, kept working
 // byte for byte) or the mapping form.

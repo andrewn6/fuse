@@ -630,6 +630,29 @@ func TestCompileStartupScript(t *testing.T) {
 			"set -eu\nif (set -o pipefail) 2>/dev/null; then set -o pipefail; fi\n" +
 				`mkdir -p '/tmp/it'\''s here'` + "\n" + `cd '/tmp/it'\''s here'` + "\n./c\n",
 		},
+		{
+			// a per-step workdir is scoped to its own subshell, so the step
+			// after it still starts in the workspace.
+			"per-step workdir is a subshell",
+			"",
+			[]Step{{Run: "a"}, {Workdir: "web", Run: "b"}, {Run: "c"}},
+			"./d",
+			prelude + "a\n(cd 'web'; b)\nc\n./d\n",
+		},
+		{
+			"absolute per-step workdir",
+			"",
+			[]Step{{Workdir: "/opt/x", Run: "b"}},
+			"",
+			prelude + "(cd '/opt/x'; b)\n",
+		},
+		{
+			"per-step workdir with a quote is escaped",
+			"",
+			[]Step{{Workdir: "it's here", Run: "b"}},
+			"",
+			prelude + `(cd 'it'\''s here'; b)` + "\n",
+		},
 	}
 
 	for _, tc := range cases {

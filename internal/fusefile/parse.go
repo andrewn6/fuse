@@ -93,6 +93,19 @@ func validate(f *Fusefile) error {
 		if strings.TrimSpace(step.Run) == "" {
 			errs = append(errs, fmt.Errorf("setup[%d].run: is required", i))
 		}
+		// a workdir is emitted as `cd <workdir>` inside the step's subshell,
+		// under the same reasoning as workspace below: shellQuote stops it from
+		// altering the script, it does not stop a `..` from landing somewhere
+		// the author did not mean. a relative path is fine here, unlike
+		// workspace, because it resolves against a known directory.
+		if wd := step.Workdir; wd != "" {
+			switch {
+			case strings.ContainsAny(wd, "\x00\n"):
+				errs = append(errs, fmt.Errorf("setup[%d].workdir: must not contain newlines or NUL bytes", i))
+			case containsDotDot(wd):
+				errs = append(errs, fmt.Errorf("setup[%d].workdir: must not contain %q segments, got %q", i, "..", wd))
+			}
+		}
 		if !step.cacheable() && len(step.Inputs) > 0 {
 			errs = append(errs, fmt.Errorf("setup[%d].inputs: not allowed on a step with cache: false", i))
 		}

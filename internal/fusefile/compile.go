@@ -88,9 +88,20 @@ type Compiled struct {
 // which file pushed them over.
 const MaxFilesBytes = 64 << 10
 
-// defaultWorkspace is used for manifest.machine.workspace when Fusefile.Workspace
-// is unset.
+// defaultWorkspace is the directory setup and run execute in when
+// Fusefile.Workspace is unset.
 const defaultWorkspace = "/workspace"
+
+// workspaceOf returns the effective workspace: the authored value, or
+// defaultWorkspace when it is unset. Every consumer of the workspace goes
+// through this (the manifest, the script prelude, the layer key), so the
+// default cannot drift between them.
+func workspaceOf(f *Fusefile) string {
+	if f.Workspace == "" {
+		return defaultWorkspace
+	}
+	return f.Workspace
+}
 
 // MinIdleTimeout is the smallest meaningful resources.idle_timeout. Idle
 // expiry is detected on the orchestrator's reconcile loop (30s default) and
@@ -108,6 +119,18 @@ type manifest struct {
 	Services map[string]manifestService `json:"services"`
 }
 
+// manifestMachine carries the machine block of the guest-facing manifest.
+//
+// Workspace here is RESERVED, not a knob: nothing in the stack reads it. The
+// guest agent (cmd/fused) reports the manifest's size and never parses the
+// machine block, and the host agents do not look at it either. What actually
+// puts an environment in its workspace is the generated script's `mkdir -p`
+// plus `cd` (see scriptPrelude), which is emitted from the same value.
+//
+// It is still emitted, and still defaulted, so the wire shape matches
+// DefaultFusedManifest (internal/orchestrator/agent_profile.go) and so a guest
+// agent that wants to honor it later has the value already on hand. Giving it a
+// consumer is a guest-agent change, not a compiler one.
 type manifestMachine struct {
 	Workspace string `json:"workspace"`
 }
@@ -420,11 +443,6 @@ func compileExpose(f *Fusefile) []ExposeSpec {
 // compileManifest builds the guest-facing manifest json and the sorted,
 // deduped union of secrets it references (plus f.Secrets).
 func compileManifest(f *Fusefile) ([]byte, []string, error) {
-	workspace := f.Workspace
-	if workspace == "" {
-		workspace = defaultWorkspace
-	}
-
 	secretSet := make(map[string]bool, len(f.Secrets))
 	for _, s := range f.Secrets {
 		secretSet[s] = true
@@ -432,7 +450,7 @@ func compileManifest(f *Fusefile) ([]byte, []string, error) {
 
 	m := manifest{
 		Version:  "1",
-		Machine:  manifestMachine{Workspace: workspace},
+		Machine:  manifestMachine{Workspace: workspaceOf(f)},
 		Services: make(map[string]manifestService, len(f.Services)),
 	}
 
@@ -496,13 +514,27 @@ func shellQuote(s string) string {
 // drift apart. a step's fragment is its `run` string byte for byte: no
 // normalization, because guessing at semantic equivalence is how a cache
 // serves a stale rootfs.
+//
+// a step with a `workdir` is the one exception: it is wrapped in a subshell,
+// `(cd <quoted>; <run>)`, so the directory change is scoped to that step and
+// the next one still starts in the workspace. a relative workdir resolves
+// against the workspace because that is where the shell already is. only the
+// directory is scoped: setup steps share one shell, so `set -eu`, exported
+// variables, and shell options still carry across steps either way.
+//
+// the wrapper is part of the hashed fragment, so adding or changing a workdir
+// invalidates that step's layer, as it should.
 func setupScripts(f *Fusefile) []string {
 	if len(f.Setup) == 0 {
 		return nil
 	}
 	out := make([]string, len(f.Setup))
 	for i, step := range f.Setup {
-		out[i] = step.Run
+		if step.Workdir == "" {
+			out[i] = step.Run
+			continue
+		}
+		out[i] = fmt.Sprintf("(cd %s; %s)", shellQuote(step.Workdir), step.Run)
 	}
 	return out
 }
@@ -521,10 +553,7 @@ func scriptPrelude(f *Fusefile) string {
 	var b strings.Builder
 	b.WriteString("set -eu\n")
 	b.WriteString("if (set -o pipefail) 2>/dev/null; then set -o pipefail; fi\n")
-	workspace := f.Workspace
-	if workspace == "" {
-		workspace = defaultWorkspace
-	}
+	workspace := workspaceOf(f)
 	fmt.Fprintf(&b, "mkdir -p %s\n", shellQuote(workspace))
 	fmt.Fprintf(&b, "cd %s\n", shellQuote(workspace))
 	return b.String()

@@ -109,6 +109,11 @@ setup:
       - package.json
       - package-lock.json
 
+  # `workdir` scopes one step to a directory. relative paths resolve against
+  # the workspace, and the change does not leak into the next step.
+  - workdir: web
+    run: npm run build
+
   # a step that reads secrets or has effects outside the rootfs must opt out.
   - run: ./scripts/register-with-vault.sh
     cache: false
@@ -131,6 +136,9 @@ startup_timeout: 55s
 # the main task entrypoint. compiles into startup_script (after setup).
 run: ./start.sh
 
+# absolute path, created with `mkdir -p`. setup and run execute here.
+# defaults to /workspace when omitted. see Workspace below for what does not
+# inherit it.
 workspace: /workspace
 
 # ports published to the outside world (ingress).
@@ -168,12 +176,13 @@ secrets:
 | `setup[].run` | string | The step's shell command. Required in the mapping form. |
 | `setup[].inputs` | list of strings | Files (or directories, or globs) whose contents are hashed into the step's cache key. Relative to the Fusefile's directory; absolute and `..`-traversing paths are rejected. |
 | `setup[].cache` | bool | Set `false` to make the step uncacheable. Required for a step that reads secrets or has effects outside the rootfs. |
+| `setup[].workdir` | string | Directory this one step runs in. A relative path resolves against `workspace`; an absolute path is taken as-is. `..` segments are rejected. The step is emitted as a subshell, so the directory does not leak into the next step. See [Workspace](#workspace). |
 | `services` | map | In-VM services, each with `image`, `ports`, and `env`. Compiles to `manifest.services` plus a compose project. |
 | `services.*.ports` | list of ints | Container ports, each between 1 and 65535. |
 | `services.*.env.*` | literal or secret ref | Exactly one of `value` or `secret` must be set per entry. The variable name must not be empty. `{ secret: name }` resolves from the `secrets` you supply at `up` time. |
 | `run` | string | The main entrypoint, compiled into `startup_script` after `setup`. |
 | `startup_timeout` | string | Go duration bounding `setup` + `run`. Omit for the orchestrator default (30s). See [Startup timeout](#startup-timeout). |
-| `workspace` | string | Working directory inside the guest. Must be an absolute path with no `..` segments; the generated script `mkdir -p`s it and `cd`s into it. |
+| `workspace` | string | Working directory for `setup` and `run`. Defaults to `/workspace`. Must be an absolute path with no `..` segments; the generated script `mkdir -p`s it and `cd`s into it. Services, `fuse environment exec`, and `fuse environment shell` do **not** inherit it. See [Workspace](#workspace). |
 | `expose` | list of `{port, as}` | Guest ports published externally. Each `port` is between 1 and 65535 and may appear only once. `as` is an optional name, unique across the list, in DNS-label form (lowercase letters, digits and dashes, alphanumeric at both ends, 63 chars max). |
 | `secrets` | list of strings | Secret *names* this environment requires. An empty name is rejected: nothing you could pass to `--secret` would satisfy it. Values are supplied out-of-band via `--secret key=value` or `--secrets-file`, never written into the Fusefile itself. |
 
@@ -249,6 +258,60 @@ To get a custom base, either bake a rootfs on the host (`fc-bake-rootfs.sh`, or
 `qemu-bake-cuda-rootfs.sh` for GPU hosts) or run
 [`fuse build`](/reference/cli/build), which runs your `setup` phase once and
 snapshots the result into a bootable artifact.
+
+## Workspace
+
+`workspace` is the directory `setup` and `run` execute in. It defaults to
+`/workspace`, and it must be an absolute path with no `..` segments. The
+compiled startup script creates it and moves into it before anything else runs:
+
+```sh
+mkdir -p '/srv/app'
+cd '/srv/app'
+```
+
+The path is shell-quoted, so a space or a quote in it is safe. A relative
+`files[].path` resolves against the workspace, and so does a relative
+`setup[].workdir`.
+
+### Scoping one step to a directory
+
+A setup step written as a mapping can set `workdir`, which runs that step
+somewhere else without disturbing the others:
+
+```yaml
+workspace: /srv/app
+
+setup:
+  - npm ci # runs in /srv/app
+  - workdir: web # runs in /srv/app/web
+    run: npm run build
+  - ./scripts/package.sh # back in /srv/app
+run: node server.js
+```
+
+The step compiles to `(cd 'web'; npm run build)`. The subshell is what keeps
+the directory scoped, so the next step still starts in the workspace.
+
+Only the **directory** is scoped. All setup steps share a single shell, so
+`set -eu`, exported variables, and any shell options a step sets still carry
+across into the steps after it. If you need a variable to stay local to one
+step, scope it yourself.
+
+### What does not inherit the workspace
+
+- **Services.** A service runs in its own container, so `workspace` is a guest
+  path and not a path inside the service's image at all. Inheriting it would
+  point the container at a directory that does not exist there, so this is
+  deliberate rather than unimplemented.
+- **`fuse environment exec` and `fuse environment shell`.** Both start in the
+  guest's home directory. `cd` into the workspace yourself, or pass a full
+  path.
+
+`manifest.machine.workspace` is present in the compiled manifest and carries
+the same value, but it is **reserved**: no component reads it today. The
+`mkdir -p` and `cd` in the startup script are what actually put you in the
+workspace.
 
 ## Files
 
