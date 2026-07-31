@@ -39,6 +39,18 @@ func Decode(data []byte) (*Fusefile, error) {
 	if err := dec.Decode(&f); err != nil && !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("parse fusefile: %w", err)
 	}
+
+	// a Fusefile is exactly one yaml document. only the first is decoded, so
+	// everything after a stray `---` would vanish silently; say so instead.
+	var extra yaml.Node
+	err := dec.Decode(&extra)
+	switch {
+	case err == nil:
+		return nil, fmt.Errorf("parse fusefile: must contain exactly one yaml document, found more than one")
+	case !errors.Is(err, io.EOF):
+		return nil, fmt.Errorf("parse fusefile: %w", err)
+	}
+
 	return &f, nil
 }
 
@@ -109,6 +121,12 @@ func validate(f *Fusefile) error {
 			errs = append(errs, fmt.Errorf("services.%s: image is required", name))
 		}
 
+		for i, port := range svc.Ports {
+			if port < 1 || port > 65535 {
+				errs = append(errs, fmt.Errorf("services.%s.ports[%d]: must be between 1 and 65535", name, i))
+			}
+		}
+
 		envKeys := make([]string, 0, len(svc.Env))
 		for key := range svc.Env {
 			envKeys = append(envKeys, key)
@@ -116,6 +134,10 @@ func validate(f *Fusefile) error {
 		sort.Strings(envKeys)
 
 		for _, key := range envKeys {
+			if strings.TrimSpace(key) == "" {
+				errs = append(errs, fmt.Errorf("services.%s.env: environment variable name must not be empty", name))
+				continue
+			}
 			env := svc.Env[key]
 			switch {
 			case env.Value != "" && env.Secret != "":
@@ -138,13 +160,67 @@ func validate(f *Fusefile) error {
 		}
 	}
 
+	// the workspace is emitted into the generated script as `mkdir -p <ws>`
+	// followed by `cd <ws>`. shellQuote keeps it from altering the script, but
+	// a relative or traversing path still lands somewhere the author did not
+	// mean, relative to whatever directory the guest agent happens to start in.
+	if ws := f.Workspace; ws != "" {
+		switch {
+		case strings.ContainsAny(ws, "\x00\n"):
+			errs = append(errs, fmt.Errorf("workspace: must not contain newlines or NUL bytes"))
+		case !path.IsAbs(ws):
+			errs = append(errs, fmt.Errorf("workspace: must be an absolute path, got %q", ws))
+		case containsDotDot(ws):
+			errs = append(errs, fmt.Errorf("workspace: must not contain %q segments, got %q", "..", ws))
+		}
+	}
+
+	seenPorts := make(map[int]int, len(f.Expose))
+	seenNames := make(map[string]int, len(f.Expose))
 	for i, exp := range f.Expose {
 		if exp.Port < 1 || exp.Port > 65535 {
 			errs = append(errs, fmt.Errorf("expose[%d].port: must be between 1 and 65535", i))
+		} else if prev, dup := seenPorts[exp.Port]; dup {
+			errs = append(errs, fmt.Errorf("expose[%d].port: %d is already exposed by expose[%d]", i, exp.Port, prev))
+		} else {
+			seenPorts[exp.Port] = i
+		}
+
+		if exp.As == "" {
+			continue
+		}
+		if !ValidExposeName(exp.As) {
+			errs = append(errs, fmt.Errorf(
+				"expose[%d].as: invalid name %q (lowercase letters, digits and dashes, 63 chars max)", i, exp.As))
+		}
+		if prev, dup := seenNames[exp.As]; dup {
+			errs = append(errs, fmt.Errorf("expose[%d].as: %q is already used by expose[%d]", i, exp.As, prev))
+		} else {
+			seenNames[exp.As] = i
+		}
+	}
+
+	// an empty secret name is a requirement no `--secret` flag can satisfy, and
+	// the server's ExtractRequiredSecrets skips empty refs, so the two sides
+	// would disagree about what the environment needs.
+	for i, s := range f.Secrets {
+		if strings.TrimSpace(s) == "" {
+			errs = append(errs, fmt.Errorf("secrets[%d]: must not be empty", i))
 		}
 	}
 
 	return errors.Join(errs...)
+}
+
+// containsDotDot reports whether any segment of a slash-separated guest path
+// is "..".
+func containsDotDot(p string) bool {
+	for _, seg := range strings.Split(p, "/") {
+		if seg == ".." {
+			return true
+		}
+	}
+	return false
 }
 
 // escapesRoot reports whether a relative input path climbs out of the
