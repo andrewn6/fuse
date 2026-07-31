@@ -24,6 +24,11 @@ type credForkEnv struct {
 
 	authToken       string
 	startAgentCalls []AgentSpec
+
+	// onUpload runs before each Upload records its file, so a test can drive
+	// something concurrent-looking (a reconcile tick) from inside the fork's
+	// credential-upload window.
+	onUpload func()
 }
 
 var (
@@ -47,6 +52,9 @@ func (e *credForkEnv) ExecStream(context.Context, io.Writer, io.Writer, string, 
 }
 
 func (e *credForkEnv) Upload(_ context.Context, data []byte, path string) error {
+	if e.onUpload != nil {
+		e.onUpload()
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if e.files == nil {
@@ -79,6 +87,10 @@ func (e *credForkEnv) ListCheckpoints(context.Context) ([]Checkpoint, error) {
 // can inspect what the fork did to the new guest.
 type credForkProvider struct {
 	envs map[string]*credForkEnv
+
+	// forkUploadHook is installed as onUpload on envs born from
+	// CreateFromCheckpoint, so only the fork's uploads trigger it.
+	forkUploadHook func()
 }
 
 func newCredForkProvider() *credForkProvider {
@@ -122,9 +134,10 @@ func (p *credForkProvider) CreateFromCheckpoint(_ context.Context, spec Spec, sr
 		return nil, ErrVMNotFound
 	}
 	env := &credForkEnv{
-		name:  spec.Name,
-		url:   "http://" + spec.Name + ".test",
-		files: make(map[string][]byte, len(src.files)),
+		name:     spec.Name,
+		url:      "http://" + spec.Name + ".test",
+		files:    make(map[string][]byte, len(src.files)),
+		onUpload: p.forkUploadHook,
 	}
 	for path, data := range src.files {
 		cp := make([]byte, len(data))
@@ -220,6 +233,66 @@ func TestForkEnvironment_mintsItsOwnCredentials(t *testing.T) {
 	}
 	if forkDrain == "" {
 		t.Fatal("fork vm record has no drain command")
+	}
+}
+
+// TestForkEnvironment_survivesReconcileDuringCredentialUpload pins the fix for
+// the orphan-destroy race: the forked microVM exists on the host from
+// CreateFromCheckpoint onward, but the fork is not finished until its own
+// credentials are uploaded and fused is restarted. reconcileOrphans destroys
+// any provider vm that is not in fm.vms, so a reconcile tick landing in that
+// window used to delete the fork out from under itself.
+//
+// the test reproduces the race deterministically by running a full reconcile
+// pass from inside the fork's first credential upload, which is exactly the
+// unprotected window.
+func TestForkEnvironment_survivesReconcileDuringCredentialUpload(t *testing.T) {
+	provider := newCredForkProvider()
+	fm := NewFleetManager(FleetConfig{
+		Provider:           provider,
+		Prefix:             "fuse-",
+		TokenEncryptionKey: testEncryptionKey(),
+	})
+	srcID := provisionSnapshotTestVM(t, fm, "task-1")
+
+	// uploadFiles uploads the credential files concurrently, so run exactly one
+	// reconcile pass: the point is that a tick landed in the window, not how
+	// many did, and the fake provider's env map is not safe for concurrent use.
+	var once sync.Once
+	ticked := false
+	provider.forkUploadHook = func() {
+		once.Do(func() {
+			ticked = true
+			fm.reconcile(context.Background())
+		})
+	}
+
+	newID, err := fm.ForkEnvironment(context.Background(), srcID, ForkOptions{})
+	if err != nil {
+		t.Fatalf("fork: %v", err)
+	}
+	if !ticked {
+		t.Fatal("reconcile never ran during the credential upload; the test is not exercising the race")
+	}
+
+	// the fork must still exist on the provider: reconcile must not have
+	// treated the half-finished fork as an orphan.
+	if provider.envs[newID] == nil {
+		t.Fatalf("fork %s was destroyed by reconcile during its credential-upload window", newID)
+	}
+	// and it must have completed normally, running and tracked.
+	fm.mu.RLock()
+	forkVM, tracked := fm.vms[newID]
+	var state VMState
+	if tracked {
+		state = forkVM.state
+	}
+	fm.mu.RUnlock()
+	if !tracked {
+		t.Fatalf("fork %s is not tracked in the fleet after ForkEnvironment returned", newID)
+	}
+	if state != VMStateRunning {
+		t.Fatalf("fork %s state = %s, want %s", newID, state, VMStateRunning)
 	}
 }
 

@@ -8,27 +8,28 @@ import (
 	"github.com/folsomintel/fuse/internal/secrets"
 )
 
-// releaseForkCapacity gives back the host capacity a fork reserved, for a fork
-// that never became a live vm.
-func (fm *FleetManager) releaseForkCapacity(hostID string, spec Spec) {
-	if hostID == "" {
-		return
-	}
+// discardFork drops the fork's provisioning placeholder and gives back the host
+// capacity it reserved, for a fork that never became a live vm. the placeholder
+// was never persisted, so the store needs no cleanup.
+func (fm *FleetManager) discardFork(vmID, hostID string, spec Spec) {
 	fm.mu.Lock()
-	fm.deallocateOnHost(hostID, spec)
+	delete(fm.vms, vmID)
+	if hostID != "" {
+		fm.deallocateOnHost(hostID, spec)
+	}
 	fm.mu.Unlock()
 }
 
 // abandonFork tears down a fork that was created on the provider but could not
-// be finished, releasing both the real microVM (with its tap and forwards) and
-// the host capacity reserved for it. the vm is not in fm.vms and was never
-// persisted, so those need no cleanup. failures are logged rather than
-// returned: the caller is already reporting the error that got us here.
+// be finished, releasing the real microVM (with its tap and forwards), the
+// placeholder record, and the host capacity reserved for it. failures are
+// logged rather than returned: the caller is already reporting the error that
+// got us here.
 func (fm *FleetManager) abandonFork(ctx context.Context, provider Provider, hostID, vmID string, spec Spec) {
 	if err := provider.Destroy(ctx, vmID); err != nil {
 		fm.logger.Warn("destroy partially forked vm failed", "vm", vmID, "err", err)
 	}
-	fm.releaseForkCapacity(hostID, spec)
+	fm.discardFork(vmID, hostID, spec)
 }
 
 // ForkOptions tunes a ForkEnvironment call. All fields are optional.
@@ -167,18 +168,41 @@ func (fm *FleetManager) ForkEnvironment(ctx context.Context, srcVMID string, opt
 	// destroy, credit back its (source-sized) cpu/ram to a host that never
 	// charged for it. the counters clamp at zero, making the drift permanent
 	// and leaving the scheduler to overcommit that host from then on.
-	// allocateOnHost binds by *vm; forks are gpu-free (rejected above), so a
-	// throwaway wrapper carrying only the spec charges cpu/ram/storage with no
-	// per-device gpu binding to record.
+	// allocateOnHost binds by *vm; forks are gpu-free (rejected above), so the
+	// placeholder below charges cpu/ram/storage with no per-device gpu binding
+	// to record.
+	//
+	// the placeholder also has to enter fm.vms BEFORE the microVM exists on the
+	// host, the same way ProvisionAndAssign registers a provisioning vm before
+	// it boots. everything from CreateFromCheckpoint through the credential
+	// upload and the fused restart is a window where the vm is real on the host
+	// but not yet running from the fleet's point of view, and reconcileOrphans
+	// destroys any provider vm it does not find in fm.vms. the reverse
+	// direction is safe: reconcile skips provisioning vms when it looks for vms
+	// that vanished from the provider, so the placeholder is not torn down for
+	// not existing yet. it is not persisted, so an orchestrator crash mid-fork
+	// leaves nothing behind to recover.
+	now := time.Now()
+	v := &vm{
+		id:             newVMID,
+		state:          VMStateProvisioning,
+		taskID:         forkTaskID,
+		hostID:         srcHostID,
+		spec:           spec,
+		createdAt:      now,
+		updatedAt:      now,
+		lastActivityAt: now,
+	}
 	fm.mu.Lock()
+	fm.vms[newVMID] = v
 	if srcHostID != "" {
-		fm.allocateOnHost(srcHostID, &vm{spec: spec})
+		fm.allocateOnHost(srcHostID, v)
 	}
 	fm.mu.Unlock()
 
 	newEnv, err := forkable.CreateFromCheckpoint(ctx, spec, srcVMID, seed.SnapshotID)
 	if err != nil {
-		fm.releaseForkCapacity(srcHostID, spec)
+		fm.discardFork(newVMID, srcHostID, spec)
 		return "", fmt.Errorf("fork vm %s from snapshot %s: %w", srcVMID, seed.SnapshotID, err)
 	}
 
@@ -229,27 +253,16 @@ func (fm *FleetManager) ForkEnvironment(ctx context.Context, srcVMID string, opt
 		}
 	}
 
-	// register the new vm as running and persist it, mirroring the
-	// running-state bookkeeping in ProvisionAndAssign (fleet.go 582-660):
-	// env handle, url, state, spec, host, then persistVMByID, task upsert,
-	// and publishStateChange.
-	now := time.Now()
-	v := &vm{
-		id:                 newVMID,
-		state:              VMStateRunning,
-		taskID:             forkTaskID,
-		hostID:             srcHostID,
-		env:                newEnv,
-		url:                newEnv.URL(),
-		spec:               spec,
-		authTokenEncrypted: encToken,
-		drainCommand:       drainCommand,
-		createdAt:          now,
-		updatedAt:          now,
-		lastActivityAt:     now,
-	}
+	// promote the placeholder to running and persist it, mirroring the
+	// running-state bookkeeping in ProvisionAndAssign: env handle, url, state,
+	// then persistVMByID, task upsert, and publishStateChange.
 	fm.mu.Lock()
-	fm.vms[newVMID] = v
+	v.state = VMStateRunning
+	v.env = newEnv
+	v.url = newEnv.URL()
+	v.authTokenEncrypted = encToken
+	v.drainCommand = drainCommand
+	v.updatedAt = time.Now()
 	fm.mu.Unlock()
 
 	// persisting the running state is load-bearing: roll the in-memory
@@ -258,9 +271,6 @@ func (fm *FleetManager) ForkEnvironment(ctx context.Context, srcVMID string, opt
 	// microVM is real by this point, so it has to be torn down too, or it
 	// keeps running on the host with nothing tracking it.
 	if err := fm.persistVMByID(ctx, newVMID); err != nil {
-		fm.mu.Lock()
-		delete(fm.vms, newVMID)
-		fm.mu.Unlock()
 		fm.abandonFork(ctx, provider, srcHostID, newVMID, spec)
 		return "", fmt.Errorf("persist forked vm %s running state: %w", newVMID, err)
 	}
