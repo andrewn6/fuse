@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.13.0](https://github.com/folsomintel/fuse/compare/v0.12.0...v0.13.0) (2026-07-31)
+
+
+### Features
+
+* **fusefile:** add region field to resources block ([#143](https://github.com/folsomintel/fuse/issues/143)) ([e5760a9](https://github.com/folsomintel/fuse/commit/e5760a93a221b8a99d4b6324301506dcfa5bcdbd))
+* **fusefile:** expose compose runtime fields on services ([#144](https://github.com/folsomintel/fuse/issues/144)) ([d040a85](https://github.com/folsomintel/fuse/commit/d040a85a0a1eb0ae5069c22bbad6c3536c75bb52))
+
 ## [0.12.0](https://github.com/folsomintel/fuse/compare/v0.11.0...v0.12.0) (2026-07-31)
 
 
