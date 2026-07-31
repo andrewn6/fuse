@@ -119,6 +119,7 @@ secrets:
 | `resources.gpu_profile` | string | Optional MIG profile, e.g. `1g.10gb`. Requests a fractional slice of a GPU instead of whole devices. See [GPU workloads](/docs/guides/gpu-workloads). |
 | `resources.memory` | string | Accepts `MB`/`GB` suffixes; compiles to `ram_mb`. |
 | `resources.storage` | string | Accepts `MB`/`GB` suffixes; compiles to `storage_gb`. |
+| `resources.region` | string | Schedules only onto a host registered in this region (`fuse host register --region`). Empty matches any region. |
 | `resources.max_runtime` | string | Go duration (`1h`, `30m`); compiles to `max_runtime_seconds`. A leak-detection ceiling measured from create, *not* a task budget. See [Reconciliation](/docs/concepts/reconcile). |
 | `resources.idle_timeout` | string | Go duration, minimum `1m`; compiles to `idle_timeout_seconds`. Destroys the environment once it has gone this long with no exec and no attach session. Omit for no idle expiry. |
 | `placement.host` | string | Pins the environment to an exact host id. A pin is not an override: the host must still be active, run the right backend, and fit the request. An unknown host id fails fast with a 404. |
