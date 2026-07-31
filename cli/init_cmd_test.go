@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -64,6 +65,32 @@ func TestInitWritesParseableFusefile(t *testing.T) {
 	// every create with "base image not found".
 	if strings.Contains(string(data), "\nimage: ghcr.io/") {
 		t.Error("scaffold sets a top-level image to an OCI reference; it names a host rootfs")
+	}
+}
+
+// The scaffold's first line points editors at the published schema. It has to
+// be line one to be honored, and the url has to be the schema's own $id or
+// editors fetch a document that does not exist.
+func TestInitScaffoldCarriesSchemaModeline(t *testing.T) {
+	first, _, _ := strings.Cut(initScaffold, "\n")
+
+	url, ok := strings.CutPrefix(first, "# yaml-language-server: $schema=")
+	if !ok {
+		t.Fatalf("scaffold does not start with the schema modeline, got %q", first)
+	}
+
+	data, err := os.ReadFile("../schema/fusefile-v1.json")
+	if err != nil {
+		t.Fatalf("read schema: %v", err)
+	}
+	var schema struct {
+		ID string `json:"$id"`
+	}
+	if err := json.Unmarshal(data, &schema); err != nil {
+		t.Fatalf("schema is not well-formed json: %v", err)
+	}
+	if url != schema.ID {
+		t.Errorf("modeline url = %q, want the schema's $id %q", url, schema.ID)
 	}
 }
 
