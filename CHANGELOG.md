@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.12.0](https://github.com/folsomintel/fuse/compare/v0.11.0...v0.12.0) (2026-07-31)
+
+
+### Features
+
+* **cli:** add fuse validate to check a Fusefile offline ([#130](https://github.com/folsomintel/fuse/issues/130)) ([5e2d72d](https://github.com/folsomintel/fuse/commit/5e2d72d3bbe5ce9cd80b090617546fdacef9c6b5))
+* **fusefile:** add files and startup_timeout, and correct the image examples ([#137](https://github.com/folsomintel/fuse/issues/137)) ([259ca9d](https://github.com/folsomintel/fuse/commit/259ca9da41f9344efe577b33b551d3f82d94fc6f))
+
 ## [0.11.0](https://github.com/folsomintel/fuse/compare/v0.10.0...v0.11.0) (2026-07-30)
 
 
