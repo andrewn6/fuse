@@ -162,6 +162,28 @@ type Service struct {
 	Image string              `yaml:"image"`
 	Ports []int               `yaml:"ports,omitempty"`
 	Env   map[string]EnvValue `yaml:"env,omitempty"`
+
+	// Command, Restart, HealthCheck, and DependsOn map one-to-one onto their
+	// compose-native counterparts; the guest's `docker compose up` (decision
+	// D1) is what interprets them, so no new runtime semantics are
+	// introduced here. They govern the compose container, not the VM: a
+	// failing healthcheck marks the service unhealthy inside the guest, it
+	// does not signal the orchestrator that the environment is dead.
+	Command []string `yaml:"command,omitempty"`
+	// Restart must be one of the compose-native policies: "no", "always",
+	// "on-failure", "unless-stopped".
+	Restart     string       `yaml:"restart,omitempty"`
+	HealthCheck *HealthCheck `yaml:"healthcheck,omitempty"`
+	DependsOn   []string     `yaml:"depends_on,omitempty"`
+}
+
+// HealthCheck is a compose-native container healthcheck. Interval and Timeout
+// are go durations (e.g. "10s").
+type HealthCheck struct {
+	Test     []string `yaml:"test,omitempty"`
+	Interval string   `yaml:"interval,omitempty"`
+	Timeout  string   `yaml:"timeout,omitempty"`
+	Retries  int      `yaml:"retries,omitempty"`
 }
 
 // EnvValue is either a literal value or a secret reference. exactly one is set.

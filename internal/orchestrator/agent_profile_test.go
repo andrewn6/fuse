@@ -53,6 +53,73 @@ func TestFusedAgentSpecWritesComposeWhenServicesDeclared(t *testing.T) {
 	}
 }
 
+func TestFusedAgentSpecComposeRuntimeFields(t *testing.T) {
+	manifest := []byte(`{"version":"1","machine":{"workspace":"/workspace"},"services":{` +
+		`"api":{"image":"ghcr.io/acme/api:1","command":["/app/api","serve"],` +
+		`"restart":"on-failure","depends_on":["db"],` +
+		`"healthcheck":{"test":["CMD","curl","-fsS","http://localhost:8080/health"],` +
+		`"interval":"10s","timeout":"2s","retries":3}},` +
+		`"db":{"image":"postgres:16"}}}`)
+
+	spec := FusedAgentSpec(manifest, nil, nil, BootOptions{})
+
+	raw, ok := spec.Files[fuseComposePath]
+	if !ok {
+		t.Fatalf("expected a compose file at %s", fuseComposePath)
+	}
+
+	var proj struct {
+		Services map[string]struct {
+			Image       string   `yaml:"image"`
+			Command     []string `yaml:"command"`
+			Restart     string   `yaml:"restart"`
+			DependsOn   []string `yaml:"depends_on"`
+			HealthCheck *struct {
+				Test     []string `yaml:"test"`
+				Interval string   `yaml:"interval"`
+				Timeout  string   `yaml:"timeout"`
+				Retries  int      `yaml:"retries"`
+			} `yaml:"healthcheck"`
+		} `yaml:"services"`
+	}
+	if err := yaml.Unmarshal(raw, &proj); err != nil {
+		t.Fatalf("compose is not valid yaml: %v", err)
+	}
+
+	svc, ok := proj.Services["api"]
+	if !ok {
+		t.Fatalf("api service missing from compose: %+v", proj)
+	}
+	if len(svc.Command) != 2 || svc.Command[0] != "/app/api" || svc.Command[1] != "serve" {
+		t.Errorf("command = %v, want [/app/api serve]", svc.Command)
+	}
+	if svc.Restart != "on-failure" {
+		t.Errorf("restart = %q, want on-failure", svc.Restart)
+	}
+	if len(svc.DependsOn) != 1 || svc.DependsOn[0] != "db" {
+		t.Errorf("depends_on = %v, want [db]", svc.DependsOn)
+	}
+	if svc.HealthCheck == nil {
+		t.Fatalf("healthcheck missing")
+	}
+	wantTest := []string{"CMD", "curl", "-fsS", "http://localhost:8080/health"}
+	if len(svc.HealthCheck.Test) != len(wantTest) {
+		t.Errorf("healthcheck.test = %v, want %v", svc.HealthCheck.Test, wantTest)
+	}
+	if svc.HealthCheck.Interval != "10s" || svc.HealthCheck.Timeout != "2s" || svc.HealthCheck.Retries != 3 {
+		t.Errorf("healthcheck = %+v, want interval=10s timeout=2s retries=3", svc.HealthCheck)
+	}
+
+	// db declares none of the new fields; omitempty must keep them absent.
+	db, ok := proj.Services["db"]
+	if !ok {
+		t.Fatalf("db service missing from compose: %+v", proj)
+	}
+	if db.Command != nil || db.Restart != "" || db.DependsOn != nil || db.HealthCheck != nil {
+		t.Errorf("db service should have no compose runtime fields set, got %+v", db)
+	}
+}
+
 func TestFusedAgentSpecNoComposeWhenNoServices(t *testing.T) {
 	spec := FusedAgentSpec(DefaultFusedManifest, nil, nil, BootOptions{})
 	if _, ok := spec.Files[fuseComposePath]; ok {

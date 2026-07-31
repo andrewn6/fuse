@@ -113,9 +113,20 @@ type manifestMachine struct {
 }
 
 type manifestService struct {
-	Image string                 `json:"image,omitempty"`
-	Ports []int                  `json:"ports,omitempty"`
-	Env   map[string]manifestEnv `json:"env,omitempty"`
+	Image       string                 `json:"image,omitempty"`
+	Ports       []int                  `json:"ports,omitempty"`
+	Env         map[string]manifestEnv `json:"env,omitempty"`
+	Command     []string               `json:"command,omitempty"`
+	Restart     string                 `json:"restart,omitempty"`
+	HealthCheck *manifestHealthCheck   `json:"healthcheck,omitempty"`
+	DependsOn   []string               `json:"depends_on,omitempty"`
+}
+
+type manifestHealthCheck struct {
+	Test     []string `json:"test,omitempty"`
+	Interval string   `json:"interval,omitempty"`
+	Timeout  string   `json:"timeout,omitempty"`
+	Retries  int      `json:"retries,omitempty"`
 }
 
 type manifestEnv struct {
@@ -153,6 +164,14 @@ var labelPattern = regexp.MustCompile(`^[a-zA-Z0-9]([-._a-zA-Z0-9]{0,61}[a-zA-Z0
 // to the same vocabulary as Fusefile authors.
 func ValidLabel(s string) bool {
 	return labelPattern.MatchString(s)
+}
+
+// validRestartPolicies is the compose-native restart policy vocabulary.
+// Compose also accepts "on-failure:N" for a bounded retry count, but that
+// extension is deliberately not accepted here to keep the validated set
+// exact and unambiguous.
+var validRestartPolicies = map[string]bool{
+	"no": true, "always": true, "on-failure": true, "unless-stopped": true,
 }
 
 // nonMIGCapableKinds are GPU model families that are known NOT to support
@@ -273,6 +292,20 @@ func Compile(f *Fusefile) (*Compiled, error) {
 		}
 	}
 
+	// sorted for a deterministic error order when multiple services are invalid.
+	serviceNames := make([]string, 0, len(f.Services))
+	for name := range f.Services {
+		serviceNames = append(serviceNames, name)
+	}
+	sort.Strings(serviceNames)
+	for _, name := range serviceNames {
+		if restart := f.Services[name].Restart; restart != "" && !validRestartPolicies[restart] {
+			errs = append(errs, fmt.Errorf(
+				"services.%s.restart: invalid %q (want one of: no, always, on-failure, unless-stopped)",
+				name, restart))
+		}
+	}
+
 	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
@@ -353,9 +386,23 @@ func compileManifest(f *Fusefile) ([]byte, []string, error) {
 	}
 
 	for name, svc := range f.Services {
-		ms := manifestService{Image: svc.Image}
+		ms := manifestService{Image: svc.Image, Restart: svc.Restart}
 		if len(svc.Ports) > 0 {
 			ms.Ports = append([]int(nil), svc.Ports...)
+		}
+		if len(svc.Command) > 0 {
+			ms.Command = append([]string(nil), svc.Command...)
+		}
+		if len(svc.DependsOn) > 0 {
+			ms.DependsOn = append([]string(nil), svc.DependsOn...)
+		}
+		if svc.HealthCheck != nil {
+			ms.HealthCheck = &manifestHealthCheck{
+				Test:     append([]string(nil), svc.HealthCheck.Test...),
+				Interval: svc.HealthCheck.Interval,
+				Timeout:  svc.HealthCheck.Timeout,
+				Retries:  svc.HealthCheck.Retries,
+			}
 		}
 		if len(svc.Env) > 0 {
 			ms.Env = make(map[string]manifestEnv, len(svc.Env))

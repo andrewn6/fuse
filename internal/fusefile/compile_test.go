@@ -332,9 +332,18 @@ type manifestDoc struct {
 		Workspace string `json:"workspace"`
 	} `json:"machine"`
 	Services map[string]struct {
-		Image string `json:"image"`
-		Ports []int  `json:"ports"`
-		Env   map[string]struct {
+		Image   string   `json:"image"`
+		Ports   []int    `json:"ports"`
+		Command []string `json:"command"`
+		Restart string   `json:"restart"`
+		Health  *struct {
+			Test     []string `json:"test"`
+			Interval string   `json:"interval"`
+			Timeout  string   `json:"timeout"`
+			Retries  int      `json:"retries"`
+		} `json:"healthcheck"`
+		DependsOn []string `json:"depends_on"`
+		Env       map[string]struct {
 			Value  string `json:"value"`
 			Secret string `json:"secret"`
 		} `json:"env"`
@@ -431,6 +440,79 @@ func TestCompileManifestServiceEnvValue(t *testing.T) {
 	}
 	if env.Secret != "" {
 		t.Fatalf("services.api.env.MODE.secret = %q, want empty", env.Secret)
+	}
+}
+
+func TestCompileManifestServiceComposeFields(t *testing.T) {
+	f := &Fusefile{Version: 1,
+		Services: map[string]Service{"api": {
+			Image:   "ghcr.io/acme/api:1",
+			Command: []string{"/app/api", "serve"},
+			Restart: "on-failure",
+			HealthCheck: &HealthCheck{
+				Test:     []string{"CMD", "curl", "-fsS", "http://localhost:8080/health"},
+				Interval: "10s",
+				Timeout:  "2s",
+				Retries:  3,
+			},
+			DependsOn: []string{"db"},
+		}}}
+	c, err := Compile(f)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var m manifestDoc
+	if err := json.Unmarshal(c.ManifestJSON, &m); err != nil {
+		t.Fatal(err)
+	}
+
+	svc, ok := m.Services["api"]
+	if !ok {
+		t.Fatalf("services.api missing")
+	}
+	if !reflect.DeepEqual(svc.Command, []string{"/app/api", "serve"}) {
+		t.Fatalf("services.api.command = %v, want [/app/api serve]", svc.Command)
+	}
+	if svc.Restart != "on-failure" {
+		t.Fatalf("services.api.restart = %q, want on-failure", svc.Restart)
+	}
+	if !reflect.DeepEqual(svc.DependsOn, []string{"db"}) {
+		t.Fatalf("services.api.depends_on = %v, want [db]", svc.DependsOn)
+	}
+	if svc.Health == nil {
+		t.Fatalf("services.api.healthcheck missing")
+	}
+	if !reflect.DeepEqual(svc.Health.Test, []string{"CMD", "curl", "-fsS", "http://localhost:8080/health"}) {
+		t.Fatalf("services.api.healthcheck.test = %v", svc.Health.Test)
+	}
+	if svc.Health.Interval != "10s" || svc.Health.Timeout != "2s" || svc.Health.Retries != 3 {
+		t.Fatalf("services.api.healthcheck = %+v, want interval=10s timeout=2s retries=3", svc.Health)
+	}
+}
+
+func TestCompileServiceRestartInvalid(t *testing.T) {
+	f := &Fusefile{Version: 1,
+		Services: map[string]Service{"api": {Image: "app:latest", Restart: "sometimes"}}}
+	_, err := Compile(f)
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	wantContain := `services.api.restart: invalid "sometimes"`
+	if !strings.Contains(err.Error(), wantContain) {
+		t.Errorf("error %q does not contain %q", err.Error(), wantContain)
+	}
+}
+
+func TestCompileServiceRestartValidValues(t *testing.T) {
+	for _, r := range []string{"no", "always", "on-failure", "unless-stopped", ""} {
+		t.Run(r, func(t *testing.T) {
+			f := &Fusefile{Version: 1,
+				Services: map[string]Service{"api": {Image: "app:latest", Restart: r}}}
+			if _, err := Compile(f); err != nil {
+				t.Fatalf("unexpected error for restart %q: %v", r, err)
+			}
+		})
 	}
 }
 
