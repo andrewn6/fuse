@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.13.1](https://github.com/folsomintel/fuse/compare/v0.13.0...v0.13.1) (2026-07-31)
+
+
+### Bug Fixes
+
+* **host-agent:** bracket IPv6 and prefer IPv4 when composing host:port URLs ([#146](https://github.com/folsomintel/fuse/issues/146)) ([ce167e9](https://github.com/folsomintel/fuse/commit/ce167e9e8f64f38dfa6c0616a94beae76d25d846))
+
 ## [0.13.0](https://github.com/folsomintel/fuse/compare/v0.12.0...v0.13.0) (2026-07-31)
 
 
