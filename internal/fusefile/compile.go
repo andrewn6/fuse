@@ -322,6 +322,7 @@ func Compile(f *Fusefile) (*Compiled, error) {
 			// round up so any positive storage request is never silently zeroed
 			// (e.g. "512MB" must provision 1GB, not floor to 0).
 			StorageGB:          int32((int64(storageMB) + 1023) / 1024),
+			Region:             f.Resources.Region,
 			MaxRuntimeSeconds:  maxRuntimeSeconds,
 			IdleTimeoutSeconds: idleTimeoutSeconds,
 			Image:              f.Image,

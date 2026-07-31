@@ -134,6 +134,30 @@ func TestCompileIdleTimeoutAndMaxRuntimeCoexist(t *testing.T) {
 	}
 }
 
+func TestCompileRegion(t *testing.T) {
+	cases := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"unset", "", ""},
+		{"region set", "us-east", "us-east"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &Fusefile{Version: 1, Resources: Resources{Region: tc.input}}
+			c, err := Compile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Spec.Region != tc.want {
+				t.Fatalf("region = %q, want %q", c.Spec.Region, tc.want)
+			}
+		})
+	}
+}
+
 func TestCompileCPUsPassthrough(t *testing.T) {
 	f := &Fusefile{Version: 1, Resources: Resources{CPUs: 4}}
 	c, err := Compile(f)

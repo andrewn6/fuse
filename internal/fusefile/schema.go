@@ -149,6 +149,7 @@ type Resources struct {
 	GPUProfile string `yaml:"gpu_profile,omitempty"`
 	Memory     string `yaml:"memory,omitempty"`      // e.g. "2GB"
 	Storage    string `yaml:"storage,omitempty"`     // e.g. "10GB"
+	Region     string `yaml:"region,omitempty"`      // schedules only onto a host registered in this region; empty matches any
 	MaxRuntime string `yaml:"max_runtime,omitempty"` // go duration
 	// IdleTimeout destroys the environment after this long with no exec
 	// and no attach session. Go duration. "idle" means exactly that: no

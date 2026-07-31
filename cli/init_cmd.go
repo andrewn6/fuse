@@ -37,6 +37,7 @@ resources:
   storage: 10GB # compiles to storage_gb
   max_runtime: 1h # accepts go duration, compiles to max_runtime_seconds
   # idle_timeout: 15m # uncomment to destroy after this long with no exec or attach
+  # region: us-east # uncomment to schedule only onto a host registered in this region
 
 # opt in to the setup layer cache. layers are host-local and firecracker-only;
 # a gpu environment gets no caching. see 'fuse build --plan'.
