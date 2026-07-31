@@ -3,7 +3,7 @@
 # Idempotent — a no-op when already current.
 #
 # Flow:
-#   1. git pull the checkout (fc-agent.py, host-agent/ scripts, cmd/fused source)
+#   1. git pull the checkout (fc-agent.py, host-agent/ scripts, fused source)
 #   2. obtain the `fused` agent binary: download the latest release asset if a
 #      release is published, otherwise BUILD it from the pulled source (needs Go)
 #   3. re-bake the guest rootfs so new microVMs run the new agent
@@ -51,11 +51,11 @@ curl_dl() {
 }
 
 # >>> fuse release-asset checksum verification >>>
-# This block is embedded, not sourced: scripts/install-orchestrator.sh is
+# This block is embedded, not sourced: ops/install-orchestrator.sh is
 # documented as curl-able and run standalone on a fresh host, so a sibling
 # library file is not guaranteed to exist on disk. Keep the copies in
 # host-agent/fc-update.sh, host-agent/fc-agent.sh and
-# scripts/install-orchestrator.sh byte-identical;
+# ops/install-orchestrator.sh byte-identical;
 # host-agent/test-verify-checksum.sh asserts that and exercises the helper.
 
 # sha256_of <file> - print the file's lowercase sha256, or fail if no tool.
@@ -222,7 +222,7 @@ if [ -n "${FUSE_ORCH_SERVICE:-}" ]; then
     ok "orchestrator updated + restarted ($("$FUSE_ORCH_BIN" --version 2>/dev/null || echo '?'))"
   elif command -v go >/dev/null 2>&1; then
     log "building orchestrator from source -> $FUSE_ORCH_BIN"
-    CGO_ENABLED=0 go -C "$REPO_ROOT" build -ldflags='-s -w' -o "$FC_DIR/.orchestrator.new" ./cmd/orchestrator
+    CGO_ENABLED=0 go -C "$REPO_ROOT" build -ldflags='-s -w' -o "$FC_DIR/.orchestrator.new" ./orchestrator
     sudo -n install -m 0755 "$FC_DIR/.orchestrator.new" "$FUSE_ORCH_BIN"; rm -f "$FC_DIR/.orchestrator.new"
     sudo -n systemctl restart "$FUSE_ORCH_SERVICE"
     ok "orchestrator (source) updated + restarted"

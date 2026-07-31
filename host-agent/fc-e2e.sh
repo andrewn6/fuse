@@ -40,12 +40,12 @@ field() { printf '%s' "$1" | grep -oE "\"$2\"[[:space:]]*:[[:space:]]*\"[^\"]*\"
 
 step "build"
 if command -v go >/dev/null 2>&1; then
-  go build -o "$BIN" ./cmd/orchestrator
+  go build -o "$BIN" ./orchestrator
   pass "built $BIN"
 elif [ -x "$BIN" ]; then
   pass "using prebuilt $BIN (Go not installed on this host)"
 else
-  die "Go not installed and no prebuilt binary at $BIN — cross-build ./cmd/orchestrator elsewhere (GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin/fuse ./cmd/orchestrator) and copy it here"
+  die "Go not installed and no prebuilt binary at $BIN — cross-build ./orchestrator elsewhere (GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin/fuse ./orchestrator) and copy it here"
 fi
 
 # Environment for the server process. A token-encryption key makes Boot generate

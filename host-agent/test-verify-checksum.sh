@@ -37,7 +37,7 @@ extract() { awk -v b="$BEGIN" -v e="$END" '$0==b{f=1} f{print} $0==e{f=0}' "$1";
 
 printf '\n== helper copies are in sync ==\n'
 A="$ROOT/host-agent/fc-update.sh"
-B="$ROOT/scripts/install-orchestrator.sh"
+B="$ROOT/ops/install-orchestrator.sh"
 C="$ROOT/host-agent/fc-agent.sh"
 extract "$A" > "$WORK/a.sh"
 extract "$B" > "$WORK/b.sh"

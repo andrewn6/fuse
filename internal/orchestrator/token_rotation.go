@@ -13,7 +13,7 @@ import (
 // new encrypted token.
 //
 // KNOWN GAP: fused reads --auth-token-file exactly once at process start
-// (cmd/fused/main.go) and has no credential poller, so a live fused keeps
+// (fused/main.go) and has no credential poller, so a live fused keeps
 // serving the OLD token until it is restarted. Rotation therefore updates the
 // orchestrator's copy and the guest's files but does not yet take effect in the
 // running guest; it needs a StartAgent call (which restarts fused) the way

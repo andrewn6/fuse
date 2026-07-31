@@ -102,7 +102,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: install-fuse tests
-        run: ./scripts/test-install-fuse.sh
+        run: ./ops/test-install-fuse.sh
 
   # Installer/updater shell tests. The release-asset checksum helper is embedded
   # in two standalone scripts rather than sourced, so this job is what keeps the

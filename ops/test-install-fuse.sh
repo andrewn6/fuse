@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# Tests for scripts/install-fuse.sh. No network: a fake `curl` on PATH serves a
+# Tests for ops/install-fuse.sh. No network: a fake `curl` on PATH serves a
 # synthetic release, so the platform mapping and the fail-closed verification
 # are exercised without touching GitHub.
 #
-#   ./scripts/test-install-fuse.sh
+#   ./ops/test-install-fuse.sh
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

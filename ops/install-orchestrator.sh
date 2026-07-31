@@ -35,11 +35,11 @@ log() { echo "[install-orchestrator] $*"; }
 die() { echo "[install-orchestrator] error: $*" >&2; exit 1; }
 
 # >>> fuse release-asset checksum verification >>>
-# This block is embedded, not sourced: scripts/install-orchestrator.sh is
+# This block is embedded, not sourced: ops/install-orchestrator.sh is
 # documented as curl-able and run standalone on a fresh host, so a sibling
 # library file is not guaranteed to exist on disk. Keep the copies in
 # host-agent/fc-update.sh, host-agent/fc-agent.sh and
-# scripts/install-orchestrator.sh byte-identical;
+# ops/install-orchestrator.sh byte-identical;
 # host-agent/test-verify-checksum.sh asserts that and exercises the helper.
 
 # sha256_of <file> - print the file's lowercase sha256, or fail if no tool.
@@ -167,11 +167,11 @@ else
   log "$ENV_FILE exists - leaving it untouched"
 fi
 
-# 3. install the systemd unit (prefer the tracked deploy/ copy, fall back to
-#    an inline definition so a curl'd standalone script still works).
+# 3. install the systemd unit (prefer the tracked ops/systemd/ copy, fall back
+#    to an inline definition so a curl'd standalone script still works).
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [ -f "$SCRIPT_DIR/../deploy/fuse-orchestrator.service" ]; then
-  install -m0644 "$SCRIPT_DIR/../deploy/fuse-orchestrator.service" "$UNIT"
+if [ -f "$SCRIPT_DIR/systemd/fuse-orchestrator.service" ]; then
+  install -m0644 "$SCRIPT_DIR/systemd/fuse-orchestrator.service" "$UNIT"
 else
   cat > "$UNIT" <<EOF
 [Unit]

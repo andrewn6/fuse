@@ -10,7 +10,7 @@ before:
 
 builds:
   - id: orchestrator
-    main: ./cmd/orchestrator
+    main: ./orchestrator
     binary: orchestrator
     env:
       - CGO_ENABLED=0
@@ -27,7 +27,7 @@ builds:
       - -s -w -X main.version={{.Version}}
 
   - id: dbcheck
-    main: ./cmd/dbcheck
+    main: ./dbcheck
     binary: dbcheck
     env:
       - CGO_ENABLED=0
@@ -45,7 +45,7 @@ builds:
   # at boot via AGENT_DOWNLOAD_URL / start-agent download_url). Linux only — it
   # runs inside a Firecracker guest, never on the control-plane host.
   - id: fused
-    main: ./cmd/fused
+    main: ./fused
     binary: fused
     env:
       - CGO_ENABLED=0

@@ -66,7 +66,7 @@ pass "gpu host agent reachable at $QEMU_BASE_URL"
 
 step "build"
 if command -v go >/dev/null 2>&1; then
-  go build -o "$BIN" ./cmd/orchestrator
+  go build -o "$BIN" ./orchestrator
   pass "built $BIN"
 elif [ -x "$BIN" ]; then
   pass "using prebuilt $BIN (Go not installed on this host)"
