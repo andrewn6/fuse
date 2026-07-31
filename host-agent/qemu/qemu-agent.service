@@ -1,3 +1,9 @@
+# Every path below must point at the directory holding qemu-agent.py. Under the
+# documented setup that is your checkout's host-agent/qemu, not a flat
+# /home/ubuntu/qemu -- edit these five lines to match. The agent also needs
+# host-agent/shared/agent_common.py, which it finds either next to itself or in
+# ../shared/; a host that copies qemu-agent.py somewhere flat must copy
+# agent_common.py alongside it.
 [Unit]
 Description=Fuse QEMU host agent (GPU passthrough)
 After=network-online.target

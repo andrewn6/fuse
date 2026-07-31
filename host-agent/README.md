@@ -26,8 +26,14 @@ exposes `/dev/kvm`:
 ```
 firecracker/        # everything to run a Firecracker host — see below
 qemu/                # everything to run a QEMU/GPU host — see below
-shared/              # fc-build-agent.sh, the guest-agent build step used by both backends
+shared/              # code both backends use: agent_common.py, plus fc-build-agent.sh
 ```
+
+`shared/agent_common.py` holds everything that is not backend-specific — the attach frame
+protocol and its pty relay, the SSH transport to a guest, public-host resolution, and small
+process helpers. Each agent loads it by path, looking next to itself first and then in
+`../shared/`. Running from a git checkout (the documented setup) that resolves on its own; a
+host that copies an agent into a flat directory must copy `agent_common.py` alongside it.
 
 ```
 firecracker/

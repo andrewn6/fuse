@@ -206,12 +206,15 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.13"
+      - name: Test shared agent code
+        working-directory: host-agent/shared
+        run: python -m unittest test_agent_common -v
       - name: Test QEMU agent
         working-directory: host-agent/qemu
         run: python -m unittest test_qemu_agent -v
       - name: Test Firecracker agent
         working-directory: host-agent/firecracker
-        run: python -m unittest test_fc_agent_public_host -v
+        run: python -m unittest test_fc_agent_shared -v
 
   # Go SDK as a standalone module: builds with GOWORK=off so the workspace does
   # not mask a missing/extra dependency a real consumer would hit.
