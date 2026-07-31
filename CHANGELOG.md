@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.14.0](https://github.com/folsomintel/fuse/compare/v0.13.1...v0.14.0) (2026-07-31)
+
+
+### Features
+
+* **fusefile:** close the remaining validation gaps in parse and compile ([#149](https://github.com/folsomintel/fuse/issues/149)) ([e3b6402](https://github.com/folsomintel/fuse/commit/e3b640210f7b773dd94f80e8730e7e7e076b8942))
+* **fusefile:** publish a json schema for editor autocomplete and inline validation ([#151](https://github.com/folsomintel/fuse/issues/151)) ([60a0309](https://github.com/folsomintel/fuse/commit/60a0309cb57de896f004974330a03eb90f8b11b2))
+* **fusefile:** unify the cpu, memory, disk, and gpu resource syntax ([#150](https://github.com/folsomintel/fuse/issues/150)) ([5dedda0](https://github.com/folsomintel/fuse/commit/5dedda04f99876666d08751dc78ef7db45186e5a))
+
+
+### Bug Fixes
+
+* **orchestrator:** register forks in fm.vms as provisioning before create so reconcile cannot orphan-destroy them ([#148](https://github.com/folsomintel/fuse/issues/148)) ([dbb1f72](https://github.com/folsomintel/fuse/commit/dbb1f720ee028842e449164e64dce809bbd50c66))
+
 ## [0.13.1](https://github.com/folsomintel/fuse/compare/v0.13.0...v0.13.1) (2026-07-31)
 
 
