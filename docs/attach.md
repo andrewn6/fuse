@@ -24,7 +24,8 @@ that can open a pty onto the guest.
 
 **There is no WebSocket in the tree, and there will not be one for this.** The Go SDK is
 deliberately dependency-free (`sdks/go/go.mod` has no `require` block), and the host agents
-are single-file stdlib Python. A raw HTTP/1.1 upgrade is stdlib on all three ends: Go's
+are stdlib-only Python (each backend's agent plus `host-agent/shared/agent_common.py`, which
+holds the frame codec both of them use). A raw HTTP/1.1 upgrade is stdlib on all three ends: Go's
 `http.NewResponseController(...).Hijack()` on the server, `net.Conn` plus `http.ReadResponse`
 on the client, `BaseHTTPRequestHandler`'s `rfile`/`wfile` on the host agent. A WebSocket
 would mean a dependency in the SDK and a hand-rolled RFC 6455 framer in Python, in exchange

@@ -11,32 +11,79 @@ Transport for guest ops (upload/exec/start-agent): SSH to root@<guest_ip>.
 from __future__ import annotations
 
 import base64
-import fcntl
 import copy
 import hmac
-import ipaddress
 import http.client
 import json
 import os
-import pty
 import re
-import selectors
 import shlex
 import shutil
-import signal
 import socket
-import struct
 import subprocess
 import sys
-import termios
 import threading
 import time
 import traceback
 import uuid
-from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+
+# -- shared agent code --------------------------------------------------------
+#
+# Everything that is not backend-specific (the attach frame protocol and its pty
+# relay, the SSH transport, public-host resolution, small process helpers) lives
+# in host-agent/shared/agent_common.py so the Firecracker and QEMU agents cannot
+# drift apart. Loaded by path rather than imported: the agents are standalone
+# scripts, not a package, and the file sits either next to the agent (a host
+# that copies the agent into a flat directory) or in ../shared/ (a git checkout,
+# which is how fc-update.sh keeps a host current).
+
+
+def _load_shared():
+    import importlib.util
+
+    here = Path(__file__).resolve().parent
+    for cand in (here / "agent_common.py", here.parent / "shared" / "agent_common.py"):
+        if cand.exists():
+            spec = importlib.util.spec_from_file_location("fuse_agent_common", cand)
+            mod = importlib.util.module_from_spec(spec)
+            assert spec.loader is not None
+            spec.loader.exec_module(mod)
+            return mod
+    raise SystemExit(
+        "agent_common.py not found next to %s or in ../shared/; copy "
+        "host-agent/shared/agent_common.py alongside this agent" % Path(__file__).name
+    )
+
+
+common = _load_shared()
+
+HTTPError = common.HTTPError
+run = common.run
+sudo = common.sudo
+pid_alive = common.pid_alive
+now_iso = common.now_iso
+sanitize_name = common.sanitize_name
+host_authority = common.host_authority
+probe_public_host = common.probe_public_host
+resolve_public_host = common.resolve_public_host
+
+ATTACH_PROTO = common.ATTACH_PROTO
+FRAME_STDIN = common.FRAME_STDIN
+FRAME_STDOUT = common.FRAME_STDOUT
+FRAME_STDERR = common.FRAME_STDERR
+FRAME_RESIZE = common.FRAME_RESIZE
+FRAME_EXIT = common.FRAME_EXIT
+FRAME_HEADER = common.FRAME_HEADER
+MAX_FRAME_PAYLOAD = common.MAX_FRAME_PAYLOAD
+encode_frame = common.encode_frame
+FrameDecoder = common.FrameDecoder
+set_winsize = common.set_winsize
+parse_attach_spec = common.parse_attach_spec
+drain_buffered = common.drain_buffered
+
 
 FC_DIR = Path(os.environ.get("FC_DIR", "/home/ubuntu/fc"))
 STATE_DIR = FC_DIR / "agent-state"
@@ -72,76 +119,6 @@ FC_BIN = os.environ.get("FC_BIN", "/usr/local/bin/firecracker")
 # Port the in-guest agent listens on; per-VM host ports DNAT to this.
 FUSED_PORT = int(os.environ.get("FUSED_PORT", "9550"))
 HOST_PORT_BASE = int(os.environ.get("FUSE_HOST_PORT_BASE", "19550"))
-# Public host resolution. The agent hands the orchestrator a bare "host:port"
-# authority for each VM, so a malformed host silently produces environments
-# nobody can reach. Prefer IPv4 (consumers of the url treat it as an opaque
-# host:port), bracket IPv6 when that is all the host has, and fail loudly on a
-# value that is neither an IP nor a plausible hostname.
-_HOSTNAME_RE = re.compile(
-    r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
-    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
-)
-
-
-def host_authority(host: str, port: int | str) -> str:
-    """Compose a host:port authority, bracketing host when it is IPv6."""
-    try:
-        if isinstance(ipaddress.ip_address(host), ipaddress.IPv6Address):
-            return f"[{host}]:{port}"
-    except ValueError:
-        pass
-    return f"{host}:{port}"
-
-
-def _probe(cmd: list[str]) -> str:
-    try:
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout.strip()
-    except (OSError, subprocess.SubprocessError):
-        return ""
-
-
-def probe_public_host() -> str:
-    """Best-effort public address of this host, IPv4 first, IPv6 as fallback."""
-    for cmd in (
-        ["curl", "-4", "-fsS", "ifconfig.me"],
-        ["bash", "-lc", "hostname -I | tr ' ' '\\n' | awk '/:/ {next} NF {print; exit}'"],
-        ["curl", "-6", "-fsS", "ifconfig.me"],
-        ["bash", "-lc", "hostname -I | awk '{print $1}'"],
-    ):
-        out = _probe(cmd)
-        if not out:
-            continue
-        try:
-            ipaddress.ip_address(out)
-        except ValueError:
-            continue
-        return out
-    return ""
-
-
-def resolve_public_host() -> str:
-    """PUBLIC_HOST if set (IP or hostname), else a probed IP. Never garbage."""
-    override = os.environ.get("PUBLIC_HOST", "").strip()
-    if override:
-        try:
-            ipaddress.ip_address(override)
-            return override
-        except ValueError:
-            pass
-        if _HOSTNAME_RE.match(override):
-            return override
-        raise SystemExit(
-            f"PUBLIC_HOST is neither an IP address nor a hostname: {override!r}"
-        )
-    host = probe_public_host()
-    if not host:
-        raise SystemExit(
-            "could not resolve a public IP for this host; "
-            "set PUBLIC_HOST=<ip> in the agent env"
-        )
-    return host
-
-
 PUBLIC_HOST = resolve_public_host()
 
 if not TOKEN:
@@ -153,6 +130,32 @@ SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
 SSH_CONTROL_DIR = STATE_DIR / "ssh-control"
 SSH_CONTROL_DIR.mkdir(parents=True, exist_ok=True)
 
+# -- SSH ----------------------------------------------------------------------
+#
+# The transport is shared; only the key and the control-socket directory are
+# per-agent. The module-level aliases keep every call site (and the tests that
+# patch them) unchanged.
+
+SSH = common.SSHClient(SSH_KEY, SSH_CONTROL_DIR)
+SSH_BASE = SSH.base
+_ssh_control_path = SSH.control_path
+ssh_exec = SSH.exec
+wait_for_ssh = SSH.wait
+attach_argv = SSH.attach_argv
+
+
+def do_attach(handler, vm_id: str, spec: dict) -> None:
+    """Resolve the VM, then hand the socket to the shared pty relay.
+
+    attach_argv is looked up here, not passed through by the shared code, so a
+    test can still swap it for a local shell.
+    """
+    meta = load_meta(vm_id)
+    if not meta:
+        raise HTTPError(404, "vm not found")
+    common.do_attach(handler, meta["guest_ip"], spec, SSH, argv_builder=attach_argv)
+
+
 _vm_locks: dict[str, threading.Lock] = {}
 _locks_guard = threading.Lock()
 _create_lock = threading.Lock()
@@ -163,23 +166,6 @@ def vm_lock(vm_id: str) -> threading.Lock:
         if vm_id not in _vm_locks:
             _vm_locks[vm_id] = threading.Lock()
         return _vm_locks[vm_id]
-
-
-def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
-
-
-def sanitize_name(name: str) -> str:
-    s = re.sub(r"[^a-z0-9-]+", "-", name.lower()).strip("-")
-    return s or "vm"
-
-
-def run(cmd: list[str], check: bool = True, input_bytes: bytes | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, capture_output=True, check=check, input=input_bytes)
-
-
-def sudo(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
-    return run(["sudo", "-n"] + cmd, check=check)
 
 
 # -- Firecracker HTTP client over unix socket ---------------------------------
@@ -337,50 +323,8 @@ def del_expose_forward(host_port: int, guest_ip: str, guest_port: int) -> None:
     )
 
 
-# -- SSH ----------------------------------------------------------------------
-
-SSH_BASE = [
-    "ssh", "-i", str(SSH_KEY),
-    "-o", "StrictHostKeyChecking=no",
-    "-o", "UserKnownHostsFile=/dev/null",
-    "-o", "LogLevel=ERROR",
-    "-o", "ConnectTimeout=5",
-    "-o", "BatchMode=yes",
-    # Reuse one multiplexed connection per guest instead of paying a fresh
-    # TCP+SSH handshake on every call (readiness poll, uploads, exec, agent
-    # start easily add up to 8-10 calls per create). Short-lived on purpose:
-    # ControlPersist expires the master on its own, so a stale socket left
-    # by a destroyed VM is harmless (a new VM at the same guest ip just
-    # starts a fresh master once the old one has timed out).
-    "-o", "ControlMaster=auto",
-    "-o", "ControlPersist=60s",
-]
-
-
-def _ssh_control_path(guest_ip: str) -> str:
-    return str(SSH_CONTROL_DIR / f"{guest_ip}.sock")
-
-
-def ssh_exec(guest_ip: str, remote_cmd: str, stdin: bytes | None = None, timeout: float = 60.0) -> tuple[int, bytes, bytes]:
-    cmd = SSH_BASE + ["-o", f"ControlPath={_ssh_control_path(guest_ip)}", f"root@{guest_ip}", remote_cmd]
-    try:
-        cp = subprocess.run(cmd, input=stdin, capture_output=True, timeout=timeout)
-    except subprocess.TimeoutExpired as e:
-        return 124, b"", f"timeout: {e}".encode()
-    return cp.returncode, cp.stdout, cp.stderr
-
-
-def wait_for_ssh(guest_ip: str, timeout: float = 30.0) -> bool:
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        rc, _, _ = ssh_exec(guest_ip, "true", timeout=4.0)
-        if rc == 0:
-            return True
-        time.sleep(0.3)
-    return False
-
-
 # -- VM lifecycle -------------------------------------------------------------
+
 
 def vm_dir(vm_id: str) -> Path:
     return VMS_DIR / vm_id
@@ -405,14 +349,6 @@ def save_meta(meta: dict) -> None:
 
 def list_vms() -> list[dict]:
     return [m for d in sorted(VMS_DIR.iterdir()) if (m := load_meta(d.name))]
-
-
-def pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-        return True
-    except Exception:
-        return False
 
 
 def start_firecracker(meta: dict) -> None:
@@ -907,273 +843,11 @@ def do_start_surfd(vm_id: str, manifest_path: str, secrets_path: str,
 
 # -- HTTP layer ---------------------------------------------------------------
 
-class HTTPError(Exception):
-    def __init__(self, code: int, msg: str):
-        self.code = code
-        self.msg = msg
-
-
 def vm_public(meta: dict) -> dict:
     return {"vm_id": meta["vm_id"], "url": meta.get("url", "")}
 
 
 EXEC_TIMEOUT_MAX = 600.0  # ceiling on any single guest command
-
-
-# -- Attach (interactive pty) -------------------------------------------------
-#
-# The orchestrator relays a fuse-attach/1 stream between the CLI and this
-# endpoint without interpreting it, so the frame codec below is one of only two
-# implementations that matter (the other is the Go client). See docs/attach.md.
-#
-# Frames are [type:1][reserved:3][length:4 big-endian][payload:length].
-
-ATTACH_PROTO = "fuse-attach/1"
-
-FRAME_STDIN = 0
-FRAME_STDOUT = 1
-FRAME_STDERR = 2
-FRAME_RESIZE = 3
-FRAME_EXIT = 4
-
-FRAME_HEADER = 8
-MAX_FRAME_PAYLOAD = 1 << 20  # a bogus length must not let a peer allocate GBs
-
-
-def encode_frame(ftype: int, payload: bytes) -> bytes:
-    return bytes([ftype, 0, 0, 0]) + len(payload).to_bytes(4, "big") + payload
-
-
-class FrameDecoder:
-    """Incremental decoder: feed it socket reads, get whole frames back.
-
-    Incremental because a TCP read has no relationship to a frame boundary --
-    one read can carry half a frame or three of them.
-    """
-
-    def __init__(self) -> None:
-        self.buf = bytearray()
-
-    def feed(self, data: bytes):
-        self.buf += data
-        while True:
-            if len(self.buf) < FRAME_HEADER:
-                return
-            length = int.from_bytes(self.buf[4:8], "big")
-            if length > MAX_FRAME_PAYLOAD:
-                raise ValueError(f"attach frame too large: {length}")
-            if len(self.buf) < FRAME_HEADER + length:
-                return
-            ftype = self.buf[0]
-            payload = bytes(self.buf[FRAME_HEADER:FRAME_HEADER + length])
-            del self.buf[:FRAME_HEADER + length]
-            yield ftype, payload
-
-
-def set_winsize(fd: int, rows: int, cols: int) -> None:
-    """Resize the pty. The kernel sends SIGWINCH to the pty's foreground
-    process group, which is how ssh learns to tell the guest its new size."""
-    if rows <= 0 or cols <= 0:
-        return
-    # A winsize field is 16 bits. A relayed resize frame carrying rows/cols
-    # above 65535 would otherwise make struct.pack raise struct.error (not an
-    # OSError), which the pty relay does not catch, wedging the session. Clamp
-    # rather than raise: a client asking for an absurd size wants the maximum.
-    rows = min(rows, 0xFFFF)
-    cols = min(cols, 0xFFFF)
-    packed = struct.pack("HHHH", rows, cols, 0, 0)
-    try:
-        fcntl.ioctl(fd, termios.TIOCSWINSZ, packed)
-    except OSError:
-        pass
-
-
-def parse_attach_spec(query: dict) -> dict:
-    """Read the attach spec out of the request query. cmd repeats to preserve
-    argv boundaries, so a command containing spaces survives the round trip."""
-
-    def _int(name: str) -> int:
-        try:
-            return int(query.get(name, ["0"])[0])
-        except (ValueError, IndexError):
-            return 0
-
-    tty = query.get("tty", [""])[0] in ("1", "true")
-    return {
-        "cmd": query.get("cmd", []),
-        "tty": tty,
-        "rows": _int("rows"),
-        "cols": _int("cols"),
-    }
-
-
-def drain_buffered(rfile, sock) -> bytes:
-    """Return bytes the client sent immediately after the request head.
-
-    They are already inside rfile's buffer, where select() on the socket will
-    never see them -- so without this the first keystrokes of a fast client
-    would be silently swallowed.
-    """
-    sock.setblocking(False)
-    try:
-        peeked = rfile.peek(0)
-        if peeked:
-            return rfile.read(len(peeked))
-        return b""
-    except (BlockingIOError, OSError):
-        return b""
-    finally:
-        sock.setblocking(True)
-
-
-def attach_argv(guest_ip: str, cmd: list[str]) -> list[str]:
-    """Build the ssh argv for an attach session.
-
-    -tt forces a pty on the far side even though ssh's own stdin is already
-    one; without it a command given to ssh runs without a terminal. An empty
-    cmd means the guest's login shell.
-    """
-    return SSH_BASE + ["-tt", f"root@{guest_ip}"] + list(cmd)
-
-
-def do_attach(handler, vm_id: str, spec: dict) -> None:
-    """Relay a fuse-attach/1 stream between the client socket and a pty running
-    ssh into the guest.
-
-    This owns the socket: it writes the 101 itself and the connection is not an
-    HTTP conversation afterwards. It must therefore be called outside the
-    per-VM lock -- an interactive session lasts as long as a human keeps it
-    open, and holding the lock would block every other operation on that VM for
-    the duration.
-    """
-    meta = load_meta(vm_id)
-    if not meta:
-        raise HTTPError(404, "vm not found")
-    if not spec["tty"]:
-        raise HTTPError(400, "attach requires tty=1; use /exec for non-interactive commands")
-
-    argv = attach_argv(meta["guest_ip"], spec["cmd"])
-
-    conn = handler.connection
-    # An interactive session is idle whenever nobody is typing, so the
-    # request-level socket timeout must not apply to it. The selector loop
-    # below is what bounds this connection instead.
-    conn.settimeout(None)
-    pending = drain_buffered(handler.rfile, conn)
-
-    handler.wfile.write(
-        b"HTTP/1.1 101 Switching Protocols\r\n"
-        b"Upgrade: " + ATTACH_PROTO.encode() + b"\r\n"
-        b"Connection: Upgrade\r\n\r\n"
-    )
-    handler.wfile.flush()
-
-    # pty.fork rather than subprocess: the child needs the pty as its
-    # controlling terminal in a new session, which is what makes SIGWINCH
-    # delivery (and therefore window resizing) work at all.
-    pid, master_fd = pty.fork()
-    if pid == 0:
-        try:
-            # SSH_BASE[0] ("ssh"), not argv[0]: argv is built by concatenating
-            # SSH_BASE with the caller-supplied cmd, and indexing into that
-            # concatenation reads as an attacker-controlled exec path to static
-            # analysis even though position 0 is always the literal from
-            # SSH_BASE. Naming the constant directly keeps the executable
-            # unambiguous.
-            os.execvp(SSH_BASE[0], argv)
-        except Exception:
-            pass
-        os._exit(127)
-
-    set_winsize(master_fd, spec["rows"], spec["cols"])
-
-    decoder = FrameDecoder()
-    exit_code = 0
-    client_gone = False
-    try:
-        if pending:
-            _pump_client_frames(decoder, pending, master_fd)
-
-        sel = selectors.DefaultSelector()
-        sel.register(conn, selectors.EVENT_READ, "sock")
-        sel.register(master_fd, selectors.EVENT_READ, "pty")
-
-        while True:
-            done = False
-            for key, _ in sel.select(timeout=30.0):
-                if key.data == "sock":
-                    data = conn.recv(65536)
-                    if not data:
-                        done = True
-                        client_gone = True
-                        break
-                    _pump_client_frames(decoder, data, master_fd)
-                else:
-                    try:
-                        out = os.read(master_fd, 65536)
-                    except OSError:
-                        out = b""  # EIO on Linux once the child is gone
-                    if not out:
-                        done = True  # guest process exited
-                        break
-                    conn.sendall(encode_frame(FRAME_STDOUT, out))
-            if done:
-                break
-    except Exception:
-        # Any escape from the relay loop means we are tearing down, and the
-        # child must be killed, not waited on: _reap(kill=False) would block in
-        # waitpid forever on a still-live ssh -tt process.
-        client_gone = True
-    finally:
-        exit_code = _reap(pid, kill=client_gone)
-        try:
-            os.close(master_fd)
-        except OSError:
-            pass
-
-    # Best effort: if the client is the side that went away there is nobody
-    # left to tell, and that is not a failure.
-    try:
-        conn.sendall(encode_frame(FRAME_EXIT, json.dumps({"exit_code": exit_code}).encode()))
-    except OSError:
-        pass
-
-
-def _pump_client_frames(decoder: FrameDecoder, data: bytes, master_fd: int) -> None:
-    for ftype, payload in decoder.feed(data):
-        if ftype == FRAME_STDIN:
-            os.write(master_fd, payload)
-        elif ftype == FRAME_RESIZE:
-            try:
-                size = json.loads(payload)
-                set_winsize(master_fd, int(size.get("rows", 0)), int(size.get("cols", 0)))
-            except (ValueError, TypeError):
-                pass
-        # stdout/stderr/exit frames are server-to-client; ignore them inbound.
-
-
-def _reap(pid: int, kill: bool) -> int:
-    """Wait for the ssh child and turn its wait status into an exit code.
-
-    Only kill when the client is the side that left. On a normal exit the pty
-    reports EOF a hair before the child is reaped, so an unconditional SIGKILL
-    would race a process that was already exiting cleanly and report 137 in
-    place of its real status.
-    """
-    if kill:
-        try:
-            os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
-    try:
-        _, status = os.waitpid(pid, 0)
-    except OSError:
-        return 0
-    if os.WIFEXITED(status):
-        return os.WEXITSTATUS(status)
-    if os.WIFSIGNALED(status):
-        return 128 + os.WTERMSIG(status)
-    return 0
 
 
 def host_capacity() -> dict:
