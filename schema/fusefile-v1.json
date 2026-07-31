@@ -64,8 +64,8 @@
     },
     "size": {
       "type": "string",
-      "description": "A size with an MB or GB suffix, e.g. \"512MB\" or \"2GB\". The suffix is case-insensitive.",
-      "pattern": "^[0-9]+([Mm][Bb]|[Gg][Bb])$"
+      "description": "A number, optional whitespace, and a unit: M, MB, MiB, G, GB, GiB, T, TB or TiB, in any case. Every unit is binary, so GB and GiB are synonyms for 1024 MiB. E.g. \"512MB\", \"2GB\", \"2 GiB\", \"1.5GB\".",
+      "pattern": "^[0-9]+(\\.[0-9]+)?[ \\t]*([MmGgTt]|[MmGgTt][Bb]|[MmGgTt][Ii][Bb])$"
     },
     "label": {
       "type": "string",
@@ -77,8 +77,10 @@
       "additionalProperties": false,
       "properties": {
         "cpus": {
-          "type": "integer",
-          "description": "vCPU count."
+          "type": "number",
+          "multipleOf": 1,
+          "minimum": 0,
+          "description": "Whole vCPU count. A whole-valued float (2.0) is accepted; a fraction is not, because Firecracker takes an integer vcpu_count and QEMU an integer -smp."
         },
         "gpu": {
           "type": "integer",
@@ -95,7 +97,14 @@
           "pattern": "^[1-7][Gg]\\.[0-9]+[Gg][Bb](\\+[Mm][Ee])?$"
         },
         "memory": { "$ref": "#/$defs/size" },
-        "storage": { "$ref": "#/$defs/size" },
+        "disk": {
+          "allOf": [{ "$ref": "#/$defs/size" }],
+          "description": "Size of the guest root disk, rounded up to a whole GB. The preferred spelling; storage is a permanent alias."
+        },
+        "storage": {
+          "allOf": [{ "$ref": "#/$defs/size" }],
+          "description": "A permanent alias for disk. Setting both is only valid if they name the same size."
+        },
         "region": {
           "type": "string",
           "description": "Schedules only onto a host registered in this region. Empty matches any region."

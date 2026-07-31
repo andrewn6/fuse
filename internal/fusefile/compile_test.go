@@ -68,6 +68,38 @@ func TestCompileStorageRoundsUp(t *testing.T) {
 	}
 }
 
+func TestCompileDiskAndStorage(t *testing.T) {
+	// disk is the preferred spelling, storage the permanent alias. either
+	// alone compiles to storage_gb, and both together are fine as long as
+	// they mean the same size.
+	cases := []struct {
+		name    string
+		disk    string
+		storage string
+		want    int32
+	}{
+		{"disk alone", "10GB", "", 10},
+		{"storage alone", "", "10GB", 10},
+		{"both agreeing", "10GB", "10GB", 10},
+		{"both agreeing through different spellings", "10GB", "10240MB", 10},
+		{"storage still rounds up", "", "512MB", 1},
+		{"disk rounds up", "512MB", "", 1},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &Fusefile{Version: 1, Resources: Resources{Disk: tc.disk, Storage: tc.storage}}
+			c, err := Compile(f)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if c.Spec.StorageGB != tc.want {
+				t.Fatalf("storage_gb = %d, want %d", c.Spec.StorageGB, tc.want)
+			}
+		})
+	}
+}
+
 func TestCompileMaxRuntime(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -255,14 +287,18 @@ func TestCompileInvalid(t *testing.T) {
 		wantContain string
 	}{
 		{
-			name:        "invalid memory unit words",
-			resources:   Resources{Memory: "2 gigabytes"},
-			wantContain: `resources.memory: invalid size "2 gigabytes"`,
+			// the size error names the accepted forms so a rejected string
+			// tells the author what to write instead.
+			name:      "invalid memory unit words",
+			resources: Resources{Memory: "2 gigabytes"},
+			wantContain: `resources.memory: invalid size "2 gigabytes" ` +
+				`(expected a number and a unit, e.g. "512MB", "2GB", "1.5GiB")`,
 		},
 		{
-			name:        "memory missing unit",
-			resources:   Resources{Memory: "2"},
-			wantContain: `resources.memory: invalid size "2"`,
+			name:      "memory missing unit",
+			resources: Resources{Memory: "2048"},
+			wantContain: `resources.memory: invalid size "2048" ` +
+				`(expected a number and a unit, e.g. "512MB", "2GB", "1.5GiB")`,
 		},
 		{
 			name:        "memory missing number",
@@ -271,13 +307,28 @@ func TestCompileInvalid(t *testing.T) {
 		},
 		{
 			name:        "memory unknown unit",
-			resources:   Resources{Memory: "2TB"},
-			wantContain: `resources.memory: invalid size "2TB"`,
+			resources:   Resources{Memory: "2PB"},
+			wantContain: `resources.memory: invalid size "2PB"`,
+		},
+		{
+			name:        "memory below a whole mib",
+			resources:   Resources{Memory: "0.25MB"},
+			wantContain: `resources.memory: invalid size "0.25MB": must be a whole number of MiB`,
 		},
 		{
 			name:        "invalid storage",
 			resources:   Resources{Storage: "10 gigs"},
 			wantContain: `resources.storage: invalid size "10 gigs"`,
+		},
+		{
+			name:        "invalid disk",
+			resources:   Resources{Disk: "10 gigs"},
+			wantContain: `resources.disk: invalid size "10 gigs"`,
+		},
+		{
+			name:        "disk and storage disagree",
+			resources:   Resources{Disk: "10GB", Storage: "20GB"},
+			wantContain: `resources.disk and resources.storage are the same field, but were set to "10GB" and "20GB"`,
 		},
 		{
 			name:        "memory gb value overflows int32",
@@ -746,12 +797,26 @@ func TestParseSize(t *testing.T) {
 		{"megabytes", "512MB", 512, false},
 		{"gigabytes", "2GB", 2048, false},
 		{"lowercase unit", "2gb", 2048, false},
+		// the widened grammar. every unit is binary, so G, GB and GiB all
+		// mean 1024 MiB.
+		{"short gigabyte unit", "2G", 2048, false},
+		{"short megabyte unit", "512M", 512, false},
+		{"space before unit", "2 GB", 2048, false},
+		{"gibibyte synonym", "2GiB", 2048, false},
+		{"mebibyte synonym", "512MiB", 512, false},
+		{"decimal gigabytes", "1.5GB", 1536, false},
+		{"decimal gibibytes", "1.5GiB", 1536, false},
+		{"terabytes", "2TB", 2097152, false},
+		{"short terabyte unit", "1T", 1048576, false},
+		{"tebibyte synonym", "1TiB", 1048576, false},
 		{"words instead of unit", "2 gigabytes", 0, true},
-		{"missing unit", "2", 0, true},
+		{"missing unit", "2048", 0, true},
 		{"missing number", "GB", 0, true},
-		{"unknown unit", "2TB", 0, true},
+		{"unknown unit", "2PB", 0, true},
+		{"not a whole mib", "0.25MB", 0, true},
 		{"large but valid gigabytes", "3000GB", 3072000, false},
 		{"gigabytes overflows int32", "2097152GB", 0, true},
+		{"terabytes overflow int32", "2048TB", 0, true},
 	}
 
 	for _, tc := range cases {

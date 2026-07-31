@@ -77,12 +77,12 @@ files:
     mode: "0755" # optional octal mode
 
 resources:
-  cpus: 2
+  cpus: 2             # whole vCPUs; 2.0 is accepted, a fraction is not
   gpu: 1              # device count; whole GPUs, or MIG instances if gpu_profile is set
   gpu_kind: a100      # optional match, e.g. "a100"; empty matches any kind
   gpu_profile: 1g.10gb # optional MIG profile; omit for whole devices
-  memory: 2GB         # accepts MB/GB suffixes, compiles to ram_mb
-  storage: 10GB       # compiles to storage_gb
+  memory: 2GB         # M/MB/MiB, G/GB/GiB, T/TB/TiB (all binary), compiles to ram_mb
+  disk: 10GB          # same units, rounded up to whole GB; 'storage' is an alias
   max_runtime: 1h     # hard ttl from create; a leak ceiling, not a budget
   idle_timeout: 15m   # destroyed after this long with no exec and no attach
 
@@ -151,12 +151,13 @@ secrets:
 | `version` | int | Currently always `1`. A Fusefile is a single yaml document; anything after a second `---` is rejected rather than silently dropped. |
 | `image` | string | Name of a rootfs pre-baked on the host, **not** an OCI image ref. There is no OCI pull: fc-agent resolves it to `<IMAGES_DIR>/<image>.ext4` and qemu-agent to `<IMAGES_DIR>/<image>.qcow2`, and returns a 400 if no such file exists. An operator bakes and places it out of band (e.g. with `fc-bake-rootfs.sh`). Omit to use the baked base rootfs. See [Base images](#base-images-are-not-oci-images). |
 | `files` | list of `{path, source \| content, mode}` | Files written into the guest before `setup` runs. See [Files](#files). |
-| `resources.cpus` | int | vCPU count. A negative count is rejected. Omitting it (or `0`) means "host default": the host agent boots the VM with 1 vCPU. |
+| `resources.cpus` | int | Whole vCPU count. A whole-valued float (`2.0`) is accepted; a fraction (`0.5`) is rejected, because Firecracker takes an integer `vcpu_count` and QEMU an integer `-smp`. A negative count is rejected. Omitting it (or `0`) means "host default": the host agent boots the VM with 1 vCPU. |
 | `resources.gpu` | int | Device count. Whole GPUs by default, or MIG instances when `gpu_profile` is set. Requires a host registered with the `qemu` backend. |
 | `resources.gpu_kind` | string | Optional GPU model match, e.g. `a100`. See [Providers](/docs/concepts/providers). |
 | `resources.gpu_profile` | string | Optional MIG profile, e.g. `1g.10gb`. Requests a fractional slice of a GPU instead of whole devices. See [GPU workloads](/docs/guides/gpu-workloads). |
-| `resources.memory` | string | Accepts `MB`/`GB` suffixes; compiles to `ram_mb`. |
-| `resources.storage` | string | Accepts `MB`/`GB` suffixes; compiles to `storage_gb`. |
+| `resources.memory` | string | A size, e.g. `2GB`. Compiles to `ram_mb`. See [Size units](#size-units). |
+| `resources.disk` | string | Size of the guest root disk, e.g. `10GB`. Compiles to `storage_gb`, rounded **up** to a whole GB, so `512MB` provisions 1GB. See [Size units](#size-units). |
+| `resources.storage` | string | A permanent alias for `resources.disk`; `disk` is the preferred spelling. Setting both is only valid if they name the same size. |
 | `resources.region` | string | Schedules only onto a host registered in this region (`fuse host register --region`). Empty matches any region. |
 | `resources.max_runtime` | string | Go duration (`1h`, `30m`); compiles to `max_runtime_seconds`. A leak-detection ceiling measured from create, *not* a task budget. See [Reconciliation](/docs/concepts/reconcile). |
 | `resources.idle_timeout` | string | Go duration, minimum `1m`; compiles to `idle_timeout_seconds`. Destroys the environment once it has gone this long with no exec and no attach session. Omit for no idle expiry. |
@@ -175,6 +176,38 @@ secrets:
 | `workspace` | string | Working directory inside the guest. Must be an absolute path with no `..` segments; the generated script `mkdir -p`s it and `cd`s into it. |
 | `expose` | list of `{port, as}` | Guest ports published externally. Each `port` is between 1 and 65535 and may appear only once. `as` is an optional name, unique across the list, in DNS-label form (lowercase letters, digits and dashes, alphanumeric at both ends, 63 chars max). |
 | `secrets` | list of strings | Secret *names* this environment requires. An empty name is rejected: nothing you could pass to `--secret` would satisfy it. Values are supplied out-of-band via `--secret key=value` or `--secrets-file`, never written into the Fusefile itself. |
+
+## Size units
+
+`memory`, `disk`, and `storage` all take the same grammar: a number, optional
+whitespace, and a unit. The unit is one of `M`, `MB`, `MiB`, `G`, `GB`, `GiB`,
+`T`, `TB`, `TiB`, in any case. All of these are valid and mean the same thing:
+
+```yaml
+memory: 2GB
+memory: 2G
+memory: 2 GB
+memory: 2GiB
+memory: 1.5GB # 1536 MiB
+memory: 512MB
+```
+
+**Every unit is binary.** `GB` and `GiB` are synonyms for 1024 MiB, and `2GB`
+has always compiled to `ram_mb: 2048`, which becomes Firecracker's
+`mem_size_mib` and QEMU's `-m`. Redefining `GB` as decimal would be more
+correct and would silently shrink every existing `memory: 2GB` by 7 percent, so
+it is not done.
+
+Two things are rejected rather than guessed at:
+
+- A bare number (`memory: 2048`) has no unit and is genuinely ambiguous.
+- A size that does not land on a whole MiB (`memory: 0.25MB`) is an error
+  instead of being truncated down to less memory than you asked for.
+
+`disk` is then rounded **up** to a whole GB on the way to `storage_gb`, so
+`disk: 512MB` provisions 1GB. It is accounting-only either way: the scheduler
+uses it to decide whether a host fits, and no host agent resizes the root disk
+to match.
 
 ## Lifetime fields
 

@@ -134,10 +134,23 @@ type manifestEnv struct {
 	Secret string `json:"secret,omitempty"`
 }
 
-// sizePattern matches an integer followed by an MB or GB suffix, e.g. "512MB"
-// or "2GB". matching is done against an uppercased copy of the input so the
-// unit is effectively case-insensitive.
-var sizePattern = regexp.MustCompile(`^(\d+)(MB|GB)$`)
+// sizePattern matches a number, optional whitespace, and a unit: "512MB",
+// "2G", "2 GB", "1.5GiB", "2TB". matching is done against an uppercased copy
+// of the input so the unit is effectively case-insensitive. a bare number has
+// no unit and stays rejected: it is genuinely ambiguous.
+//
+// every unit is binary, so GB and GiB are synonyms (1024 MiB) and always have
+// been: parseSize has multiplied GB by 1024 since v1, and RamMB becomes
+// firecracker's mem_size_mib and qemu's -m. making GB decimal would silently
+// shrink every existing `memory: 2GB` by 7 percent, so it is not done here.
+var sizePattern = regexp.MustCompile(`^(\d+(?:\.\d+)?)\s*(M|MB|MIB|G|GB|GIB|T|TB|TIB)$`)
+
+// sizeUnitsMiB maps each accepted unit to its size in MiB.
+var sizeUnitsMiB = map[string]int64{
+	"M": 1, "MB": 1, "MIB": 1,
+	"G": 1024, "GB": 1024, "GIB": 1024,
+	"T": 1024 * 1024, "TB": 1024 * 1024, "TIB": 1024 * 1024,
+}
 
 // gpuProfilePattern matches nvidia mig-parted profile names: <slices>g.<mem>gb
 // with an optional "+me" media-extensions suffix (e.g. "1g.10gb", "3g.20gb",
@@ -230,6 +243,26 @@ func Compile(f *Fusefile) (*Compiled, error) {
 	storageMB, err := parseSize(f.Resources.Storage)
 	if err != nil {
 		errs = append(errs, fmt.Errorf("resources.storage: %w", err))
+	}
+
+	diskMB, err := parseSize(f.Resources.Disk)
+	if err != nil {
+		errs = append(errs, fmt.Errorf("resources.disk: %w", err))
+	}
+
+	// disk is the preferred spelling and storage is a permanent alias. there
+	// is only one root disk to size, so setting both to different sizes is an
+	// author mistake rather than something to silently resolve.
+	switch {
+	case f.Resources.Disk != "" && f.Resources.Storage != "":
+		if diskMB != storageMB {
+			errs = append(errs, fmt.Errorf(
+				"resources.disk and resources.storage are the same field, but were set to %q and %q",
+				f.Resources.Disk, f.Resources.Storage))
+		}
+		storageMB = diskMB
+	case f.Resources.Disk != "":
+		storageMB = diskMB
 	}
 
 	var maxRuntimeSeconds int64
@@ -334,7 +367,7 @@ func Compile(f *Fusefile) (*Compiled, error) {
 
 	return &Compiled{
 		Spec: ResourceSpec{
-			CPUs:  f.Resources.CPUs,
+			CPUs:  int32(f.Resources.CPUs),
 			RamMB: ramMB,
 			// round up so any positive storage request is never silently zeroed
 			// (e.g. "512MB" must provision 1GB, not floor to 0).
@@ -563,37 +596,40 @@ func compileStartupScript(f *Fusefile) string {
 	return b.String()
 }
 
-// parseSize parses a size string ("512MB", "2GB") into megabytes, base-1024.
-// an empty string is not an error; it means the field was omitted and yields
-// zero megabytes.
+// parseSize parses a size string ("512MB", "2G", "1.5GiB") into MiB. every
+// unit is binary. an empty string is not an error; it means the field was
+// omitted and yields zero.
+//
+// a size that does not land on a whole MiB is rejected rather than truncated:
+// silently handing back less memory than asked for is worse than an error the
+// author can act on.
 func parseSize(s string) (int32, error) {
 	if s == "" {
 		return 0, nil
 	}
 
-	m := sizePattern.FindStringSubmatch(strings.ToUpper(s))
+	m := sizePattern.FindStringSubmatch(strings.ToUpper(strings.TrimSpace(s)))
 	if m == nil {
-		return 0, fmt.Errorf("invalid size %q", s)
+		return 0, fmt.Errorf(
+			"invalid size %q (expected a number and a unit, e.g. \"512MB\", \"2GB\", \"1.5GiB\")", s)
 	}
 
-	n, err := strconv.ParseInt(m[1], 10, 32)
+	n, err := strconv.ParseFloat(m[1], 64)
 	if err != nil {
-		return 0, fmt.Errorf("invalid size %q", s)
+		return 0, fmt.Errorf(
+			"invalid size %q (expected a number and a unit, e.g. \"512MB\", \"2GB\", \"1.5GiB\")", s)
 	}
 
-	switch m[2] {
-	case "MB":
-		return int32(n), nil
-	case "GB":
-		// convert in int64 first; a well-formed but huge value (e.g.
-		// "2097152GB") would otherwise overflow int32 silently and wrap
-		// to a negative size.
-		mb := n * 1024
-		if mb > math.MaxInt32 {
-			return 0, fmt.Errorf("invalid size %q: value too large", s)
-		}
-		return int32(mb), nil
-	default:
-		return 0, fmt.Errorf("invalid size %q", s)
+	// compute in float64 so a decimal like "1.5GB" is exact for the halves
+	// and quarters authors actually write, then insist on a whole MiB.
+	mb := n * float64(sizeUnitsMiB[m[2]])
+	if mb != math.Trunc(mb) {
+		return 0, fmt.Errorf("invalid size %q: must be a whole number of MiB", s)
 	}
+	// a well-formed but huge value (e.g. "2097152GB") would otherwise
+	// overflow int32 silently and wrap to a negative size.
+	if mb > math.MaxInt32 {
+		return 0, fmt.Errorf("invalid size %q: value too large", s)
+	}
+	return int32(mb), nil
 }
