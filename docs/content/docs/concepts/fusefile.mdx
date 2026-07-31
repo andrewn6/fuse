@@ -18,9 +18,47 @@ Everything below is the complete field reference. If you have not written one
 before, start with [Your first Fusefile](/docs/learn/first-fusefile), which is
 the smallest file that boots, explained line by line.
 
+## Editor support
+
+Fuse publishes a JSON Schema for the Fusefile. Point your editor at it with a
+`yaml-language-server` modeline on the first line and you get completion,
+hover documentation, and inline validation as you type:
+
+```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/folsomintel/fuse/main/schema/fusefile-v1.json
+version: 1
+resources:
+  cpus: 2
+  memory: 2GB
+run: ./start.sh
+```
+
+The modeline is a YAML comment, so it changes nothing about how the file is
+parsed. `fuse init` writes it into every scaffolded Fusefile.
+
+The schema works in any editor that speaks the [YAML Language
+Server](https://github.com/redhat-developer/vscode-yaml): VS Code with the YAML
+extension, Neovim with `yamlls`, JetBrains IDEs, and Helix. In an editor that
+lets you map schemas to file names instead, point the same URL at `Fusefile`.
+
+Two things to know about it:
+
+- **It is advisory.** `fuse up` still parses, validates, and compiles the file,
+  and the orchestrator validates the compiled request independently. A green
+  editor is not a promise that `fuse up` succeeds. Run `fuse validate` for the
+  authoritative answer.
+- **Go is the source of truth.** If the schema and the CLI disagree, the CLI is
+  right and the schema is the bug. Please
+  [open an issue](https://github.com/folsomintel/fuse/issues).
+
+The schema is versioned by filename. A future format version ships as a new
+file at a new URL rather than changing this one, so a modeline you commit today
+keeps describing the format you wrote against.
+
 ## Full field reference
 
 ```yaml
+# yaml-language-server: $schema=https://raw.githubusercontent.com/folsomintel/fuse/main/schema/fusefile-v1.json
 version: 1
 
 # base rootfs to boot, by name. NOT an oci ref -- the host agent resolves it

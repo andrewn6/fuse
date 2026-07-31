@@ -100,6 +100,11 @@ This writes a fully commented example `Fusefile` to the current directory. Open 
 adjust `resources`, `run`, and any `services` you need. See
 [Fusefile](/docs/concepts/fusefile) for the full field reference.
 
+Line one of the scaffold is a `yaml-language-server` modeline pointing at Fuse's
+published JSON Schema, so an editor with YAML support gives you completion and inline
+validation while you edit. It is a comment, and removing it changes nothing except that
+feedback. See [Editor support](/docs/concepts/fusefile#editor-support).
+
 The scaffold is deliberately maximal, it names every field. For the opposite end of the
 range, the fewest lines that actually boot, see
 [Your first Fusefile](/docs/learn/first-fusefile). That version needs no `--secret` in

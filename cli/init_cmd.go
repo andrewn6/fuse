@@ -10,7 +10,13 @@ import (
 // initScaffold is the commented example Fusefile written by `fuse init`. it
 // documents the full v1 contract; every field here is parsed, validated, and
 // compiled today.
-const initScaffold = `version: 1
+//
+// the first line is the yaml-language-server modeline, which points editors at
+// the published json schema (schema/fusefile-v1.json) for completion and inline
+// validation. it is a yaml comment, so it changes nothing about how the file
+// parses. the url is the schema's $id and is pinned by a test.
+const initScaffold = `# yaml-language-server: $schema=https://raw.githubusercontent.com/folsomintel/fuse/main/schema/fusefile-v1.json
+version: 1
 
 # base rootfs to boot, by name. this is NOT an oci image ref: the host agent
 # resolves it against the rootfs images baked on the host, so the name must

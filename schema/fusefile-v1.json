@@ -1,0 +1,272 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/folsomintel/fuse/main/schema/fusefile-v1.json",
+  "title": "Fusefile v1",
+  "description": "The authoring format for a Fuse environment. Advisory only: the CLI's Parse and Compile are authoritative, and where this schema and Go disagree, Go is right and this schema is the bug.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version"],
+  "properties": {
+    "version": {
+      "const": 1,
+      "description": "Fusefile format version. Always 1."
+    },
+    "image": {
+      "type": "string",
+      "description": "Name of a rootfs pre-baked on the host, not an OCI reference. Omit for the host's default base rootfs."
+    },
+    "resources": { "$ref": "#/$defs/resources" },
+    "placement": { "$ref": "#/$defs/placement" },
+    "cache": { "$ref": "#/$defs/cache" },
+    "files": {
+      "type": "array",
+      "description": "Files materialized in the guest before setup runs. Total content is capped at 64KiB.",
+      "items": { "$ref": "#/$defs/file" }
+    },
+    "setup": {
+      "type": "array",
+      "description": "Commands run once at boot, before run.",
+      "items": { "$ref": "#/$defs/step" }
+    },
+    "services": {
+      "type": "object",
+      "description": "In-VM services, keyed by service name. Compiles to manifest.services and a compose project.",
+      "additionalProperties": { "$ref": "#/$defs/service" }
+    },
+    "run": {
+      "type": "string",
+      "description": "The main entrypoint, run after setup."
+    },
+    "workspace": {
+      "type": "string",
+      "description": "Working directory inside the guest. Defaults to /workspace."
+    },
+    "expose": {
+      "type": "array",
+      "description": "Guest ports published to the outside world.",
+      "items": { "$ref": "#/$defs/expose" }
+    },
+    "secrets": {
+      "type": "array",
+      "description": "Secret names this environment requires. Values are supplied out of band, never written here.",
+      "items": { "type": "string" }
+    },
+    "startup_timeout": {
+      "allOf": [{ "$ref": "#/$defs/duration" }],
+      "description": "Go duration bounding setup + run. Omit for the orchestrator default (30s)."
+    }
+  },
+  "$defs": {
+    "duration": {
+      "type": "string",
+      "description": "A go duration, e.g. \"45s\", \"1h30m\", \"100ms\".",
+      "pattern": "^(0|([0-9]*\\.?[0-9]+(ns|us|ms|s|m|h))+)$"
+    },
+    "size": {
+      "type": "string",
+      "description": "A size with an MB or GB suffix, e.g. \"512MB\" or \"2GB\". The suffix is case-insensitive.",
+      "pattern": "^[0-9]+([Mm][Bb]|[Gg][Bb])$"
+    },
+    "label": {
+      "type": "string",
+      "description": "A placement label key or value: alphanumeric at both ends, dots, dashes and underscores inside, 63 characters max.",
+      "pattern": "^[a-zA-Z0-9]([-._a-zA-Z0-9]{0,61}[a-zA-Z0-9])?$"
+    },
+    "resources": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "cpus": {
+          "type": "integer",
+          "description": "vCPU count."
+        },
+        "gpu": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Device count: whole GPUs, or MIG instances when gpu_profile is set."
+        },
+        "gpu_kind": {
+          "type": "string",
+          "description": "Optional GPU model match, e.g. \"a100\". Empty matches any kind."
+        },
+        "gpu_profile": {
+          "type": "string",
+          "description": "Optional MIG profile in nvidia mig-parted vocabulary, e.g. \"1g.10gb\". When set, gpu counts MIG instances and must be at least 1.",
+          "pattern": "^[1-7][Gg]\\.[0-9]+[Gg][Bb](\\+[Mm][Ee])?$"
+        },
+        "memory": { "$ref": "#/$defs/size" },
+        "storage": { "$ref": "#/$defs/size" },
+        "region": {
+          "type": "string",
+          "description": "Schedules only onto a host registered in this region. Empty matches any region."
+        },
+        "max_runtime": {
+          "allOf": [{ "$ref": "#/$defs/duration" }],
+          "description": "Hard ceiling measured from create. A leak-detection ceiling, not a task budget."
+        },
+        "idle_timeout": {
+          "allOf": [{ "$ref": "#/$defs/duration" }],
+          "description": "Destroys the environment after this long with no exec and no attach session. Minimum 1m."
+        }
+      }
+    },
+    "placement": {
+      "type": "object",
+      "description": "Hard placement constraints. Every field is a gate, not a preference.",
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "string",
+          "description": "Pins the environment to an exact host id."
+        },
+        "labels": {
+          "type": "object",
+          "description": "Label selectors matched against the host's declared labels. Every pair must match.",
+          "propertyNames": { "$ref": "#/$defs/label" },
+          "additionalProperties": { "$ref": "#/$defs/label" }
+        }
+      }
+    },
+    "cache": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Opt in to the setup layer cache. Off by default."
+        }
+      }
+    },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path"],
+      "oneOf": [{ "required": ["source"] }, { "required": ["content"] }],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where the file lands in the guest. A relative path resolves against the workspace."
+        },
+        "source": {
+          "type": "string",
+          "description": "A path on the authoring machine, relative to the Fusefile."
+        },
+        "content": {
+          "type": "string",
+          "description": "A literal file body."
+        },
+        "mode": {
+          "type": "string",
+          "description": "Octal permission string, e.g. \"0755\".",
+          "pattern": "^0?[0-7]{3}$"
+        }
+      }
+    },
+    "step": {
+      "description": "One setup step: either a bare command string or a mapping.",
+      "oneOf": [
+        { "type": "string" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["run"],
+          "properties": {
+            "run": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The step's shell command."
+            },
+            "inputs": {
+              "type": "array",
+              "description": "Files whose contents are hashed into the step's cache key. Relative to the Fusefile's directory.",
+              "items": { "type": "string", "minLength": 1 }
+            },
+            "cache": {
+              "type": "boolean",
+              "description": "Set false to make the step uncacheable. Required for a step that reads secrets or has effects outside the rootfs."
+            }
+          }
+        }
+      ]
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["image"],
+      "properties": {
+        "image": {
+          "type": "string",
+          "minLength": 1,
+          "description": "An OCI image reference. Unlike the top-level image, this one is pulled."
+        },
+        "ports": {
+          "type": "array",
+          "items": { "type": "integer" }
+        },
+        "env": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/envValue" }
+        },
+        "command": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "restart": {
+          "type": "string",
+          "description": "Compose-native restart policy.",
+          "enum": ["no", "always", "on-failure", "unless-stopped"]
+        },
+        "healthcheck": { "$ref": "#/$defs/healthcheck" },
+        "depends_on": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    },
+    "healthcheck": {
+      "type": "object",
+      "description": "A compose-native container healthcheck. It governs the container, not the VM.",
+      "additionalProperties": false,
+      "properties": {
+        "test": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "interval": { "$ref": "#/$defs/duration" },
+        "timeout": { "$ref": "#/$defs/duration" },
+        "retries": { "type": "integer" }
+      }
+    },
+    "envValue": {
+      "type": "object",
+      "description": "Either a literal value or a secret reference. Exactly one is set.",
+      "additionalProperties": false,
+      "oneOf": [{ "required": ["value"] }, { "required": ["secret"] }],
+      "properties": {
+        "value": { "type": "string" },
+        "secret": {
+          "type": "string",
+          "description": "Name of a secret supplied at up time."
+        }
+      }
+    },
+    "expose": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["port"],
+      "properties": {
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "The guest port to publish."
+        },
+        "as": {
+          "type": "string",
+          "description": "An optional name for the published endpoint."
+        }
+      }
+    }
+  }
+}
