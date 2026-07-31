@@ -110,10 +110,10 @@ secrets:
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `version` | int | Currently always `1`. |
+| `version` | int | Currently always `1`. A Fusefile is a single yaml document; anything after a second `---` is rejected rather than silently dropped. |
 | `image` | string | Name of a rootfs pre-baked on the host, **not** an OCI image ref. There is no OCI pull: fc-agent resolves it to `<IMAGES_DIR>/<image>.ext4` and qemu-agent to `<IMAGES_DIR>/<image>.qcow2`, and returns a 400 if no such file exists. An operator bakes and places it out of band (e.g. with `fc-bake-rootfs.sh`). Omit to use the baked base rootfs. See [Base images](#base-images-are-not-oci-images). |
 | `files` | list of `{path, source \| content, mode}` | Files written into the guest before `setup` runs. See [Files](#files). |
-| `resources.cpus` | int | vCPU count. |
+| `resources.cpus` | int | vCPU count. A negative count is rejected. Omitting it (or `0`) means "host default": the host agent boots the VM with 1 vCPU. |
 | `resources.gpu` | int | Device count. Whole GPUs by default, or MIG instances when `gpu_profile` is set. Requires a host registered with the `qemu` backend. |
 | `resources.gpu_kind` | string | Optional GPU model match, e.g. `a100`. See [Providers](/docs/concepts/providers). |
 | `resources.gpu_profile` | string | Optional MIG profile, e.g. `1g.10gb`. Requests a fractional slice of a GPU instead of whole devices. See [GPU workloads](/docs/guides/gpu-workloads). |
@@ -130,12 +130,13 @@ secrets:
 | `setup[].inputs` | list of strings | Files (or directories, or globs) whose contents are hashed into the step's cache key. Relative to the Fusefile's directory; absolute and `..`-traversing paths are rejected. |
 | `setup[].cache` | bool | Set `false` to make the step uncacheable. Required for a step that reads secrets or has effects outside the rootfs. |
 | `services` | map | In-VM services, each with `image`, `ports`, and `env`. Compiles to `manifest.services` plus a compose project. |
-| `services.*.env.*` | literal or secret ref | Exactly one of `value` or `secret` must be set per entry. `{ secret: name }` resolves from the `secrets` you supply at `up` time. |
+| `services.*.ports` | list of ints | Container ports, each between 1 and 65535. |
+| `services.*.env.*` | literal or secret ref | Exactly one of `value` or `secret` must be set per entry. The variable name must not be empty. `{ secret: name }` resolves from the `secrets` you supply at `up` time. |
 | `run` | string | The main entrypoint, compiled into `startup_script` after `setup`. |
 | `startup_timeout` | string | Go duration bounding `setup` + `run`. Omit for the orchestrator default (30s). See [Startup timeout](#startup-timeout). |
-| `workspace` | string | Working directory inside the guest. |
-| `expose` | list of `{port, as}` | Guest ports published externally. |
-| `secrets` | list of strings | Secret *names* this environment requires. Values are supplied out-of-band via `--secret key=value` or `--secrets-file`, never written into the Fusefile itself. |
+| `workspace` | string | Working directory inside the guest. Must be an absolute path with no `..` segments; the generated script `mkdir -p`s it and `cd`s into it. |
+| `expose` | list of `{port, as}` | Guest ports published externally. Each `port` is between 1 and 65535 and may appear only once. `as` is an optional name, unique across the list, in DNS-label form (lowercase letters, digits and dashes, alphanumeric at both ends, 63 chars max). |
+| `secrets` | list of strings | Secret *names* this environment requires. An empty name is rejected: nothing you could pass to `--secret` would satisfy it. Values are supplied out-of-band via `--secret key=value` or `--secrets-file`, never written into the Fusefile itself. |
 
 ## Lifetime fields
 

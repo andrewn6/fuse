@@ -313,6 +313,11 @@ func TestCompileInvalid(t *testing.T) {
 			wantContain: `resources.idle_timeout: must be at least 1m0s`,
 		},
 		{
+			name:        "negative cpu count",
+			resources:   Resources{CPUs: -4},
+			wantContain: `resources.cpus: must not be negative`,
+		},
+		{
 			name:        "negative gpu count",
 			resources:   Resources{GPU: -1},
 			wantContain: `resources.gpu: must not be negative`,
@@ -856,6 +861,43 @@ func TestCompileStartupTimeoutErrors(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), tc.wantContain) {
 			t.Errorf("Compile(%q) error %q does not contain %q", tc.in, err.Error(), tc.wantContain)
+		}
+	}
+}
+
+// zero is the "omitted" value and keeps meaning "let the host agent pick its
+// default vCPU count"; only a negative count is a compile error.
+func TestCompileCPUsZeroIsHostDefault(t *testing.T) {
+	c, err := Compile(&Fusefile{Version: 1})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if c.Spec.CPUs != 0 {
+		t.Errorf("cpus: got %d, want 0", c.Spec.CPUs)
+	}
+}
+
+// resource errors are joined, so one Compile reports all of them.
+func TestCompileReportsEveryResourceViolation(t *testing.T) {
+	f := &Fusefile{Version: 1, Resources: Resources{
+		CPUs:       -4,
+		GPU:        -1,
+		Memory:     "2 gigabytes",
+		MaxRuntime: "-1h",
+	}}
+	_, err := Compile(f)
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"resources.cpus: must not be negative",
+		"resources.gpu: must not be negative",
+		`resources.memory: invalid size "2 gigabytes"`,
+		"resources.max_runtime: must not be negative",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error is missing %q; got: %s", want, msg)
 		}
 	}
 }

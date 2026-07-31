@@ -166,6 +166,17 @@ func ValidLabel(s string) bool {
 	return labelPattern.MatchString(s)
 }
 
+// exposeNamePattern is the accepted form for expose[].as: a DNS label.
+// lowercase letters, digits and dashes, alphanumeric at both ends, 63 chars
+// max. The name is how an endpoint is addressed, so it is held to what a
+// hostname component can carry rather than to arbitrary text.
+var exposeNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+
+// ValidExposeName reports whether s is a well-formed expose[].as name.
+func ValidExposeName(s string) bool {
+	return exposeNamePattern.MatchString(s)
+}
+
 // validRestartPolicies is the compose-native restart policy vocabulary.
 // Compose also accepts "on-failure:N" for a bounded retry count, but that
 // extension is deliberately not accepted here to keep the validated set
@@ -269,6 +280,12 @@ func Compile(f *Fusefile) (*Compiled, error) {
 		}
 	}
 
+	// zero keeps its meaning: the field was omitted and the host agent picks
+	// its default vCPU count. only a negative count is rejected.
+	if f.Resources.CPUs < 0 {
+		errs = append(errs, fmt.Errorf("resources.cpus: must not be negative"))
+	}
+
 	if f.Resources.GPU < 0 {
 		errs = append(errs, fmt.Errorf("resources.gpu: must not be negative"))
 	}
@@ -306,12 +323,12 @@ func Compile(f *Fusefile) (*Compiled, error) {
 		}
 	}
 
-	if err := errors.Join(errs...); err != nil {
-		return nil, err
-	}
-
 	manifestJSON, requiredSecrets, err := compileManifest(f)
 	if err != nil {
+		errs = append(errs, err)
+	}
+
+	if err := errors.Join(errs...); err != nil {
 		return nil, err
 	}
 

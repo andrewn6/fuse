@@ -442,3 +442,177 @@ func TestParseAcceptsNestedInputPaths(t *testing.T) {
 		t.Errorf("inputs: got %v", f.Setup[0].Inputs)
 	}
 }
+
+// one case per structural rule added for the gaps every one of these used to
+// fall through: service ports, expose names and duplicates, workspace, empty
+// secret and env names.
+func TestParseStructuralRules(t *testing.T) {
+	cases := []struct {
+		name        string
+		src         string
+		wantContain string
+	}{
+		{
+			name:        "service port above range",
+			src:         "version: 1\nservices:\n  db:\n    image: postgres:16\n    ports: [70000]\n",
+			wantContain: "services.db.ports[0]: must be between 1 and 65535",
+		},
+		{
+			name:        "service port negative",
+			src:         "version: 1\nservices:\n  db:\n    image: postgres:16\n    ports: [5432, -1]\n",
+			wantContain: "services.db.ports[1]: must be between 1 and 65535",
+		},
+		{
+			name:        "empty env name",
+			src:         "version: 1\nservices:\n  db:\n    image: postgres:16\n    env:\n      \"\": { value: x }\n",
+			wantContain: "services.db.env: environment variable name must not be empty",
+		},
+		{
+			name:        "duplicate expose port",
+			src:         "version: 1\nexpose:\n  - port: 8080\n  - port: 8080\n",
+			wantContain: "expose[1].port: 8080 is already exposed by expose[0]",
+		},
+		{
+			name:        "duplicate expose name",
+			src:         "version: 1\nexpose:\n  - port: 8080\n    as: http\n  - port: 8081\n    as: http\n",
+			wantContain: `expose[1].as: "http" is already used by expose[0]`,
+		},
+		{
+			name:        "expose name charset",
+			src:         "version: 1\nexpose:\n  - port: 8080\n    as: \"HTTP api\"\n",
+			wantContain: "expose[0].as: invalid name",
+		},
+		{
+			name:        "expose name too long",
+			src:         "version: 1\nexpose:\n  - port: 8080\n    as: " + strings.Repeat("a", 64) + "\n",
+			wantContain: "expose[0].as: invalid name",
+		},
+		{
+			name:        "relative workspace",
+			src:         "version: 1\nworkspace: ../../etc\n",
+			wantContain: `workspace: must be an absolute path, got "../../etc"`,
+		},
+		{
+			name:        "traversing absolute workspace",
+			src:         "version: 1\nworkspace: /workspace/../etc\n",
+			wantContain: `workspace: must not contain ".." segments`,
+		},
+		{
+			name:        "workspace with a newline",
+			src:         "version: 1\nworkspace: \"/a\\nb\"\n",
+			wantContain: "workspace: must not contain newlines or NUL bytes",
+		},
+		{
+			name:        "empty secret name",
+			src:         "version: 1\nsecrets:\n  - \"\"\n",
+			wantContain: "secrets[0]: must not be empty",
+		},
+		{
+			name:        "blank secret name",
+			src:         "version: 1\nsecrets:\n  - \"   \"\n",
+			wantContain: "secrets[0]: must not be empty",
+		},
+		{
+			name:        "second yaml document",
+			src:         "version: 1\n---\nversion: 1\n",
+			wantContain: "must contain exactly one yaml document",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse([]byte(tc.src))
+			if err == nil {
+				t.Fatalf("expected an error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantContain) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantContain)
+			}
+		})
+	}
+}
+
+func TestParseAcceptsValidStructuralValues(t *testing.T) {
+	src := `version: 1
+workspace: /srv/app
+services:
+  db:
+    image: postgres:16
+    ports: [1, 65535]
+    env:
+      PGDATA: { value: /var/lib/postgresql/data }
+expose:
+  - port: 8080
+    as: http
+  - port: 8081
+    as: metrics-2
+secrets:
+  - pg_password
+`
+	if _, err := Parse([]byte(src)); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// every violation is reported in one pass, not just the first.
+func TestParseReportsEveryStructuralViolation(t *testing.T) {
+	src := `version: 1
+workspace: ../../etc
+services:
+  db:
+    image: postgres:16
+    ports: [70000, -1]
+    env:
+      "": { value: x }
+expose:
+  - port: 8080
+    as: http
+  - port: 8080
+    as: http
+secrets:
+  - ""
+`
+	_, err := Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	msg := err.Error()
+	for _, want := range []string{
+		"workspace: must be an absolute path",
+		"services.db.ports[0]: must be between 1 and 65535",
+		"services.db.ports[1]: must be between 1 and 65535",
+		"services.db.env: environment variable name must not be empty",
+		"expose[1].port: 8080 is already exposed by expose[0]",
+		`expose[1].as: "http" is already used by expose[0]`,
+		"secrets[0]: must not be empty",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("error is missing %q; got: %s", want, msg)
+		}
+	}
+}
+
+func TestValidExposeName(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"http", true},
+		{"api-v2", true},
+		{"a", true},
+		{strings.Repeat("a", 63), true},
+		{strings.Repeat("a", 64), false},
+		{"", false},
+		{"HTTP", false},
+		{"-http", false},
+		{"http-", false},
+		{"http_api", false},
+		{"http.api", false},
+		{"web app", false},
+	}
+	for _, tc := range cases {
+		if got := ValidExposeName(tc.in); got != tc.want {
+			t.Errorf("ValidExposeName(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
