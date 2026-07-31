@@ -3,7 +3,7 @@
 # host, deploys an environment that requests a GPU, and asserts the GPU is
 # visible in the guest (nvidia-smi). Sibling to fc-e2e.sh.
 #
-# Hardware-gated: needs a reachable QEMU host agent (in ../.env as
+# Hardware-gated: needs a reachable QEMU host agent (in ../../.env as
 # QEMU_BASE_URL / QEMU_TOKEN) with a bindable, vfio-bound GPU. Without one, the
 # script logs SKIP and exits 0 -- it never passes silently and never fails CI
 # on a box that has no GPU.
@@ -12,7 +12,7 @@
 # assertion exits non-zero.
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO_ROOT"
 
 PORT="${FUSE_E2E_PORT:-18081}"

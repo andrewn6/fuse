@@ -22,7 +22,7 @@ builds:
       - arm64
     # main.version is stamped here (declared as `var version = "dev"` in package
     # main); `fused --version` / `orchestrator --version` report the release tag,
-    # which the self-host updater (host-agent/fc-update.sh) compares against GitHub.
+    # which the self-host updater (host-agent/firecracker/fc-update.sh) compares against GitHub.
     ldflags:
       - -s -w -X main.version={{.Version}}
 

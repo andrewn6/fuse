@@ -18,7 +18,7 @@ easily-confused "agent" processes. This page disambiguates them.
   [Providers](/docs/concepts/providers) and
   [GPU host setup](/docs/cloud/gpu-host-setup).
 - **`fused`**: runs **inside the guest**, as the reference in-guest agent. A small
-  Go daemon (built from `cmd/fused`) that reads the manifest and secrets Fuse
+  Go daemon (built from `fused/`) that reads the manifest and secrets Fuse
   uploads, serves a small HTTP API (`--listen`, default `:9550`, including
   `/health`), and quiesces cleanly on SIGTERM, that's what backs the drain phase of
   an environment's lifecycle.

@@ -54,9 +54,9 @@ curl_dl() {
 # This block is embedded, not sourced: ops/install-orchestrator.sh is
 # documented as curl-able and run standalone on a fresh host, so a sibling
 # library file is not guaranteed to exist on disk. Keep the copies in
-# host-agent/fc-update.sh, host-agent/fc-agent.sh and
+# host-agent/firecracker/fc-update.sh, host-agent/firecracker/fc-agent.sh and
 # ops/install-orchestrator.sh byte-identical;
-# host-agent/test-verify-checksum.sh asserts that and exercises the helper.
+# host-agent/firecracker/test-verify-checksum.sh asserts that and exercises the helper.
 
 # sha256_of <file> - print the file's lowercase sha256, or fail if no tool.
 sha256_of() {
@@ -129,7 +129,7 @@ case "$(uname -m)" in
 esac
 
 # --- 1. update the checkout first (so we build/bake from the latest source) ---
-REPO_ROOT="$FC_DIR/.."
+REPO_ROOT="$FC_DIR/../.."
 if git -C "$REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
   log "git pull"
   git -C "$REPO_ROOT" fetch --tags --quiet || warn "git fetch failed"
@@ -181,7 +181,7 @@ fi
 if [ -z "$LATEST" ]; then
   command -v go >/dev/null 2>&1 || die "no release published and Go is not installed — run ./fc-deps.sh --with-go (then re-run), or publish a release"
   log "building fused from source"
-  "$FC_DIR/fc-build-agent.sh"
+  "$FC_DIR/../shared/fc-build-agent.sh" "$FC_DIR"
   ok "fused (source) -> $("$FC_DIR/fused" --version 2>/dev/null || echo '?')"
 fi
 

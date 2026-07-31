@@ -94,7 +94,7 @@ The simplest topology co-locates the orchestrator on a Firecracker host and talk
 `fc-agent` over loopback. The host toolchain installs both as systemd services:
 
 ```bash
-cd host-agent
+cd host-agent/firecracker
 ./fc-install.sh                     # firecracker + kernel + rootfs
 ./fc-agent.sh install-service       # host agent (systemd, :8090)
 ./fc-agent.sh install-orchestrator  # orchestrator (systemd, :8080), co-located
@@ -125,7 +125,7 @@ For a host that runs only the control plane (no co-located agent), use the
 standalone installer instead:
 
 ```bash
-sudo ./scripts/install-orchestrator.sh
+sudo ./ops/install-orchestrator.sh
 ```
 
 It installs the `orchestrator` binary (from `ORCH_BIN_SRC=/path`, a local
@@ -142,7 +142,7 @@ orchestrator installed and listening on :8080
 
 When the binary comes from a GitHub release, the installer downloads
 `checksums.txt` for that exact tag and verifies the archive's SHA-256 before
-extracting or installing anything. `host-agent/fc-update.sh` and
+extracting or installing anything. `host-agent/firecracker/fc-update.sh` and
 `fc-agent.sh install-orchestrator` do the same for every asset they fetch. A
 missing `checksums.txt`, a missing entry for the asset, or a mismatch aborts
 the install, leaving the existing binary in place and the service unrestarted.
@@ -165,7 +165,7 @@ co-locates, a remote URL doesn't.
 ## Build and run directly
 
 ```bash
-go build -o bin/orchestrator ./cmd/orchestrator
+go build -o bin/orchestrator ./orchestrator
 export FIRECRACKER_BASE_URL=http://<host>:<port>
 export FIRECRACKER_TOKEN=<token>
 export TOKEN_ENCRYPTION_KEY=<hex-encoded 32-byte AES key>

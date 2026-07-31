@@ -16,9 +16,9 @@ ORCH_UNIT=/etc/systemd/system/orchestrator.service
 # This block is embedded, not sourced: ops/install-orchestrator.sh is
 # documented as curl-able and run standalone on a fresh host, so a sibling
 # library file is not guaranteed to exist on disk. Keep the copies in
-# host-agent/fc-update.sh, host-agent/fc-agent.sh and
+# host-agent/firecracker/fc-update.sh, host-agent/firecracker/fc-agent.sh and
 # ops/install-orchestrator.sh byte-identical;
-# host-agent/test-verify-checksum.sh asserts that and exercises the helper.
+# host-agent/firecracker/test-verify-checksum.sh asserts that and exercises the helper.
 
 # sha256_of <file> - print the file's lowercase sha256, or fail if no tool.
 sha256_of() {

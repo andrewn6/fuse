@@ -8,12 +8,13 @@ talks to its HTTP API (`POST /v1/vm`, `GET /v1/vm`, `DELETE /v1/vm/{id}`,
 ## Requirement
 
 Firecracker needs hardware virtualization — the host must expose `/dev/kvm` (bare-metal
-Linux or a nested-virt-enabled instance). See [`README.md`](README.md) → *Requirements* for
+Linux or a nested-virt-enabled instance). See [`README.md`](README.md) → _Requirements_ for
 the full prerequisites and a quick `/dev/kvm` check.
 
 ## Bring up a host
 
 ```bash
+cd firecracker
 ./fc-install.sh        # fetch firecracker binary + CI kernel/rootfs + SSH key
 ./fc-bake-rootfs.sh    # bake the guest rootfs (agent binary is baked in)
 ./fc-agent.sh start    # prints FIRECRACKER_BASE_URL + FIRECRACKER_TOKEN for Fuse
@@ -31,12 +32,12 @@ guest and launches a configurable command (`AgentSpec`; see `../docs/DECOUPLING.
 it reads the uploaded `/fuse/manifest.json` + `/fuse/secrets.json`, binds `--listen`
 (`:9550`), serves `/health` + `/v1/info`, and quiesces cleanly on SIGTERM (the drain path).
 
-`fc-bake-rootfs.sh` bakes two inputs from this directory:
+`fc-bake-rootfs.sh` bakes two inputs from `firecracker/`:
 
-- `fused` — the agent binary. Build it with `./fc-build-agent.sh` (static `linux/amd64`),
-  or drop your own here to run a different agent.
-- `fused.service` — the systemd unit (committed in `host-agent/`; the host fc-agent overrides its
-  `ExecStart` via a drop-in on start-agent).
+- `fused` — the agent binary. Build it with `../shared/fc-build-agent.sh` (static
+  `linux/amd64`), or drop your own here to run a different agent.
+- `fused.service` — the systemd unit (committed in `firecracker/`; the host fc-agent
+  overrides its `ExecStart` via a drop-in on start-agent).
 
 **To run your own in-guest agent instead of fused:** replace `fused` (+ `fused.service`) and
 have your agent consume the files Fuse uploads (manifest/secrets/credentials) and accept the

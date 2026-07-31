@@ -87,7 +87,7 @@ without booting real microVMs. This is the fastest way to test SDK-driven code
 end to end without a real Firecracker host:
 
 ```bash
-go build -o bin/orchestrator ./cmd/orchestrator
+go build -o bin/orchestrator ./orchestrator
 ./bin/orchestrator   # FIRECRACKER_BASE_URL unset -> stub mode, listens on :8080
 ```
 

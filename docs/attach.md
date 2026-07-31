@@ -11,7 +11,7 @@ This document is the specification. The implementations that exist today are:
 | Client (frame codec, dialer) | [`sdks/go/exec.go`](../sdks/go/exec.go) |
 | Relay (hijack + byte pump) | [`internal/api/exec.go`](../internal/api/exec.go) |
 | Relay (dial the host agent) | [`internal/hostwire/dial.go`](../internal/hostwire/dial.go), [`internal/hostwire/attach.go`](../internal/hostwire/attach.go) |
-| Server (pty, frame codec) | [`host-agent/fc-agent.py`](../host-agent/fc-agent.py), [`host-agent/qemu-agent.py`](../host-agent/qemu-agent.py) |
+| Server (pty, frame codec) | [`host-agent/firecracker/fc-agent.py`](../host-agent/firecracker/fc-agent.py), [`host-agent/qemu/qemu-agent.py`](../host-agent/qemu/qemu-agent.py) |
 
 ## Why it exists
 

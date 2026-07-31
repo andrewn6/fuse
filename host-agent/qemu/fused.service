@@ -1,0 +1,20 @@
+[Unit]
+Description=Fuse in-guest agent (fused)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# ExecStart below is a placeholder so the unit loads at boot. The host fc-agent
+# replaces it via a drop-in (/etc/systemd/system/fused.service.d/override.conf)
+# on start-agent / start-surfd, injecting --listen/--manifest/--secrets/etc and
+# expanding $FUSED_EXTRA_ARGS from /etc/default/fused.
+EnvironmentFile=-/etc/default/fused
+ExecStart=/usr/local/bin/fused --insecure
+# Clean SIGTERM exit (the Fuse drain command) must NOT trigger a restart;
+# on-failure only restarts on a non-zero exit.
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

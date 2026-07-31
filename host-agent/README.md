@@ -24,16 +24,24 @@ exposes `/dev/kvm`:
 ## Layout
 
 ```
-fc-agent.py         # the agent — one firecracker process per VM, SSH for guest ops
-fc-agent.sh         # start/stop/restart/log/env
-fc-agent-test.sh    # end-to-end smoke test against the contract
-
-fc-install.sh       # fetch firecracker binary, kernel, base rootfs, SSH key
-fc-up.sh / fc-down.sh / fc-ssh.sh / fc-status.sh / fc-test.sh / fc-expose.sh
-                    # manual helpers for a single VM (pre-agent; still useful for debugging)
+firecracker/        # everything to run a Firecracker host — see below
+qemu/                # everything to run a QEMU/GPU host — see below
+shared/              # fc-build-agent.sh, the guest-agent build step used by both backends
 ```
 
-Runtime-only (ignored in git):
+```
+firecracker/
+  fc-agent.py         # the agent — one firecracker process per VM, SSH for guest ops
+  fc-agent.sh         # start/stop/restart/log/env
+  fc-agent-test.sh    # end-to-end smoke test against the contract
+
+  fc-install.sh       # fetch firecracker binary, kernel, base rootfs, SSH key
+  fc-up.sh / fc-down.sh / fc-ssh.sh / fc-status.sh / fc-test.sh / fc-expose.sh
+                      # manual helpers for a single VM (pre-agent; still useful for debugging)
+```
+
+Runtime-only (ignored in git), written into whichever of `firecracker/` or `qemu/` you're
+working in:
 
 ```
 vmlinux.bin         # guest kernel
@@ -53,7 +61,7 @@ plane), the weekly auto-update timer, the guest agent + rootfs bake, and it
 self-registers the host. Then it prints the token and the exact connect line.
 
 ```bash
-git clone <this repo> ~/fc && cd ~/fc/host-agent
+git clone <this repo> ~/fc && cd ~/fc/host-agent/firecracker
 sudo ./fc-agent.sh bootstrap
 ```
 
@@ -69,14 +77,14 @@ run or skip individual stages.
 On a host that meets the requirements above:
 
 ```bash
-git clone <this repo> ~/fc && cd ~/fc/host-agent
+git clone <this repo> ~/fc && cd ~/fc/host-agent/firecracker
 
 # 1. Fetch firecracker binary + CI kernel + base rootfs + SSH key.
 ./fc-install.sh
 
-# 2. Build the reference in-guest agent (produces host-agent/fused). Needs Go.
+# 2. Build the reference in-guest agent (produces ./fused). Needs Go.
 #    To run your own agent instead, drop your binary here as `fused` and skip this.
-./fc-build-agent.sh
+../shared/fc-build-agent.sh
 
 # 3. Bake the guest rootfs (rootfs-fused.ext4). Bakes in `fused` + fused.service.
 #    Re-run whenever the agent binary changes — the agent is baked into the image.
@@ -103,13 +111,13 @@ This requires bare-metal Linux, enabled IOMMU, `/dev/kvm`, and a GPU that can be
 detached from its host driver. GPU environments do not support snapshots or forks.
 
 ```bash
-cd host-agent
+cd host-agent/qemu
 
 # install qemu, ovmf, a base cloud image, and the ssh keypair
 ./qemu-install.sh
 
 # build the in-guest agent and bake a cuda image with an explicit driver branch
-./fc-build-agent.sh
+../shared/fc-build-agent.sh
 ./qemu-bake-cuda-rootfs.sh 550
 
 # inspect groups, then bind every member of each gpu group to vfio-pci
@@ -214,9 +222,10 @@ All routes under `/v1/vm`, bearer auth (`Authorization: Bearer $TOKEN`), JSON in
 `./fc-bake-rootfs.sh` builds the guest image. **The in-guest agent is baked into the
 image**, so you must (re-)bake before first start and whenever the agent binary changes.
 The reference agent is `fused`, built from this repo's [`fused`](../fused) by
-`./fc-build-agent.sh` (output: `host-agent/fused`); its systemd unit `fused.service` ships in
-`host-agent/`. To bake your own agent instead, drop your binary here as `fused` (and replace
-`fused.service`) — see [`FUSE.md`](FUSE.md).
+`../shared/fc-build-agent.sh` (output: `host-agent/firecracker/fused`); its systemd unit
+`fused.service` ships alongside it in `host-agent/firecracker/`. To bake your own agent
+instead, drop your binary here as `fused` (and replace `fused.service`) — see
+[`FUSE.md`](FUSE.md).
 
 Built on top of the Firecracker CI Ubuntu 22.04 rootfs. Contents injected:
 
@@ -302,6 +311,8 @@ sudo umount /tmp/fcroot
 
 ## Operating
 
+The commands below run from `host-agent/firecracker/`.
+
 ```bash
 ./fc-agent.sh start               # launch agent on :8090, print env
 ./fc-agent.sh stop                 # stop
@@ -377,7 +388,7 @@ repo, downloads the new `fused`, re-bakes the rootfs, and restarts the agent:
 ./fc-agent.sh uninstall-updater
 ```
 
-Public repo — no token needed. Optional `host-agent/.fc-updater.env` is sourced if present, e.g.
+Public repo — no token needed. Optional `host-agent/firecracker/.fc-updater.env` is sourced if present, e.g.
 `GH_TOKEN=...` (dodge API rate limits) or `FUSE_ORCH_SERVICE=orchestrator.service FUSE_ORCH_BIN=/usr/local/bin/orchestrator`
 to also update a co-located orchestrator. Override the source repo with `FUSE_REPO=owner/name`.
 
@@ -398,7 +409,7 @@ FUSE_E2E_REMOTE=1 go test ./e2e/ -v
 FUSE_E2E_FIRECRACKER_URL=http://<host>:8090 FUSE_E2E_FIRECRACKER_TOKEN=<tok> go test ./e2e/ -v
 ```
 
-`host-agent/fc-e2e.sh` is the binary-level equivalent (boots `./bin/fuse` and curls the lifecycle).
+`host-agent/firecracker/fc-e2e.sh` is the binary-level equivalent (boots `./bin/fuse` and curls the lifecycle).
 
 ## State
 
