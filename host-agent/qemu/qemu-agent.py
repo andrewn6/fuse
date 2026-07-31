@@ -23,6 +23,7 @@ from __future__ import annotations
 import base64
 import fcntl
 import hmac
+import ipaddress
 import json
 import os
 import pty
@@ -96,10 +97,77 @@ MIG_SETUP_SCRIPT = Path(os.environ.get("MIG_SETUP_SCRIPT", str(Path(__file__).wi
 # Port the in-guest agent listens on; per-VM host ports DNAT to this.
 FUSED_PORT = int(os.environ.get("FUSED_PORT", "9550"))
 HOST_PORT_BASE = int(os.environ.get("FUSE_HOST_PORT_BASE", "19650"))
-PUBLIC_HOST = os.environ.get("PUBLIC_HOST") or (
-    subprocess.run(["curl", "-fsS", "ifconfig.me"], capture_output=True, text=True).stdout.strip()
-    or subprocess.run(["bash", "-lc", "hostname -I | awk '{print $1}'"], capture_output=True, text=True).stdout.strip()
+# Public host resolution. The agent hands the orchestrator a bare "host:port"
+# authority for each VM, so a malformed host silently produces environments
+# nobody can reach. Prefer IPv4 (consumers of the url treat it as an opaque
+# host:port), bracket IPv6 when that is all the host has, and fail loudly on a
+# value that is neither an IP nor a plausible hostname.
+_HOSTNAME_RE = re.compile(
+    r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?"
+    r"(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*$"
 )
+
+
+def host_authority(host: str, port: int | str) -> str:
+    """Compose a host:port authority, bracketing host when it is IPv6."""
+    try:
+        if isinstance(ipaddress.ip_address(host), ipaddress.IPv6Address):
+            return f"[{host}]:{port}"
+    except ValueError:
+        pass
+    return f"{host}:{port}"
+
+
+def _probe(cmd: list[str]) -> str:
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=10).stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        return ""
+
+
+def probe_public_host() -> str:
+    """Best-effort public address of this host, IPv4 first, IPv6 as fallback."""
+    for cmd in (
+        ["curl", "-4", "-fsS", "ifconfig.me"],
+        ["bash", "-lc", "hostname -I | tr ' ' '\\n' | awk '/:/ {next} NF {print; exit}'"],
+        ["curl", "-6", "-fsS", "ifconfig.me"],
+        ["bash", "-lc", "hostname -I | awk '{print $1}'"],
+    ):
+        out = _probe(cmd)
+        if not out:
+            continue
+        try:
+            ipaddress.ip_address(out)
+        except ValueError:
+            continue
+        return out
+    return ""
+
+
+def resolve_public_host() -> str:
+    """PUBLIC_HOST if set (IP or hostname), else a probed IP. Never garbage."""
+    override = os.environ.get("PUBLIC_HOST", "").strip()
+    if override:
+        try:
+            ipaddress.ip_address(override)
+            return override
+        except ValueError:
+            pass
+        if _HOSTNAME_RE.match(override):
+            return override
+        raise SystemExit(
+            f"PUBLIC_HOST is neither an IP address nor a hostname: {override!r}"
+        )
+    host = probe_public_host()
+    if not host:
+        raise SystemExit(
+            "could not resolve a public IP for this host; "
+            "set PUBLIC_HOST=<ip> in the agent env"
+        )
+    return host
+
+
+PUBLIC_HOST = resolve_public_host()
 
 if not TOKEN:
     print("QEMU_AGENT_TOKEN must be set", file=sys.stderr)
@@ -882,7 +950,7 @@ def create_vm(req: dict) -> dict:
         "gpu_profile": gpu_profile,
         "gpu_slots": gpu_slots,
         "gpu_mdevs": gpu_mdevs,
-        "url": f"{PUBLIC_HOST}:{host_port}",
+        "url": host_authority(PUBLIC_HOST, host_port),
         "created_at": now_iso(),
     }
     save_meta(meta)
@@ -1099,7 +1167,7 @@ def do_start_agent(vm_id: str, manifest_path: str, secrets_path: str,
             guest_port = int(entry["port"])
             host_port = _free_host_port()
             add_expose_forward(host_port, meta["guest_ip"], guest_port)
-            endpoints.append({"as": entry.get("as", ""), "url": f"{PUBLIC_HOST}:{host_port}", "port": guest_port, "host_port": host_port})
+            endpoints.append({"as": entry.get("as", ""), "url": host_authority(PUBLIC_HOST, host_port), "port": guest_port, "host_port": host_port})
         meta["expose_endpoints"] = endpoints
         save_meta(meta)
     return endpoints

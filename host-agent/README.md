@@ -206,8 +206,11 @@ All routes under `/v1/vm`, bearer auth (`Authorization: Bearer $TOKEN`), JSON in
 | GET    | `/v1/capacity`            | `{cpus, ram_mb, storage_gb}` — real cpu count, total ram, and free disk on this host. `fuse host register` probes this instead of trusting operator-declared flags.                                                                                        |
 
 `url` is `<public_host>:<host_port>`, DNAT'd to the guest's `9550`. Host port =
-`19550 + vm_index`. Public host is auto-detected; override with
-`PUBLIC_HOST=...` in the env.
+`19550 + vm_index`. Public host is auto-detected, preferring IPv4 on a
+dual-stack host and falling back to IPv6; an IPv6 host is bracketed
+(`[2607:5300:203:535a::]:19554`) so the authority stays well-formed. Override
+with `PUBLIC_HOST=...` in the env — an IP or a hostname. Anything else fails at
+agent startup rather than emitting a URL nobody can reach.
 
 ## Networking model
 
