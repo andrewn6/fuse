@@ -70,9 +70,11 @@ fuse up
 
 ## Fractional GPUs with MIG
 
-A whole A100 or H100 is more card than many jobs need. On MIG-capable hardware you
-can hand out slices instead, each one a hardware-isolated instance with its own
-memory and compute, by naming a profile:
+A whole A100 or H100 is more card than many jobs need. MIG (Multi-Instance GPU)
+is the NVIDIA feature that splits one such card into up to seven
+hardware-isolated instances, each with its own compute slices, memory, and cache
+paths. A MIG instance is real partitioned hardware, not a time-sliced share, so
+one tenant cannot starve or observe another. Ask for one by naming a profile:
 
 ```yaml
 resources:
@@ -85,8 +87,88 @@ resources:
 run: python infer.py
 ```
 
-`gpu` stays a count, it just counts MIG instances once `gpu_profile` is set, so
-`gpu: 2` with `gpu_profile: 1g.10gb` asks for two slices rather than two cards.
+### Reading a profile name
+
+A profile name is two numbers: compute slices, then memory.
+
+| Profile | Means |
+| --- | --- |
+| `1g.10gb` | 1 of the card's 7 compute slices, 10GB of GPU memory |
+| `3g.20gb` | 3 slices, 20GB |
+| `7g.80gb` | all 7 slices, effectively the whole card |
+| `1g.10gb+me` | 1 slice, 10GB, plus a dedicated media engine for video encode/decode |
+
+Which profiles exist is a property of the card, not of Fuse: an 80GB A100
+offers `1g.10gb` through `7g.80gb`, a 40GB A100 offers `1g.5gb` through
+`7g.40gb`. Use the names your hardware documents.
+
+### When to use MIG instead of a whole GPU
+
+Use MIG when the job is smaller than a card and you want more of them running
+concurrently: single-stream inference, notebooks, CI jobs that just need CUDA to
+be present, per-tenant isolation on shared hardware.
+
+Ask for a whole device when the job needs the full memory or the full SM count,
+when it uses NVLink or peer-to-peer transfers between GPUs (MIG instances are
+isolated from each other and cannot do that), when it wants more than 7 units of
+anything on one card, or when you do not yet know its ceiling. Most training
+runs want whole devices.
+
+### `gpu` counts instances, not cards
+
+`gpu` is always a device count. Setting `gpu_profile` does not turn it into a
+fraction, it changes what is being counted:
+
+```yaml
+gpu: 2 # two entire physical GPUs
+```
+
+```yaml
+gpu: 2
+gpu_profile: 1g.10gb # two 1g.10gb instances, together about 2/7 of one A100
+```
+
+That is decision D5. The scheduler only ever allocates discrete units it can
+bind to a VM, so the count means the same thing whether the unit is a PCI device
+or a carved MIG instance. There is no way to write "half a GPU" as a fractional
+`gpu:` value, and none is planned.
+
+### What fails at compile time
+
+Four GPU rules run client-side, in `fuse up`, `fuse validate`, and
+`fuse compile`, so a malformed GPU request fails on your machine rather than
+being scheduled and failing on a host. They are accumulated rather than
+short-circuited, so a Fusefile with several GPU mistakes reports all of them at
+once.
+
+| Rule | Error |
+| --- | --- |
+| `gpu` must not be negative | `resources.gpu: must not be negative` |
+| `gpu_profile` must parse | `resources.gpu_profile: invalid MIG profile "..." (expected mig-parted form like "1g.10gb")` |
+| `gpu_profile` needs a count | `resources.gpu_profile: requires resources.gpu >= 1 (the count of MIG instances)` |
+| `gpu_profile` needs a MIG-capable `gpu_kind` | `resources.gpu_profile: "..." does not support MIG (gpu_kind "...")` |
+
+The parse rule is the nvidia mig-parted grammar: a slice count of `1` through
+`7`, then `g.`, then a memory size in GB, then an optional `+me`. `1g.10gb`,
+`3g.20gb`, and `1g.10gb+me` all parse. Matching is case-insensitive and the
+compiled value is lowercased, so `1G.10GB` is accepted and sent as `1g.10gb`.
+Note that the grammar only checks shape: it cannot know which profiles your
+cards actually offer, so a well-formed name for a profile nobody carved is a
+scheduling failure later, not a compile error here.
+
+The MIG-capability rule is a **denylist**, not an allowlist. Kinds known not to
+support MIG (`v100`, `t4`, `p100`, `p40`, `k80`, `rtx`, `gtx`, `titan`, `l4`,
+`l40`, `l40s`) are rejected outright, and an empty or unrecognized `gpu_kind`
+passes, on the assumption that the host's reported per-device inventory is the
+better authority and that a future MIG-capable card should not be blocked by a
+stale list. The test is a case-insensitive substring match, so
+`gpu_kind: rtx4090` is rejected by the `rtx` entry.
+
+The same four rules are re-applied by the orchestrator against the compiled
+request, so a raw SDK or HTTP caller that skips the Fusefile gets the same
+errors as a 400.
+
+### Carving and scheduling instances
 
 The operator carves the MIG instances on the host ahead of time with
 `qemu-mig-setup.sh`, they are not carved on demand. The agent probes the resulting

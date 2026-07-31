@@ -78,13 +78,17 @@ files:
 
 resources:
   cpus: 2             # whole vCPUs; 2.0 is accepted, a fraction is not
-  gpu: 1              # device count; whole GPUs, or MIG instances if gpu_profile is set
-  gpu_kind: a100      # optional match, e.g. "a100"; empty matches any kind
-  gpu_profile: 1g.10gb # optional MIG profile; omit for whole devices
   memory: 2GB         # M/MB/MiB, G/GB/GiB, T/TB/TiB (all binary), compiles to ram_mb
   disk: 10GB          # same units, rounded up to whole GB; 'storage' is an alias
+  region: us-east-1   # only schedules onto hosts registered in this region
   max_runtime: 1h     # hard ttl from create; a leak ceiling, not a budget
   idle_timeout: 15m   # destroyed after this long with no exec and no attach
+
+  # advanced, and only on a qemu-backed host with NVIDIA hardware. omit all
+  # three unless you need a GPU. see "Advanced: GPU fields" below.
+  # gpu: 1
+  # gpu_kind: a100
+  # gpu_profile: 1g.10gb
 
 # hard placement constraints for a self-hosted fleet. every field is a gate,
 # not a preference: a request that matches no host is rejected, never queued.
@@ -146,15 +150,18 @@ secrets:
 
 ## Field notes
 
+These are the fields a typical environment uses. The three GPU keys are
+deliberately not in this table: they only apply on a QEMU-backed host with
+NVIDIA hardware, and they are covered separately under
+[Advanced: GPU fields](#advanced-gpu-fields). If you are not requesting a GPU,
+you can stop reading at [The setup layer cache](#the-setup-layer-cache).
+
 | Field | Type | Notes |
 | --- | --- | --- |
 | `version` | int | Currently always `1`. A Fusefile is a single yaml document; anything after a second `---` is rejected rather than silently dropped. |
 | `image` | string | Name of a rootfs pre-baked on the host, **not** an OCI image ref. There is no OCI pull: fc-agent resolves it to `<IMAGES_DIR>/<image>.ext4` and qemu-agent to `<IMAGES_DIR>/<image>.qcow2`, and returns a 400 if no such file exists. An operator bakes and places it out of band (e.g. with `fc-bake-rootfs.sh`). Omit to use the baked base rootfs. See [Base images](#base-images-are-not-oci-images). |
 | `files` | list of `{path, source \| content, mode}` | Files written into the guest before `setup` runs. See [Files](#files). |
 | `resources.cpus` | int | Whole vCPU count. A whole-valued float (`2.0`) is accepted; a fraction (`0.5`) is rejected, because Firecracker takes an integer `vcpu_count` and QEMU an integer `-smp`. A negative count is rejected. Omitting it (or `0`) means "host default": the host agent boots the VM with 1 vCPU. |
-| `resources.gpu` | int | Device count. Whole GPUs by default, or MIG instances when `gpu_profile` is set. Requires a host registered with the `qemu` backend. |
-| `resources.gpu_kind` | string | Optional GPU model match, e.g. `a100`. See [Providers](/docs/concepts/providers). |
-| `resources.gpu_profile` | string | Optional MIG profile, e.g. `1g.10gb`. Requests a fractional slice of a GPU instead of whole devices. See [GPU workloads](/docs/guides/gpu-workloads). |
 | `resources.memory` | string | A size, e.g. `2GB`. Compiles to `ram_mb`. See [Size units](#size-units). |
 | `resources.disk` | string | Size of the guest root disk, e.g. `10GB`. Compiles to `storage_gb`, rounded **up** to a whole GB, so `512MB` provisions 1GB. See [Size units](#size-units). |
 | `resources.storage` | string | A permanent alias for `resources.disk`; `disk` is the preferred spelling. Setting both is only valid if they name the same size. |
@@ -233,6 +240,7 @@ down once its window elapses. If that is your workload, do not set `idle_timeout
 Detection runs on the reconcile loop (30s ticks) and requires two consecutive
 observations, so real teardown lands roughly one to two ticks after the window
 elapses. That is why the minimum accepted value is `1m`.
+
 ## Base images are not OCI images
 
 `image` names a rootfs that has already been baked onto the host, and the host
@@ -314,45 +322,6 @@ fuse build                    # runs setup once, on the 600s exec path
 fuse up --from-build <id>     # boots the result, skipping setup entirely
 ```
 
-## GPU fields
-
-`gpu` is always a device *count*, never a fraction. What it counts depends on
-whether `gpu_profile` is set: without a profile it counts whole physical GPUs, with
-one it counts MIG instances of that profile. `gpu: 2` with `gpu_profile: 1g.10gb`
-asks for two 1g.10gb slices, not two whole cards.
-
-A `gpu_profile` is validated client-side, at compile time, against the mig-parted
-profile grammar: a slice count of `1` through `7`, then `g.`, then a memory size in
-GB, with an optional `+me` suffix for a profile with a dedicated media engine.
-`1g.10gb`, `3g.20gb`, and `1g.10gb+me` all parse. Matching is case-insensitive and
-the compiled value is lowercased, so `1G.10GB` is accepted and sent as `1g.10gb`.
-
-Four rules are enforced before the request ever leaves your machine, so a malformed
-GPU request fails at `fuse up` rather than being scheduled and failing on a host:
-
-| Rule | Error |
-| --- | --- |
-| `gpu` must not be negative | `resources.gpu: must not be negative` |
-| `gpu_profile` must parse | `resources.gpu_profile: invalid MIG profile "..." (expected mig-parted form like "1g.10gb")` |
-| `gpu_profile` needs a count | `resources.gpu_profile: requires resources.gpu >= 1 (the count of MIG instances)` |
-| `gpu_profile` needs a MIG-capable `gpu_kind` | `resources.gpu_profile: "..." does not support MIG (gpu_kind "...")` |
-
-These are accumulated rather than short-circuited, so a Fusefile with several GPU
-mistakes reports all of them at once.
-
-The last rule is a **denylist**, not an allowlist. Kinds known not to support MIG
-(`v100`, `t4`, `p100`, `p40`, `k80`, `rtx`, `gtx`, `titan`, `l4`, `l40`, `l40s`) are
-rejected outright; an empty or unrecognized `gpu_kind` is allowed through, on the
-assumption that the host's reported per-device inventory is the better authority.
-Matching is a case-insensitive substring test, so `gpu_kind: rtx4090` is rejected by
-the `rtx` entry.
-
-Setting `gpu_kind` alongside `gpu_profile` narrows host selection: the scheduler
-only considers hosts that offer the profile *and* report a MIG-capable device of
-that kind. Hosts that report no per-device inventory fall back to their declared
-`gpu_kind`, and a host that declares neither is left for the qemu agent to accept
-or reject. See [GPU workloads](/docs/guides/gpu-workloads).
-
 ## The setup layer cache
 
 `setup` steps compile into one startup script that re-runs in full on every
@@ -419,6 +388,66 @@ there rather than silently ignored.
 
 Every step currently reports as a miss: key derivation and the plan land ahead of
 the layer store they will be looked up in.
+
+## Advanced: GPU fields
+
+Skip this section unless your workload needs a GPU. `gpu`, `gpu_kind`, and
+`gpu_profile` are the only NVIDIA-specific fields in a Fusefile, they are all
+optional, and requesting any of them is what routes the environment onto a host
+registered with the `qemu` backend. A Fusefile with no `gpu` key keeps
+scheduling onto the default Firecracker backend and never touches any of this.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `resources.gpu` | int | A device **count**, never a fraction. Counts whole physical GPUs, or MIG instances when `gpu_profile` is set. Requires a host registered with the `qemu` backend. |
+| `resources.gpu_kind` | string | Optional GPU model match, e.g. `a100`. Matched case-insensitively as a substring of the host's reported device model, so `a100` matches `NVIDIA A100-SXM4-40GB`. Empty matches any kind. See [Providers](/docs/concepts/providers). |
+| `resources.gpu_profile` | string | Optional MIG profile, e.g. `1g.10gb`. Asks for hardware-isolated fractions of a GPU instead of whole devices, and changes what `gpu` counts. See [GPU workloads](/docs/guides/gpu-workloads). |
+
+### `gpu` is a count of devices, not an amount of GPU
+
+The one thing to get right here: `gpu` is always a whole number of *things*,
+and `gpu_profile` decides what those things are.
+
+```yaml
+resources:
+  gpu: 2 # two entire physical GPUs
+```
+
+```yaml
+resources:
+  gpu: 2
+  gpu_profile: 1g.10gb # two 1g.10gb MIG slices, which together are a fraction of one card
+```
+
+Both files say `gpu: 2`, and they ask for very different amounts of hardware.
+There is no way to spell "half a GPU" as a fractional `gpu` value; a fraction is
+requested by naming the profile you want and counting how many of it you need.
+On an A100 a `1g.10gb` instance is one seventh of the card, so the second file
+above asks for roughly two sevenths of one GPU, not two GPUs.
+
+That is deliberate (decision D5): the scheduler allocates discrete units it can
+bind to a VM, whether that unit is a PCI device or a carved MIG instance, so the
+count means the same thing in both cases even though the unit differs.
+
+### Where the rest of it lives
+
+MIG (Multi-Instance GPU) is the NVIDIA feature behind `gpu_profile`: it splits
+one datacenter card such as an A100 or H100 into up to seven hardware-isolated
+instances, and a profile name like `1g.10gb` reads as "1 of the card's 7 compute
+slices, 10GB of GPU memory". The instances are carved by the operator ahead of
+time, never on demand, so asking for a profile nobody carved is a scheduling
+failure rather than a reconfiguration.
+[GPU workloads](/docs/guides/gpu-workloads#fractional-gpus-with-mig) covers the
+rest: how to read a profile name, when a slice beats a whole card, the exact
+compile-time guardrails on these three fields, and how the scheduler picks a
+host.
+
+:::warning[GPU environments cannot be snapshotted]
+A VFIO-passed-through device cannot be checkpointed, so snapshot and fork are
+unavailable for any environment with `gpu` set, MIG instances included. The
+setup layer cache is off for the same reason. Checkpoint long runs from inside
+the guest instead.
+:::
 
 ## Scaffolding one
 
