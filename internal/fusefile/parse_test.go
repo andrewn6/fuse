@@ -616,3 +616,62 @@ func TestValidExposeName(t *testing.T) {
 		}
 	}
 }
+
+// cpus is a whole vcpu count, so a whole-valued float is accepted and a
+// genuine fraction is rejected with a reason.
+func TestParseCPUs(t *testing.T) {
+	cases := []struct {
+		name    string
+		src     string
+		want    VCPUs
+		wantErr string
+	}{
+		{name: "integer", src: "version: 1\nresources:\n  cpus: 2\n", want: 2},
+		{name: "whole float", src: "version: 1\nresources:\n  cpus: 2.0\n", want: 2},
+		{
+			name:    "fraction",
+			src:     "version: 1\nresources:\n  cpus: 0.5\n",
+			wantErr: "is not a whole number of vcpus",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := Parse([]byte(tc.src))
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected an error, got nil")
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Errorf("error %q does not contain %q", err.Error(), tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if f.Resources.CPUs != tc.want {
+				t.Errorf("resources.cpus: got %d, want %d", f.Resources.CPUs, tc.want)
+			}
+		})
+	}
+}
+
+// disk is the preferred spelling for the root disk size; storage stays valid.
+func TestParseDiskAndStorage(t *testing.T) {
+	f, err := Parse([]byte("version: 1\nresources:\n  disk: 10GB\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Resources.Disk != "10GB" {
+		t.Errorf("resources.disk: got %q, want %q", f.Resources.Disk, "10GB")
+	}
+
+	f, err = Parse([]byte("version: 1\nresources:\n  storage: 10GB\n"))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if f.Resources.Storage != "10GB" {
+		t.Errorf("resources.storage: got %q, want %q", f.Resources.Storage, "10GB")
+	}
+}

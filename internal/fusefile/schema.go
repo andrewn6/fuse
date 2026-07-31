@@ -5,6 +5,7 @@ package fusefile
 
 import (
 	"fmt"
+	"math"
 
 	"gopkg.in/yaml.v3"
 )
@@ -137,9 +138,35 @@ func (s *Step) UnmarshalYAML(node *yaml.Node) error {
 	return nil
 }
 
+// VCPUs is a whole vCPU count. It accepts a yaml integer or a whole-valued
+// float, so `cpus: 2` and `cpus: 2.0` both mean two vCPUs, and rejects a
+// genuine fraction: firecracker takes an integer vcpu_count, qemu an integer
+// -smp, and neither host agent writes a cgroup quota, so there is nothing in
+// the stack that could honor `cpus: 0.5`.
+type VCPUs int32
+
+// UnmarshalYAML decodes the vCPU count through float64 so a whole-valued float
+// is accepted and a fraction is rejected with a reason.
+func (c *VCPUs) UnmarshalYAML(node *yaml.Node) error {
+	var n float64
+	if err := node.Decode(&n); err != nil {
+		return fmt.Errorf("cpus: invalid %q (expected a whole number of vcpus, e.g. 2)", node.Value)
+	}
+	if n != math.Trunc(n) {
+		return fmt.Errorf(
+			"cpus: %v is not a whole number of vcpus (firecracker and qemu both take an integer vcpu count; fractional cpus are not supported)",
+			n)
+	}
+	if n > math.MaxInt32 || n < math.MinInt32 {
+		return fmt.Errorf("cpus: %v is out of range", n)
+	}
+	*c = VCPUs(n)
+	return nil
+}
+
 // Resources is the human-friendly hardware spec; compiled to ResourceSpec.
 type Resources struct {
-	CPUs    int32  `yaml:"cpus,omitempty"`
+	CPUs    VCPUs  `yaml:"cpus,omitempty"`
 	GPU     int    `yaml:"gpu,omitempty"`      // device count: whole GPUs, or MIG instances when gpu_profile is set
 	GPUKind string `yaml:"gpu_kind,omitempty"` // optional match, e.g. "a100"
 	// GPUProfile requests fractional GPU allocation: a MIG profile in
@@ -147,8 +174,12 @@ type Resources struct {
 	// `gpu` counts MIG instances of this profile rather than whole
 	// devices (decision D5). Empty means whole-device allocation.
 	GPUProfile string `yaml:"gpu_profile,omitempty"`
-	Memory     string `yaml:"memory,omitempty"`      // e.g. "2GB"
-	Storage    string `yaml:"storage,omitempty"`     // e.g. "10GB"
+	Memory     string `yaml:"memory,omitempty"` // e.g. "2GB", "2G", "2GiB", "512MB"
+	// Disk sizes the guest root disk, e.g. "10GB". It is the preferred
+	// spelling; Storage is a permanent alias kept for files written before
+	// the rename. Setting both is allowed only if they mean the same size.
+	Disk       string `yaml:"disk,omitempty"`
+	Storage    string `yaml:"storage,omitempty"`     // alias for Disk, never removed
 	Region     string `yaml:"region,omitempty"`      // schedules only onto a host registered in this region; empty matches any
 	MaxRuntime string `yaml:"max_runtime,omitempty"` // go duration
 	// IdleTimeout destroys the environment after this long with no exec

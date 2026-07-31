@@ -38,9 +38,9 @@ version: 1
 #     mode: "0755"            # optional octal mode
 
 resources:
-  cpus: 2
-  memory: 2GB # accepts MB/GB suffixes, compiles to ram_mb
-  storage: 10GB # compiles to storage_gb
+  cpus: 2 # whole vcpus; 2.0 is accepted, a fraction is not
+  memory: 2GB # M/MB/MiB, G/GB/GiB, T/TB/TiB (all binary), compiles to ram_mb
+  disk: 10GB # same units, rounded up to whole GB; 'storage' is an alias
   max_runtime: 1h # accepts go duration, compiles to max_runtime_seconds
   # idle_timeout: 15m # uncomment to destroy after this long with no exec or attach
   # region: us-east # uncomment to schedule only onto a host registered in this region
