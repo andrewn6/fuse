@@ -500,5 +500,48 @@ class QEMUAgentTest(unittest.TestCase):
         )
 
 
+class PublicHostTest(unittest.TestCase):
+    """Pins host:port composition (issue #126): a dual-stack host resolved to
+    its IPv6 address and the agent emitted "2607:5300:203:535a:::19554"."""
+
+    def test_ipv4(self):
+        self.assertEqual(qemu_agent.host_authority("203.0.113.7", 19654), "203.0.113.7:19654")
+
+    def test_ipv6_is_bracketed(self):
+        self.assertEqual(
+            qemu_agent.host_authority("2607:5300:203:535a::", 19654),
+            "[2607:5300:203:535a::]:19654",
+        )
+
+    def test_hostname(self):
+        self.assertEqual(
+            qemu_agent.host_authority("host.example.com", 8091), "host.example.com:8091"
+        )
+
+    def test_override_accepts_ip_and_hostname(self):
+        for value in ("198.51.100.4", "2607:5300:203:535a::", "gpu1.example.com"):
+            with mock.patch.dict(os.environ, {"PUBLIC_HOST": value}):
+                self.assertEqual(qemu_agent.resolve_public_host(), value)
+
+    def test_override_rejects_garbage(self):
+        with mock.patch.dict(os.environ, {"PUBLIC_HOST": "http://2607:5300:203:535a:::8091"}):
+            with self.assertRaises(SystemExit):
+                qemu_agent.resolve_public_host()
+
+    def test_probe_prefers_ipv4(self):
+        def fake_probe(cmd):
+            return "203.0.113.7" if "-4" in cmd else "2607:5300:203:535a::"
+
+        with mock.patch.dict(os.environ, {"PUBLIC_HOST": ""}):
+            with mock.patch.object(qemu_agent, "_probe", side_effect=fake_probe):
+                self.assertEqual(qemu_agent.resolve_public_host(), "203.0.113.7")
+
+    def test_probe_exhausted_fails_loudly(self):
+        with mock.patch.dict(os.environ, {"PUBLIC_HOST": ""}):
+            with mock.patch.object(qemu_agent, "_probe", return_value=""):
+                with self.assertRaises(SystemExit):
+                    qemu_agent.resolve_public_host()
+
+
 if __name__ == "__main__":
     unittest.main()

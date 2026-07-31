@@ -203,7 +203,14 @@ systemctl --no-pager --lines=0 status fuse-orchestrator.service || true
 
 # 4. print the connect command so the operator never has to guess which token
 #    goes where.
-IP=$(curl -fsS ifconfig.me 2>/dev/null || hostname -I 2>/dev/null | awk '{print $1}' || echo "<this-host>")
+# prefer IPv4: the printed URL is a plain host:port authority, and an
+# unbracketed IPv6 address would make it malformed. bracket v6 when that is all
+# this host has.
+IP=$(curl -4 -fsS ifconfig.me 2>/dev/null || true)
+[ -z "$IP" ] && IP=$(hostname -I 2>/dev/null | tr ' ' '\n' | awk '/:/ {next} NF {print; exit}')
+[ -z "$IP" ] && IP=$(curl -6 -fsS ifconfig.me 2>/dev/null || true)
+[ -z "$IP" ] && IP="<this-host>"
+case "$IP" in *:*) IP="[$IP]" ;; esac
 PORT="${LISTEN##*:}"
 echo
 log "orchestrator installed and listening on $LISTEN"

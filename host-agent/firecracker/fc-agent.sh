@@ -68,7 +68,26 @@ verify_asset() {
 # <<< fuse release-asset checksum verification <<<
 
 cmd="${1:-start}"
-public_ip() { curl -fsS ifconfig.me 2>/dev/null || hostname -I | awk '{print $1}'; }
+# Public address of this host, IPv4 first: the printed URLs are plain
+# host:port authorities, and an unbracketed IPv6 address produces a malformed
+# one. PUBLIC_HOST in the env wins when set.
+public_ip() {
+  local out
+  if [ -n "${PUBLIC_HOST:-}" ]; then echo "$PUBLIC_HOST"; return 0; fi
+  out=$(curl -4 -fsS ifconfig.me 2>/dev/null || true)
+  [ -z "$out" ] && out=$(hostname -I 2>/dev/null | tr ' ' '\n' | awk '/:/ {next} NF {print; exit}')
+  [ -z "$out" ] && out=$(curl -6 -fsS ifconfig.me 2>/dev/null || true)
+  [ -z "$out" ] && out=$(hostname -I 2>/dev/null | awk '{print $1}')
+  echo "$out"
+}
+
+# Compose host:port, bracketing the host when it is an IPv6 address.
+host_authority() {
+  case "$1" in
+    *:*) echo "[$1]:$2" ;;
+    *) echo "$1:$2" ;;
+  esac
+}
 
 ensure_token() {
   if [ ! -f "$ENV_FILE" ] && [ -f "$LEGACY_ENV_FILE" ]; then
@@ -198,7 +217,7 @@ EOF
     IP=$(public_ip)
     echo
     echo "# ---- Fuse orchestrator env ----"
-    echo "FIRECRACKER_BASE_URL=http://${IP}:${PORT}"
+    echo "FIRECRACKER_BASE_URL=http://$(host_authority "$IP" "$PORT")"
     echo "FIRECRACKER_TOKEN=${FC_AGENT_TOKEN}"
     echo "# --------------------------------"
     ;;
@@ -319,7 +338,7 @@ EOF
     TOK=$(grep -E '^ORCH_AUTH_TOKEN=' "$ORCH_DEFAULTS" | cut -d= -f2- || true)
     echo
     echo "# ---- point the Fuse UI (fuse-frontend) at this orchestrator ----"
-    echo "FUSE_BASE_URL=http://$(public_ip):8080   # or your TLS proxy URL"
+    echo "FUSE_BASE_URL=http://$(host_authority "$(public_ip)" 8080)   # or your TLS proxy URL"
     echo "FUSE_TOKEN=${TOK}"
     echo "# ----------------------------------------------------------------"
     echo "[orch] tip: add FUSE_ORCH_SERVICE=orchestrator.service and FUSE_ORCH_BIN=$ORCH_BIN"
@@ -408,12 +427,12 @@ EOF
     echo
     echo "======================================================================"
     echo " fuse host ready"
-    echo "   orchestrator : http://${IP}:8080"
+    echo "   orchestrator : http://$(host_authority "$IP" 8080)"
     if [ -n "$TOK" ]; then
       echo "   token        : ${TOK}"
       echo
       echo "   drive it from your laptop:"
-      echo "     fuse connect http://${IP}:8080 --token ${TOK}"
+      echo "     fuse connect http://$(host_authority "$IP" 8080) --token ${TOK}"
     else
       echo "   token        : (not started - see $ORCH_DEFAULTS, then: sudo systemctl start orchestrator)"
     fi
