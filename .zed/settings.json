@@ -1,0 +1,20 @@
+{
+  "file_types": {
+    "YAML": ["Fusefile", "Fusefile.*", "*.fuse"]
+  },
+  "lsp": {
+    "yaml-language-server": {
+      "settings": {
+        "yaml": {
+          "schemas": {
+            "https://raw.githubusercontent.com/folsomintel/fuse/main/schema/fusefile-v1.json": [
+              "Fusefile",
+              "Fusefile.*",
+              "*.fuse"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

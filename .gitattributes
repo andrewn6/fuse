@@ -1,0 +1,5 @@
+# a Fusefile is YAML with no extension, so linguist cannot detect it. this
+# gets it highlighted in GitHub's blob view and diffs.
+Fusefile    linguist-language=YAML
+Fusefile.*  linguist-language=YAML
+*.fuse      linguist-language=YAML

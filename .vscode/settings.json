@@ -1,0 +1,21 @@
+{
+  // a Fusefile has no extension, so nothing detects it as YAML on its own.
+  // these three patterns cover ./Fusefile, the Fusefile.<variant> style used
+  // in e2e-fusefiles/, and the explicit *.fuse escape hatch.
+  "files.associations": {
+    "Fusefile": "yaml",
+    "Fusefile.*": "yaml",
+    "*.fuse": "yaml"
+  },
+
+  // completion and inline validation, for Fusefiles that lack the
+  // yaml-language-server modeline that `fuse init` writes. requires the
+  // redhat.vscode-yaml extension (see extensions.json).
+  "yaml.schemas": {
+    "https://raw.githubusercontent.com/folsomintel/fuse/main/schema/fusefile-v1.json": [
+      "Fusefile",
+      "Fusefile.*",
+      "*.fuse"
+    ]
+  }
+}

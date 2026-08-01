@@ -1,0 +1,187 @@
+---
+title: Editor setup
+sidebar:
+  icon: file-code
+description: Syntax highlighting, completion, and inline validation for Fusefiles
+---
+
+A Fusefile is YAML, but it is named `Fusefile` with no extension. Editors
+detect file types by extension, so out of the box you get a plain, unhighlighted
+buffer, and the [JSON Schema](/docs/concepts/fusefile#editor-support) never
+loads even though `fuse init` writes the modeline for it.
+
+One line of config per editor fixes both at once: tell it that `Fusefile` is
+YAML, and everything else follows.
+
+## What to associate
+
+Three patterns cover every Fusefile you are likely to open:
+
+| Pattern      | Matches                                                       |
+| ------------ | ------------------------------------------------------------- |
+| `Fusefile`   | the default file `fuse up` looks for in the current directory |
+| `Fusefile.*` | variants like `Fusefile.gpu` or `Fusefile.ci`                 |
+| `*.fuse`     | an explicit extension, if you prefer one                      |
+
+The CLI only resolves `./Fusefile` by default; the other two are naming
+conventions, and you point `fuse up -f` at them explicitly.
+
+## VS Code
+
+Install the [YAML
+extension](https://marketplace.visualstudio.com/items?itemName=redhat.vscode-yaml),
+then add this to your user `settings.json` (or the workspace's
+`.vscode/settings.json`, to set it for everyone on the repo):
+
+```json
+{
+  "files.associations": {
+    "Fusefile": "yaml",
+    "Fusefile.*": "yaml",
+    "*.fuse": "yaml"
+  },
+  "yaml.schemas": {
+    "https://raw.githubusercontent.com/folsomintel/fuse/main/schema/fusefile-v1.json": [
+      "Fusefile",
+      "Fusefile.*",
+      "*.fuse"
+    ]
+  }
+}
+```
+
+`files.associations` gets you highlighting. `yaml.schemas` gets you completion,
+hover docs, and red squiggles on invalid fields, and it works even for
+Fusefiles that predate the modeline `fuse init` now writes.
+
+## Zed
+
+Zed ships `yaml-language-server`, so both halves are one settings block. Add it
+to `~/.config/zed/settings.json`, or to `.zed/settings.json` in the repo:
+
+```json
+{
+  "file_types": {
+    "YAML": ["Fusefile", "Fusefile.*", "*.fuse"]
+  },
+  "lsp": {
+    "yaml-language-server": {
+      "settings": {
+        "yaml": {
+          "schemas": {
+            "https://raw.githubusercontent.com/folsomintel/fuse/main/schema/fusefile-v1.json": [
+              "Fusefile",
+              "Fusefile.*",
+              "*.fuse"
+            ]
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+## Neovim
+
+Filetype detection goes in your config as a `vim.filetype.add` call:
+
+```lua
+vim.filetype.add({
+  filename = { ["Fusefile"] = "yaml" },
+  pattern = { ["Fusefile%..*"] = "yaml" },
+  extension = { fuse = "yaml" },
+})
+```
+
+That alone gives you highlighting, and the modeline in a scaffolded Fusefile is
+enough for `yamlls` to pick up the schema. To bind the schema by filename
+instead, so it applies to Fusefiles without a modeline:
+
+```lua
+require("lspconfig").yamlls.setup({
+  settings = {
+    yaml = {
+      schemas = {
+        ["https://raw.githubusercontent.com/folsomintel/fuse/main/schema/fusefile-v1.json"] = {
+          "Fusefile",
+          "Fusefile.*",
+          "*.fuse",
+        },
+      },
+    },
+  },
+})
+```
+
+## Vim
+
+```vim
+autocmd BufNewFile,BufRead Fusefile,Fusefile.*,*.fuse setfiletype yaml
+```
+
+## Helix
+
+In `~/.config/helix/languages.toml`. Note that `file-types` replaces the
+built-in list rather than extending it, so keep `yaml` and `yml`:
+
+```toml
+[[language]]
+name = "yaml"
+file-types = ["yaml", "yml", "fuse", { glob = "Fusefile" }, { glob = "Fusefile.*" }]
+```
+
+Helix uses `yaml-language-server` for YAML, so the modeline supplies the schema
+once the file is detected.
+
+## JetBrains IDEs
+
+**Settings → Editor → File Types → YAML**, and add `Fusefile`, `Fusefile.*`,
+and `*.fuse` to the registered patterns. The bundled YAML support reads the
+modeline for schema validation.
+
+## Emacs
+
+```elisp
+(add-to-list 'auto-mode-alist '("/Fusefile\\(\\..*\\)?\\'" . yaml-mode))
+(add-to-list 'auto-mode-alist '("\\.fuse\\'" . yaml-mode))
+```
+
+## Terminal
+
+For [`bat`](https://github.com/sharkdp/bat), add these to
+`~/.config/bat/config`:
+
+```
+--map-syntax "Fusefile:YAML"
+--map-syntax "Fusefile.*:YAML"
+--map-syntax "*.fuse:YAML"
+```
+
+For GitHub's web view and diffs, a `.gitattributes` in the repo holding your
+Fusefiles does the same job:
+
+```
+Fusefile    linguist-language=YAML
+Fusefile.*  linguist-language=YAML
+*.fuse      linguist-language=YAML
+```
+
+## Checking it worked
+
+Open a Fusefile and confirm three things:
+
+1. Keys and strings are colored, and the file's language shows as YAML.
+2. Typing `res` on a blank line offers `resources`.
+3. Changing `version: 1` to `version: 2` is flagged inline.
+
+If highlighting works but completion does not, the language server is not
+running or the schema is not bound; if neither works, the file association did
+not take.
+
+:::warning[The editor is advisory]
+A green editor is not a promise that `fuse up` succeeds. The schema is a
+convenience layer; the CLI's parse and compile are authoritative. Run
+`fuse validate` for the real answer, and see
+[Fusefile](/docs/concepts/fusefile#editor-support) for why.
+:::

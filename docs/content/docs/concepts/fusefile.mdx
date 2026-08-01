@@ -41,6 +41,11 @@ Server](https://github.com/redhat-developer/vscode-yaml): VS Code with the YAML
 extension, Neovim with `yamlls`, JetBrains IDEs, and Helix. In an editor that
 lets you map schemas to file names instead, point the same URL at `Fusefile`.
 
+One catch: because a Fusefile has no extension, most editors do not recognize
+it as YAML at all, so you get neither highlighting nor the schema until you
+associate the filename. [Editor setup](/docs/guides/editor-setup) has the
+config for VS Code, Zed, Neovim, Vim, Helix, JetBrains, Emacs, and `bat`.
+
 Two things to know about it:
 
 - **It is advisory.** `fuse up` still parses, validates, and compiles the file,
