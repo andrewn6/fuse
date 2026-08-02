@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.15.0](https://github.com/folsomintel/fuse/compare/v0.14.0...v0.15.0) (2026-08-02)
+
+
+### Features
+
+* **fusefile:** Finish workspace semantics with per-step workdir ([#155](https://github.com/folsomintel/fuse/issues/155)) ([27f63c1](https://github.com/folsomintel/fuse/commit/27f63c10df962f61456174cc9517dffad54e9d0a))
+
 ## [0.14.0](https://github.com/folsomintel/fuse/compare/v0.13.1...v0.14.0) (2026-07-31)
 
 
