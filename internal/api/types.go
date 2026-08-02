@@ -19,10 +19,14 @@ import "time"
 // the firecracker host agent resolves against its own named-rootfs
 // directory). Empty means the provider's default base.
 type ResourceSpec struct {
-	CPUs              int32  `json:"cpus,omitempty"`
-	RamMB             int32  `json:"ram_mb,omitempty"`
-	StorageGB         int32  `json:"storage_gb,omitempty"`
-	Region            string `json:"region,omitempty"`
+	CPUs      int32  `json:"cpus,omitempty"`
+	RamMB     int32  `json:"ram_mb,omitempty"`
+	StorageGB int32  `json:"storage_gb,omitempty"`
+	Region    string `json:"region,omitempty"`
+	// Arch restricts scheduling to hosts of this CPU architecture ("amd64",
+	// "arm64"; the uname spellings x86_64/aarch64 are accepted and
+	// normalized). Empty means any host.
+	Arch              string `json:"arch,omitempty"`
 	MaxRuntimeSeconds int64  `json:"max_runtime_seconds,omitempty"`
 	// IdleTimeoutSeconds destroys the environment after this many seconds
 	// with no exec and no attach session. Zero means no idle expiry. Unlike
@@ -269,12 +273,16 @@ type APIKeyList struct {
 
 // HostCapacity is the wire shape of a host's resource envelope.
 type HostCapacity struct {
-	CPUs      int    `json:"cpus"`
-	RamMB     int    `json:"ram_mb"`
-	StorageGB int    `json:"storage_gb"`
-	VMCount   int    `json:"vm_count"`
-	GPUs      int    `json:"gpus,omitempty"`
-	GPUKind   string `json:"gpu_kind,omitempty"`
+	CPUs      int `json:"cpus"`
+	RamMB     int `json:"ram_mb"`
+	StorageGB int `json:"storage_gb"`
+	VMCount   int `json:"vm_count"`
+	// Arch is the host's CPU architecture in GOARCH vocabulary ("amd64",
+	// "arm64"). Probed from the host agent when it reports one; may be
+	// declared at registration. Empty means amd64 (pre-arch hosts).
+	Arch    string `json:"arch,omitempty"`
+	GPUs    int    `json:"gpus,omitempty"`
+	GPUKind string `json:"gpu_kind,omitempty"`
 
 	// MIGProfiles advertises fractional GPU capacity: MIG instance count
 	// by profile name (e.g. {"1g.10gb": 4}). Like GPUs, it requires

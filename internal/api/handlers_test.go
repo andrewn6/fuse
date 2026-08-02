@@ -1630,3 +1630,49 @@ func TestRegisterHost_invalidLabelReturns400(t *testing.T) {
 		t.Fatalf("status = %d, want 400. body: %s", rr.Code, rr.Body.String())
 	}
 }
+
+func TestRegisterHost_InvalidArchReturns400(t *testing.T) {
+	h, _ := newTestHandlerWithProvider(t)
+	r := mustRouter(t, h)
+
+	rr := doJSON(t, r, http.MethodPost, "/v1/hosts", RegisterHostRequest{
+		ID:  "host-bad-arch",
+		URL: "http://host-bad-arch.test",
+		Capacity: HostCapacity{
+			CPUs: 4, RamMB: 8192, StorageGB: 100, VMCount: 5,
+			Arch: "sparc",
+		},
+	})
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400. body: %s", rr.Code, rr.Body.String())
+	}
+	env := decodeError(t, rr.Body)
+	if env.Error.Code != CodeInvalidArgument {
+		t.Errorf("code = %q, want %q", env.Error.Code, CodeInvalidArgument)
+	}
+}
+
+func TestRegisterHost_ArchNormalizedAndRoundTripped(t *testing.T) {
+	h, _ := newTestHandlerWithProvider(t)
+	r := mustRouter(t, h)
+
+	// uname -m spelling in, goarch vocabulary out.
+	rr := doJSON(t, r, http.MethodPost, "/v1/hosts", RegisterHostRequest{
+		ID:  "host-arm",
+		URL: "http://host-arm.test",
+		Capacity: HostCapacity{
+			CPUs: 4, RamMB: 8192, StorageGB: 100, VMCount: 5,
+			Arch: "aarch64",
+		},
+	})
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201. body: %s", rr.Code, rr.Body.String())
+	}
+	var info HostInfo
+	if err := json.Unmarshal(rr.Body.Bytes(), &info); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if info.Capacity.Arch != "arm64" {
+		t.Errorf("arch = %q, want %q", info.Capacity.Arch, "arm64")
+	}
+}
