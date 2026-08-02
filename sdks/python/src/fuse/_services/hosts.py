@@ -3,7 +3,11 @@ from __future__ import annotations
 from urllib.parse import quote
 
 from .._transport import Transport
-from ..types import Host, RegisterHostRequest
+from ..types import Host, HostPage, RegisterHostRequest
+
+# the server's max page size; list() requests this internally so it walks
+# every page in as few round trips as possible.
+_MAX_PAGE_LIMIT = 200
 
 
 class HostsService:
@@ -15,9 +19,28 @@ class HostsService:
         return Host.model_validate(resp.json())
 
     def list(self) -> list[Host]:
-        resp = self._t.request("GET", "/v1/hosts")
-        data = resp.json()
-        return [Host.model_validate(item) for item in (data.get("hosts") or [])]
+        # returns every registered host, transparently walking every result
+        # page. for explicit single-page control (e.g. a cursor from a
+        # previous call), use list_page.
+        out: list[Host] = []
+        cursor = ""
+        while True:
+            page = self.list_page(limit=_MAX_PAGE_LIMIT, cursor=cursor)
+            out.extend(page.hosts)
+            if not page.next_cursor:
+                break
+            cursor = page.next_cursor
+        return out
+
+    def list_page(self, *, limit: int = 0, cursor: str = "") -> HostPage:
+        # returns one page of registered hosts.
+        params: dict[str, str] = {}
+        if limit > 0:
+            params["limit"] = str(limit)
+        if cursor:
+            params["cursor"] = cursor
+        resp = self._t.request("GET", "/v1/hosts", params=params)
+        return HostPage.model_validate(resp.json())
 
     def get(self, host_id: str) -> Host:
         if not host_id:

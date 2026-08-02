@@ -271,6 +271,28 @@ class Host(_Model):
     warnings: list[str] = Field(default_factory=list)
 
 
+class EnvironmentPage(_Model):
+    # one page of environments.list_page, plus the cursor to fetch the next
+    # one. next_cursor is an opaque token; treat it as such rather than
+    # parsing it. it is none once there are no more results.
+    environments: list[EnvironmentInfo] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+class SnapshotPage(_Model):
+    # one page of snapshots.list_page, plus the cursor to fetch the next
+    # one. next_cursor is none once there are no more results.
+    snapshots: list[Snapshot] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
+class HostPage(_Model):
+    # one page of hosts.list_page, plus the cursor to fetch the next one.
+    # next_cursor is none once there are no more results.
+    hosts: list[Host] = Field(default_factory=list)
+    next_cursor: Optional[str] = None
+
+
 class APIKey(_Model):
     # a key's metadata. the raw secret appears only in CreatedAPIKey.key.
     id: str = ""

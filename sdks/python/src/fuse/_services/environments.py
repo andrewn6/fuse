@@ -7,6 +7,7 @@ from .._transport import Transport
 from ..types import (
     CreateRequest,
     EnvironmentInfo,
+    EnvironmentPage,
     Event,
     ExecRequest,
     ExecResult,
@@ -14,24 +15,53 @@ from ..types import (
 )
 from .events import stream_events
 
+# the server's max page size; list() requests this internally so it walks
+# every page in as few round trips as possible.
+_MAX_PAGE_LIMIT = 200
+
 
 class EnvironmentsService:
     def __init__(self, transport: Transport) -> None:
         self._t = transport
 
     def list(
-        self, *, task_id: str = "", state: str = "", host_id: str = ""
+        self, *, task_id: str = "", state: str = "", host_id: str = "", cursor: str = ""
     ) -> list[EnvironmentInfo]:
-        resp = self._t.request(
-            "GET",
-            "/v1/environments",
-            params={"task_id": task_id, "state": state, "host_id": host_id},
-        )
-        data = resp.json()
-        return [
-            EnvironmentInfo.model_validate(item)
-            for item in (data.get("environments") or [])
-        ]
+        # returns every environment matching the filters, transparently
+        # walking every result page. for explicit single-page control (e.g.
+        # a cursor from a previous call), use list_page.
+        out: list[EnvironmentInfo] = []
+        while True:
+            page = self.list_page(
+                task_id=task_id,
+                state=state,
+                host_id=host_id,
+                limit=_MAX_PAGE_LIMIT,
+                cursor=cursor,
+            )
+            out.extend(page.environments)
+            if not page.next_cursor:
+                break
+            cursor = page.next_cursor
+        return out
+
+    def list_page(
+        self,
+        *,
+        task_id: str = "",
+        state: str = "",
+        host_id: str = "",
+        limit: int = 0,
+        cursor: str = "",
+    ) -> EnvironmentPage:
+        # returns one page of environments matching the filters.
+        params: dict[str, str] = {"task_id": task_id, "state": state, "host_id": host_id}
+        if limit > 0:
+            params["limit"] = str(limit)
+        if cursor:
+            params["cursor"] = cursor
+        resp = self._t.request("GET", "/v1/environments", params=params)
+        return EnvironmentPage.model_validate(resp.json())
 
     def get(self, vm_id: str) -> EnvironmentInfo:
         if not vm_id:

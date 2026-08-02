@@ -213,6 +213,35 @@ def test_environments_list() -> None:
 
 
 @respx.mock
+def test_environments_list_page_round_trips_cursor() -> None:
+    def responder(request: httpx.Request) -> httpx.Response:
+        if "cursor" not in request.url.params:
+            return httpx.Response(
+                200,
+                json={
+                    "environments": [{"id": "vm-1", "state": "running", "url": "u"}],
+                    "next_cursor": "YWJj",
+                },
+            )
+        return httpx.Response(
+            200, json={"environments": [{"id": "vm-2", "state": "running", "url": "u"}]}
+        )
+
+    respx.get(f"{BASE_URL}/v1/environments").mock(side_effect=responder)
+    with new_client() as client:
+        page1 = client.environments.list_page(limit=1)
+        assert page1.next_cursor == "YWJj"
+        assert [e.id for e in page1.environments] == ["vm-1"]
+
+        page2 = client.environments.list_page(cursor=page1.next_cursor or "")
+        assert page2.next_cursor is None
+        assert [e.id for e in page2.environments] == ["vm-2"]
+
+        envs = client.environments.list()
+        assert [e.id for e in envs] == ["vm-1", "vm-2"]
+
+
+@respx.mock
 def test_environments_drain() -> None:
     route = respx.post(f"{BASE_URL}/v1/environments/vm-1").mock(
         return_value=httpx.Response(
