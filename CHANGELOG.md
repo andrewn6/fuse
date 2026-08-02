@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.16.0](https://github.com/folsomintel/fuse/compare/v0.15.0...v0.16.0) (2026-08-02)
+
+
+### Features
+
+* local dev with the real stack (fuse local) + arch-aware scheduling ([#157](https://github.com/folsomintel/fuse/issues/157)) ([4ffe689](https://github.com/folsomintel/fuse/commit/4ffe6898c1197c5713cebc85bf1dd45cff3a2232))
+
 ## [0.15.0](https://github.com/folsomintel/fuse/compare/v0.14.0...v0.15.0) (2026-08-02)
 
 
