@@ -127,9 +127,53 @@ type ListEnvironmentsOptions struct {
 	TaskID string
 	State  string
 	HostID string
+
+	// Limit caps the page size (server default 50, max 200; <=0 uses the
+	// server default). Only consulted by ListPage — List always requests
+	// the server's max page size internally since it walks every page.
+	Limit int
+
+	// Cursor resumes after a previous page's EnvironmentPage.NextCursor. It
+	// is an opaque token; treat it as such rather than parsing it.
+	Cursor string
 }
 
+// EnvironmentPage is one page of a List call, plus the cursor to fetch the
+// next one.
+type EnvironmentPage struct {
+	Environments []EnvironmentInfo `json:"environments"`
+	// NextCursor is empty once there are no more results.
+	NextCursor string `json:"next_cursor,omitempty"`
+}
+
+// List returns every environment matching opt, transparently walking every
+// result page. For explicit single-page control (e.g. a CLI --cursor
+// flag), use ListPage.
 func (s *EnvironmentsService) List(ctx context.Context, opt ListEnvironmentsOptions) ([]EnvironmentInfo, error) {
+	var out []EnvironmentInfo
+	cursor := opt.Cursor
+	for {
+		page, err := s.ListPage(ctx, ListEnvironmentsOptions{
+			TaskID: opt.TaskID,
+			State:  opt.State,
+			HostID: opt.HostID,
+			Limit:  maxPageLimit,
+			Cursor: cursor,
+		})
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, page.Environments...)
+		if page.NextCursor == "" {
+			break
+		}
+		cursor = page.NextCursor
+	}
+	return out, nil
+}
+
+// ListPage returns one page of environments matching opt.
+func (s *EnvironmentsService) ListPage(ctx context.Context, opt ListEnvironmentsOptions) (*EnvironmentPage, error) {
 	if s == nil || s.t == nil {
 		return nil, errors.New("environments service is not configured")
 	}
@@ -143,6 +187,7 @@ func (s *EnvironmentsService) List(ctx context.Context, opt ListEnvironmentsOpti
 	if opt.HostID != "" {
 		values.Set("host_id", opt.HostID)
 	}
+	setPaginationParams(values, opt.Limit, opt.Cursor)
 	req, err := s.t.newRequest(ctx, http.MethodGet, "/v1/environments", values, nil)
 	if err != nil {
 		return nil, err
@@ -159,7 +204,11 @@ func (s *EnvironmentsService) List(ctx context.Context, opt ListEnvironmentsOpti
 	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		return nil, fmt.Errorf("decode environments: %w", err)
 	}
-	return out.Environments, nil
+	page := &EnvironmentPage{Environments: out.Environments}
+	if out.NextCursor != nil {
+		page.NextCursor = *out.NextCursor
+	}
+	return page, nil
 }
 
 func (s *EnvironmentsService) Get(ctx context.Context, vmID string) (*EnvironmentInfo, error) {

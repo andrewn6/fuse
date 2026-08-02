@@ -85,6 +85,7 @@ type EnvironmentInfo struct {
 
 type environmentList struct {
 	Environments []EnvironmentInfo `json:"environments"`
+	NextCursor   *string           `json:"next_cursor,omitempty"`
 }
 
 // Lifecycle states for EnvironmentInfo.State and Event.State.
@@ -214,7 +215,8 @@ type Snapshot struct {
 }
 
 type snapshotList struct {
-	Snapshots []Snapshot `json:"snapshots"`
+	Snapshots  []Snapshot `json:"snapshots"`
+	NextCursor *string    `json:"next_cursor,omitempty"`
 }
 
 // HostCapacity is a host's resource envelope.
@@ -313,7 +315,8 @@ type Host struct {
 }
 
 type hostList struct {
-	Hosts []Host `json:"hosts"`
+	Hosts      []Host  `json:"hosts"`
+	NextCursor *string `json:"next_cursor,omitempty"`
 }
 
 // APIKey is a key's metadata. The raw secret appears only in

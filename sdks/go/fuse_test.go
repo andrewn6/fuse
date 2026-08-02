@@ -72,8 +72,10 @@ func TestEnvironmentsList(t *testing.T) {
 	if got.path != "/v1/environments" {
 		t.Fatalf("path = %s, want /v1/environments", got.path)
 	}
-	if got.query != "task_id=task-1" {
-		t.Fatalf("query = %s, want task_id=task-1", got.query)
+	// List auto-paginates (walks every page), so it always sends the max
+	// page size alongside the caller's filters.
+	if got.query != "limit=200&task_id=task-1" {
+		t.Fatalf("query = %s, want limit=200&task_id=task-1", got.query)
 	}
 	if len(envs) != 2 || envs[0].ID != "vm-1" || envs[1].ID != "vm-2" {
 		t.Fatalf("decoded envs = %+v", envs)
@@ -171,6 +173,70 @@ func TestSnapshotsList(t *testing.T) {
 	}
 	if len(snaps) != 1 || snaps[0].ID != "snap-1" {
 		t.Fatalf("decoded snaps = %+v", snaps)
+	}
+}
+
+func TestEnvironmentsListPage_roundTripsCursor(t *testing.T) {
+	calls := 0
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("cursor") == "" {
+			io.WriteString(w, `{"environments":[{"id":"vm-1","state":"running","task_id":"t1","url":"u"}],"next_cursor":"YWJj"}`)
+			return
+		}
+		io.WriteString(w, `{"environments":[{"id":"vm-2","state":"running","task_id":"t2","url":"u"}]}`)
+	})
+	defer cleanup()
+
+	page, err := c.Environments.ListPage(context.Background(), ListEnvironmentsOptions{Limit: 1})
+	if err != nil {
+		t.Fatalf("ListPage: %v", err)
+	}
+	if page.NextCursor != "YWJj" {
+		t.Fatalf("next cursor = %q, want YWJj", page.NextCursor)
+	}
+	if len(page.Environments) != 1 || page.Environments[0].ID != "vm-1" {
+		t.Fatalf("page 1 = %+v", page.Environments)
+	}
+
+	page2, err := c.Environments.ListPage(context.Background(), ListEnvironmentsOptions{Cursor: page.NextCursor})
+	if err != nil {
+		t.Fatalf("ListPage page 2: %v", err)
+	}
+	if page2.NextCursor != "" {
+		t.Fatalf("expected no next cursor on last page, got %q", page2.NextCursor)
+	}
+	if len(page2.Environments) != 1 || page2.Environments[0].ID != "vm-2" {
+		t.Fatalf("page 2 = %+v", page2.Environments)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
+	}
+}
+
+func TestEnvironmentsList_autoPaginatesAllPages(t *testing.T) {
+	calls := 0
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("cursor") == "" {
+			io.WriteString(w, `{"environments":[{"id":"vm-1","state":"running","url":"u"}],"next_cursor":"YWJj"}`)
+			return
+		}
+		io.WriteString(w, `{"environments":[{"id":"vm-2","state":"running","url":"u"}]}`)
+	})
+	defer cleanup()
+
+	envs, err := c.Environments.List(context.Background(), ListEnvironmentsOptions{})
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(envs) != 2 || envs[0].ID != "vm-1" || envs[1].ID != "vm-2" {
+		t.Fatalf("decoded envs = %+v", envs)
+	}
+	if calls != 2 {
+		t.Fatalf("calls = %d, want 2", calls)
 	}
 }
 
