@@ -38,6 +38,13 @@ type HostCapacity struct {
 	StorageGB int `json:"storage_gb"`
 	VMCount   int `json:"vm_count"` // max concurrent VMs
 
+	// Arch is the host's CPU architecture in GOARCH vocabulary ("amd64",
+	// "arm64"). Probed from the host agent like CPUs/RamMB; an operator may
+	// also declare it at registration. Empty means amd64: every host that
+	// existed before this field was x86_64, so old records stay schedulable
+	// without migration.
+	Arch string `json:"arch,omitempty"`
+
 	// GPUs is the count of whole GPU devices available on the host.
 	// Zero means no GPUs. Only qemu-backed hosts may report GPUs > 0
 	// (enforced at registration, see internal/api registerHost).
@@ -208,6 +215,44 @@ type GPUDevice struct {
 	MIGCapable    bool   `json:"mig_capable,omitempty"`
 	MIGMode       string `json:"mig_mode,omitempty"`
 	IOMMUGroup    string `json:"iommu_group,omitempty"`
+}
+
+// Host architectures, in GOARCH vocabulary. NormalizeArch maps the uname -m
+// spellings agents and operators actually type onto these.
+const (
+	// ArchAMD64 is x86_64. It is also what an empty arch means everywhere:
+	// hosts registered before arch existed are all x86_64.
+	ArchAMD64 = "amd64"
+
+	// ArchARM64 is aarch64 / Apple Silicon.
+	ArchARM64 = "arm64"
+)
+
+// NormalizeArch maps an architecture string onto GOARCH vocabulary. It
+// accepts the uname -m spellings ("x86_64", "aarch64") alongside the GOARCH
+// ones, lowercased. Empty stays empty (meaning "not set", which the
+// scheduler reads as amd64); anything unrecognized is returned lowercased
+// as-is so validation can name it in an error.
+func NormalizeArch(arch string) string {
+	switch strings.ToLower(strings.TrimSpace(arch)) {
+	case "":
+		return ""
+	case "amd64", "x86_64":
+		return ArchAMD64
+	case "arm64", "aarch64":
+		return ArchARM64
+	default:
+		return strings.ToLower(strings.TrimSpace(arch))
+	}
+}
+
+// hostArch resolves a host's effective architecture: its reported arch, or
+// amd64 when the record predates the field.
+func hostArch(h *Host) string {
+	if a := NormalizeArch(h.Capacity.Arch); a != "" {
+		return a
+	}
+	return ArchAMD64
 }
 
 // HostBackend identifies the virtualization backend a host agent runs.
@@ -534,6 +579,11 @@ func hostRejection(h *Host, spec Spec) string {
 		return fmt.Sprintf("is %s, not %s", h.State, HostActive)
 	case spec.Region != "" && h.Region != spec.Region:
 		return fmt.Sprintf("is in region %q, the spec requires %q", h.Region, spec.Region)
+	// arch is a hard gate: an image baked for one architecture cannot boot
+	// on the other. An empty spec arch means "any" (the pre-arch behavior);
+	// an empty host arch means amd64 (see hostArch).
+	case spec.Arch != "" && hostArch(h) != NormalizeArch(spec.Arch):
+		return fmt.Sprintf("is %s, the spec requires %s", hostArch(h), NormalizeArch(spec.Arch))
 	// gpu envs may only land on qemu hosts (D3). registration rejects
 	// gpus > 0 on firecracker hosts, but the scheduler stays defensive
 	// against a stale or hand-edited host record.

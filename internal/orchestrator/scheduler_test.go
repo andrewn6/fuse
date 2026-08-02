@@ -1007,3 +1007,77 @@ func TestSchedule_emptyPlacementIsUnchanged(t *testing.T) {
 		t.Errorf("binpack picked %s, want h1 (the most packed)", picked.ID)
 	}
 }
+
+func TestNormalizeArch(t *testing.T) {
+	cases := map[string]string{
+		"":        "",
+		"amd64":   ArchAMD64,
+		"x86_64":  ArchAMD64,
+		"X86_64":  ArchAMD64,
+		"arm64":   ArchARM64,
+		"aarch64": ArchARM64,
+		" ARM64 ": ArchARM64,
+		"riscv64": "riscv64",
+	}
+	for in, want := range cases {
+		if got := NormalizeArch(in); got != want {
+			t.Errorf("NormalizeArch(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestSchedule_archFilterExcludesMismatch(t *testing.T) {
+	h := host("h1", 8, 4096, 100, 10, HostActive)
+	h.Capacity.Arch = ArchARM64
+
+	s := spec(1, 256, 10)
+	s.Arch = ArchAMD64
+
+	_, _, err := Schedule(s, []*Host{h}, PlacementSpread)
+	if !errors.Is(err, ErrNoCapacity) {
+		t.Errorf("err = %v, want ErrNoCapacity (arch mismatch)", err)
+	}
+}
+
+func TestSchedule_archMatchedHostWins(t *testing.T) {
+	amd := host("h-amd", 8, 4096, 100, 10, HostActive)
+	arm := host("h-arm", 8, 4096, 100, 10, HostActive)
+	arm.Capacity.Arch = ArchARM64
+
+	s := spec(1, 256, 10)
+	s.Arch = ArchARM64
+
+	picked, _, err := Schedule(s, []*Host{amd, arm}, PlacementSpread)
+	if err != nil {
+		t.Fatalf("Schedule: %v", err)
+	}
+	if picked.ID != "h-arm" {
+		t.Errorf("picked %s, want h-arm", picked.ID)
+	}
+}
+
+func TestSchedule_emptyHostArchMeansAMD64(t *testing.T) {
+	// hosts registered before the arch field are all x86_64: an empty
+	// host arch must satisfy an amd64 request and reject an arm64 one.
+	legacy := host("h-legacy", 8, 4096, 100, 10, HostActive)
+
+	s := spec(1, 256, 10)
+	s.Arch = ArchAMD64
+	if _, _, err := Schedule(s, []*Host{legacy}, PlacementSpread); err != nil {
+		t.Errorf("amd64 spec on legacy host: %v, want scheduled", err)
+	}
+
+	s.Arch = ArchARM64
+	if _, _, err := Schedule(s, []*Host{legacy}, PlacementSpread); !errors.Is(err, ErrNoCapacity) {
+		t.Errorf("arm64 spec on legacy host: err = %v, want ErrNoCapacity", err)
+	}
+}
+
+func TestSchedule_emptySpecArchMatchesAnyHost(t *testing.T) {
+	arm := host("h-arm", 8, 4096, 100, 10, HostActive)
+	arm.Capacity.Arch = ArchARM64
+
+	if _, _, err := Schedule(spec(1, 256, 10), []*Host{arm}, PlacementSpread); err != nil {
+		t.Errorf("no-arch spec on arm64 host: %v, want scheduled", err)
+	}
+}
