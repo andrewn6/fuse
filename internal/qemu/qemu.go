@@ -180,6 +180,7 @@ func (p *Provider) Capacity(ctx context.Context) (orchestrator.HostCapacity, err
 		CPUs:         resp.CPUs,
 		RamMB:        resp.RamMB,
 		StorageGB:    resp.StorageGB,
+		Arch:         resp.Arch,
 		GPUs:         resp.GPUs,
 		GPUKind:      resp.GPUKind,
 		GPUDevices:   resp.GPUDevices,
@@ -362,6 +363,7 @@ type capacityResponse struct {
 	CPUs         int                        `json:"cpus"`
 	RamMB        int                        `json:"ram_mb"`
 	StorageGB    int                        `json:"storage_gb"`
+	Arch         string                     `json:"arch"`
 	GPUs         int                        `json:"gpus"`
 	GPUKind      string                     `json:"gpu_kind"`
 	GPUDevices   []orchestrator.GPUDevice   `json:"gpu_devices"`
