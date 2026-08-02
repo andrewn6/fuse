@@ -2,16 +2,34 @@ import type { CallOptions, Transport } from "./transport.js";
 import type { Snapshot, SnapshotRequest } from "./types.js";
 import { requireArg } from "./validate.js";
 
-/** Filters for snapshots.list. */
+/** The server's max page size; list() requests this internally so it walks
+ * every page in as few round trips as possible. */
+const MAX_PAGE_LIMIT = 200;
+
+/** Filters (and pagination) for snapshots.list / snapshots.listPage. */
 export interface ListSnapshotsOptions {
   vmId?: string;
   taskId?: string;
   tenantId?: string;
   state?: string;
+  /** Page size (server default 50, max 200). Only consulted by listPage —
+   * list() always walks every page, so it ignores this and requests the
+   * server's max page size. */
+  limit?: number;
+  /** Opaque cursor from a previous listPage() call's nextCursor. */
+  cursor?: string;
 }
 
 interface SnapshotList {
   snapshots: Snapshot[];
+  next_cursor?: string;
+}
+
+/** One page of snapshots.listPage, plus the cursor to fetch the next one. */
+export interface SnapshotPage {
+  snapshots: Snapshot[];
+  /** Empty/undefined once there are no more results. */
+  nextCursor?: string;
 }
 
 /** SnapshotsService manages microVM snapshots. */
@@ -32,21 +50,44 @@ export class SnapshotsService {
     );
   }
 
-  /** List snapshots, optionally filtered. */
+  /** List snapshots, optionally filtered. Transparently walks every result
+   * page. For explicit single-page control (e.g. a cursor from a previous
+   * call), use listPage. */
   async list(
     options: ListSnapshotsOptions = {},
     opts: CallOptions = {},
   ): Promise<Snapshot[]> {
+    const out: Snapshot[] = [];
+    let cursor = options.cursor;
+    for (;;) {
+      const page = await this.listPage(
+        { ...options, limit: MAX_PAGE_LIMIT, cursor },
+        opts,
+      );
+      out.push(...page.snapshots);
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    return out;
+  }
+
+  /** List one page of snapshots, optionally filtered. */
+  async listPage(
+    options: ListSnapshotsOptions = {},
+    opts: CallOptions = {},
+  ): Promise<SnapshotPage> {
     const out = await this.t.json<SnapshotList>("GET", "/v1/snapshots", {
       query: {
         vm_id: options.vmId,
         task_id: options.taskId,
         tenant_id: options.tenantId,
         state: options.state,
+        limit: options.limit ? String(options.limit) : undefined,
+        cursor: options.cursor,
       },
       signal: opts.signal,
     });
-    return out.snapshots ?? [];
+    return { snapshots: out.snapshots ?? [], nextCursor: out.next_cursor };
   }
 
   /** Fetch a single snapshot by id. */

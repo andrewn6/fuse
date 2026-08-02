@@ -41,7 +41,9 @@ describe("snapshots", () => {
     const snaps = await current.client.snapshots.list({ vmId: "vm-1" });
 
     expect(method).toBe("GET");
-    expect(query).toBe("vm_id=vm-1");
+    // list() auto-paginates (walks every page), so it always sends the max
+    // page size alongside the caller's filters.
+    expect(query).toBe("vm_id=vm-1&limit=200");
     expect(snaps.map((s) => s.id)).toEqual(["snap-1"]);
   });
 

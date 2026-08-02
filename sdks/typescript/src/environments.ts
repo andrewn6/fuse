@@ -11,31 +11,76 @@ import { FuseError } from "./errors.js";
 import { requireArg } from "./validate.js";
 import { streamEvents } from "./events.js";
 
-/** Filters for environments.list. */
+/** The server's max page size; list() requests this internally so it walks
+ * every page in as few round trips as possible. */
+const MAX_PAGE_LIMIT = 200;
+
+/** Filters (and pagination) for environments.list / environments.listPage. */
 export interface ListEnvironmentsOptions {
   taskId?: string;
   state?: string;
   hostId?: string;
+  /** Page size (server default 50, max 200). Only consulted by listPage —
+   * list() always walks every page, so it ignores this and requests the
+   * server's max page size. */
+  limit?: number;
+  /** Opaque cursor from a previous listPage() call's nextCursor. */
+  cursor?: string;
 }
 
 interface EnvironmentList {
   environments: EnvironmentInfo[];
+  next_cursor?: string;
+}
+
+/** One page of environments.listPage, plus the cursor to fetch the next one. */
+export interface EnvironmentPage {
+  environments: EnvironmentInfo[];
+  /** Empty/undefined once there are no more results. */
+  nextCursor?: string;
 }
 
 /** EnvironmentsService manages microVM lifecycle. */
 export class EnvironmentsService {
   constructor(private readonly t: Transport) {}
 
-  /** List tracked environments, optionally filtered. */
+  /** List tracked environments, optionally filtered. Transparently walks
+   * every result page. For explicit single-page control (e.g. a cursor from
+   * a previous call), use listPage. */
   async list(
     options: ListEnvironmentsOptions = {},
     opts: CallOptions = {},
   ): Promise<EnvironmentInfo[]> {
+    const out: EnvironmentInfo[] = [];
+    let cursor = options.cursor;
+    for (;;) {
+      const page = await this.listPage(
+        { ...options, limit: MAX_PAGE_LIMIT, cursor },
+        opts,
+      );
+      out.push(...page.environments);
+      if (!page.nextCursor) break;
+      cursor = page.nextCursor;
+    }
+    return out;
+  }
+
+  /** List one page of tracked environments, optionally filtered. */
+  async listPage(
+    options: ListEnvironmentsOptions = {},
+    opts: CallOptions = {},
+  ): Promise<EnvironmentPage> {
     const out = await this.t.json<EnvironmentList>("GET", "/v1/environments", {
-      query: { task_id: options.taskId, state: options.state, host_id: options.hostId },
+      query: {
+        task_id: options.taskId,
+        state: options.state,
+        host_id: options.hostId,
+        limit: options.limit ? String(options.limit) : undefined,
+        cursor: options.cursor,
+      },
       signal: opts.signal,
     });
-    return out.environments ?? [];
+    return { environments: out.environments ?? [], nextCursor: out.next_cursor };
   }
 
   /** Fetch a single environment by VM id. */
