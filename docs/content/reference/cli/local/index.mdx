@@ -1,0 +1,85 @@
+---
+title: Local
+sidebar:
+  icon: laptop
+description: Run the real fuse stack on this machine for development
+---
+
+`fuse local` runs the production stack locally — orchestrator, Firecracker
+host agent, and real microVMs — and connects the CLI to it as a context named
+`local`. On Linux the stack runs directly against `/dev/kvm`; on macOS it runs
+inside a Linux appliance VM booted with vfkit under nested virtualization
+(Apple Silicon M3 or later, macOS 15+). See the
+[Local development guide](/docs/guides/local-development) for the workflow;
+this page is the command surface.
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| `fuse local up` | Install (first run), start the stack, register the host, switch to the `local` context. |
+| `fuse local down` | Stop the stack. State persists; the next `up` is a fast restart. |
+| `fuse local status` | Report the appliance/process state and orchestrator health. |
+
+## fuse local up
+
+```bash
+fuse local up [--cpus N] [--memory MB] [--disk GB]
+```
+
+Idempotent: safe to re-run, and re-running is how you restart after `down` or
+a reboot. First run downloads Firecracker, a guest kernel and base rootfs, and
+the `orchestrator`/`fused` binaries from the release matching the CLI version
+(checksum-verified). On success the CLI's active context is `local` and the
+machine is registered as host `local` with `vm_count` 8.
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--cpus` | 4 | Appliance vCPUs (macOS only). |
+| `--memory` | 6144 | Appliance RAM in MB (macOS only). |
+| `--disk` | 30 | Appliance disk in GB (macOS only, applied on first boot only). |
+
+The flags size the **appliance**, not your microVMs — environment resources
+still come from each Fusefile. Everything inside the appliance shares this
+envelope, so size it to the sum of what you expect to run.
+
+## fuse local down
+
+```bash
+fuse local down [--purge]
+```
+
+Stops the agents (and on macOS the appliance VM). With `--purge`, also deletes
+`~/.fuse/local` entirely: images, disks, tokens, and logs. The `local` CLI
+context is not removed; use `fuse context remove local`.
+
+## fuse local status
+
+```bash
+fuse local status
+```
+
+Reports whether the stack is running and whether the orchestrator answers its
+health check, with the base URL.
+
+## Environment variables
+
+| Variable | Meaning |
+| --- | --- |
+| `FUSE_LOCAL_ORCH_BIN` | Path to a locally built Linux `orchestrator` binary to run instead of the release download. The dev loop for working on the control plane itself: on macOS build with `GOOS=linux GOARCH=arm64`, and `up` copies it into the appliance. |
+
+## State directory
+
+Everything lives under `~/.fuse/local/`:
+
+| Path | What |
+| --- | --- |
+| `bin/` | `firecracker`, `orchestrator` (Linux path) |
+| `fc/` | guest kernel, base rootfs, guest SSH key, per-VM state |
+| `fc-agent.py`, `fuse-local-setup.sh` | the embedded stack scripts, rewritten by each `up` so a CLI upgrade upgrades them |
+| `*.token` | the two stack tokens; stable across restarts |
+| `appliance.raw`, `appliance-console.log`, `vfkit.log` | the macOS appliance disk and logs |
+| `*.log`, `*.pid` | process logs and pidfiles (Linux path) |
+
+On macOS the stack's own logs are inside the appliance under
+`/opt/fuse-local/`.

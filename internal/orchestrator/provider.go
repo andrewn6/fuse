@@ -40,6 +40,12 @@ type Spec struct {
 	StorageGB int
 	Region    string
 
+	// Arch restricts scheduling to hosts of this CPU architecture, in
+	// GOARCH vocabulary ("amd64", "arm64"). Empty means any host: images
+	// are resolved host-side, so a spec that doesn't care about arch keeps
+	// the pre-arch behavior. A host with no reported arch counts as amd64.
+	Arch string
+
 	// GPUs is the count of GPU devices requested: whole devices, or MIG
 	// instances when GPUProfile is set. Zero means no GPU.
 	GPUs int32

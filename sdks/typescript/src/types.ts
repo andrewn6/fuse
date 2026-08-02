@@ -16,6 +16,9 @@ export interface Spec {
    * profile rather than whole devices. */
   gpu_profile?: string;
   region?: string;
+  /** Restricts scheduling to hosts of this CPU architecture ("amd64",
+   * "arm64"). Omitted means any host. */
+  arch?: string;
   max_runtime_seconds?: number;
   /** Destroys the environment after this many seconds with no exec and no
    * attach session. Omitted or 0 means no idle expiry. Unlike
@@ -187,6 +190,9 @@ export interface HostCapacity {
   ram_mb: number;
   storage_gb: number;
   vm_count: number;
+  /** The host's CPU architecture in GOARCH vocabulary ("amd64", "arm64").
+   * Omitted means amd64 (hosts registered before arch existed). */
+  arch?: string;
   gpus?: number;
   gpu_kind?: string;
   /** Fractional GPU capacity: MIG instance count by profile name (e.g.

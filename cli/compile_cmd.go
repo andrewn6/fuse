@@ -30,13 +30,16 @@ var compileParts = []string{"spec", "startup-script", "manifest", "expose", "sec
 // output keys match the json wire names instead of yaml.v3's lowercased
 // defaults. TestCompiledRequestMirrorsWireTypes guards against drift.
 type compiledSpec struct {
-	CPUs              int32  `json:"cpus,omitempty" yaml:"cpus,omitempty"`
-	RamMB             int32  `json:"ram_mb,omitempty" yaml:"ram_mb,omitempty"`
-	StorageGB         int32  `json:"storage_gb,omitempty" yaml:"storage_gb,omitempty"`
-	GPUs              int32  `json:"gpus,omitempty" yaml:"gpus,omitempty"`
-	GPUKind           string `json:"gpu_kind,omitempty" yaml:"gpu_kind,omitempty"`
-	GPUProfile        string `json:"gpu_profile,omitempty" yaml:"gpu_profile,omitempty"`
-	Region            string `json:"region,omitempty" yaml:"region,omitempty"`
+	CPUs       int32  `json:"cpus,omitempty" yaml:"cpus,omitempty"`
+	RamMB      int32  `json:"ram_mb,omitempty" yaml:"ram_mb,omitempty"`
+	StorageGB  int32  `json:"storage_gb,omitempty" yaml:"storage_gb,omitempty"`
+	GPUs       int32  `json:"gpus,omitempty" yaml:"gpus,omitempty"`
+	GPUKind    string `json:"gpu_kind,omitempty" yaml:"gpu_kind,omitempty"`
+	GPUProfile string `json:"gpu_profile,omitempty" yaml:"gpu_profile,omitempty"`
+	Region     string `json:"region,omitempty" yaml:"region,omitempty"`
+	// Arch restricts scheduling to hosts of this CPU architecture ("amd64",
+	// "arm64"). Not yet settable from a Fusefile; carried for wire parity.
+	Arch              string `json:"arch,omitempty" yaml:"arch,omitempty"`
 	MaxRuntimeSeconds int64  `json:"max_runtime_seconds,omitempty" yaml:"max_runtime_seconds,omitempty"`
 	// IdleTimeoutSeconds is the no-exec/no-attach window after which the
 	// environment is destroyed. Zero means no idle expiry.
@@ -186,6 +189,7 @@ func newCompiledRequest(taskID, seedSnapshotID string, c *fusefile.Compiled) com
 			GPUKind:            c.Spec.GPUKind,
 			GPUProfile:         c.Spec.GPUProfile,
 			Region:             c.Spec.Region,
+			Arch:               c.Spec.Arch,
 			MaxRuntimeSeconds:  c.Spec.MaxRuntimeSeconds,
 			IdleTimeoutSeconds: c.Spec.IdleTimeoutSeconds,
 			HostID:             c.Spec.HostID,

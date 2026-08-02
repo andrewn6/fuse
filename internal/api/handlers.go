@@ -835,6 +835,14 @@ func (h *Handler) registerHost(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, CodeInvalidArgument, "gpus must not be negative", nil)
 		return
 	}
+	// Arch is normalized to GOARCH vocabulary; empty means "probe it" (or
+	// legacy amd64 when the agent doesn't report one either).
+	declaredArch := orchestrator.NormalizeArch(req.Capacity.Arch)
+	if declaredArch != "" && declaredArch != orchestrator.ArchAMD64 && declaredArch != orchestrator.ArchARM64 {
+		writeError(w, http.StatusBadRequest, CodeInvalidArgument,
+			fmt.Sprintf("arch must be \"amd64\" or \"arm64\" (got %q)", req.Capacity.Arch), nil)
+		return
+	}
 	if len(req.Capacity.MIGProfiles) > 0 && backend != orchestrator.BackendQEMU {
 		writeError(w, http.StatusBadRequest, CodeInvalidArgument,
 			"mig_profiles requires backend \"qemu\"", nil)
@@ -881,6 +889,7 @@ func (h *Handler) registerHost(w http.ResponseWriter, r *http.Request) {
 		RamMB:     req.Capacity.RamMB,
 		StorageGB: req.Capacity.StorageGB,
 		VMCount:   req.Capacity.VMCount,
+		Arch:      declaredArch,
 		GPUs:      req.Capacity.GPUs,
 		GPUKind:   req.Capacity.GPUKind,
 	}
@@ -916,6 +925,19 @@ func (h *Handler) registerHost(w http.ResponseWriter, r *http.Request) {
 			// probed count wins. A qemu host may legitimately have none.
 			capacity.GPUs, warnings = resolveCapacityField("gpus", capacity.GPUs, probed.GPUs, warnings)
 			capacity.GPUKind, warnings = resolveCapacityKind(capacity.GPUKind, probed.GPUKind, warnings)
+			// arch: probed fills an empty declaration, but a contradiction
+			// is a hard error rather than a warning. gpu_kind mismatches are
+			// labeling disputes; an arch mismatch means every image the
+			// scheduler sends here would be unbootable.
+			probedArch := orchestrator.NormalizeArch(probed.Arch)
+			if capacity.Arch == "" {
+				capacity.Arch = probedArch
+			} else if probedArch != "" && probedArch != capacity.Arch {
+				_ = provider.Close()
+				writeError(w, http.StatusBadRequest, CodeInvalidArgument,
+					fmt.Sprintf("declared arch %q contradicts the host agent's probed arch %q", capacity.Arch, probedArch), nil)
+				return
+			}
 			// the probe is the source of truth for the per-device list.
 			capacity.GPUDevices = probed.GPUDevices
 			// per-instance MIG inventory is probed too. when the agent reports

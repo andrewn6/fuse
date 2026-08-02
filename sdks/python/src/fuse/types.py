@@ -35,6 +35,9 @@ class Spec(_Model):
     # mig profile (e.g. "1g.10gb"); when set, gpus counts mig instances.
     gpu_profile: Optional[str] = None
     region: Optional[str] = None
+    # restricts scheduling to hosts of this cpu architecture ("amd64",
+    # "arm64"). none means any host.
+    arch: Optional[str] = None
     max_runtime_seconds: Optional[int] = None
     # destroys the environment after this many seconds with no exec and no
     # attach session. none or 0 means no idle expiry.
@@ -214,6 +217,9 @@ class HostCapacity(_Model):
     ram_mb: int = 0
     storage_gb: int = 0
     vm_count: int = 0
+    # the host's cpu architecture in goarch vocabulary ("amd64", "arm64").
+    # empty means amd64 (hosts registered before arch existed).
+    arch: str = ""
     gpus: int = 0
     gpu_kind: str = ""
     # fractional gpu capacity: mig instance count by profile name. when the

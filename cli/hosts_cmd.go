@@ -201,6 +201,7 @@ func renderHostDetail(h *fuse.Host) {
 		{"url", h.URL},
 		{"region", dash(h.Region)},
 		{"backend", dash(h.Backend)},
+		{"arch", dash(h.Capacity.Arch)},
 		{"labels", dash(formatHostLabels(h.Labels))},
 		{"state", stateStyle(h.State)},
 		{"cpus", fmt.Sprintf("%d / %d", h.Allocated.CPUs, h.Capacity.CPUs)},
@@ -388,6 +389,7 @@ func newHostRegisterCmd() *cobra.Command {
 		maxVMs      int
 		gpus        int
 		gpuKind     string
+		arch        string
 		migProfiles []string
 		labels      []string
 		noVerify    bool
@@ -476,6 +478,7 @@ func newHostRegisterCmd() *cobra.Command {
 					RamMB:       ramMB,
 					StorageGB:   storageGB,
 					VMCount:     maxVMs,
+					Arch:        arch,
 					GPUs:        gpus,
 					GPUKind:     gpuKind,
 					MIGProfiles: migMap,
@@ -496,6 +499,7 @@ func newHostRegisterCmd() *cobra.Command {
 	cmd.Flags().StringVar(&region, "region", "", "region label")
 	cmd.Flags().StringVar(&token, "token", "", "host agent token the orchestrator uses to call the host (its FC_AGENT_TOKEN)")
 	cmd.Flags().StringVar(&backend, "backend", "", "virtualization backend: firecracker (default) or qemu")
+	cmd.Flags().StringVar(&arch, "arch", "", "host cpu architecture: amd64 or arm64 (empty = probe from host agent)")
 	cmd.Flags().BoolVar(&noVerify, "no-verify", false, "allow an empty --token (unauthenticated dev agent)")
 	cmd.Flags().IntVar(&cpus, "cpus", 0, "cpu capacity override (0 = probe from host agent)")
 	cmd.Flags().IntVar(&ramMB, "ram-mb", 0, "ram capacity in MB override (0 = probe from host agent)")

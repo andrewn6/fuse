@@ -59,6 +59,7 @@ any of them is out; there is no partial credit and no fallback tier.
 | Host pin | If the spec names a `host_id` (`placement.host`), only that host is considered. An unknown id is a `404` before any VM is created; a real but ineligible host fails with the gate that rejected it. |
 | State | The host must be `active`. Both `cordoned` and `draining` are excluded. |
 | Region | If the spec names a region, the host's region must match it exactly. An empty region disables the gate rather than preferring anything. |
+| Arch | If the spec names a CPU architecture (`amd64` or `arm64`; the uname spellings `x86_64`/`aarch64` are accepted and normalized), the host's arch must match it. An empty spec arch disables the gate. A host with no reported arch counts as `amd64` — every host registered before the field existed was x86_64, so old records stay schedulable without a migration. |
 | Backend | A spec asking for GPUs is only placed on a `qemu` host. |
 | Labels | If the spec names `labels` (`placement.labels`), every pair must match the host's declared labels. An empty selector disables the gate. |
 | Capacity | The host must have room, see below. |

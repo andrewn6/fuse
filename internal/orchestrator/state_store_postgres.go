@@ -619,8 +619,8 @@ func (s *PostgresStateStore) UpsertHost(ctx context.Context, h HostRecord) error
 			last_seen_at, created_at, updated_at,
 			backend, gpus_total, gpu_kind, gpus_allocated,
 			mig_profiles_json, mig_allocated_json, gpu_devices_json, mig_instances_json,
-			labels_json
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26)
+			labels_json, arch
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27)
 		ON CONFLICT (host_id) DO UPDATE SET
 			url=EXCLUDED.url,
 			token_encrypted=EXCLUDED.token_encrypted,
@@ -645,7 +645,8 @@ func (s *PostgresStateStore) UpsertHost(ctx context.Context, h HostRecord) error
 			mig_allocated_json=EXCLUDED.mig_allocated_json,
 			gpu_devices_json=EXCLUDED.gpu_devices_json,
 			mig_instances_json=EXCLUDED.mig_instances_json,
-			labels_json=EXCLUDED.labels_json
+			labels_json=EXCLUDED.labels_json,
+			arch=EXCLUDED.arch
 	`,
 		h.ID,
 		h.URL,
@@ -673,6 +674,7 @@ func (s *PostgresStateStore) UpsertHost(ctx context.Context, h HostRecord) error
 		string(gpuDevicesJSON),
 		string(migInstancesJSON),
 		labelsJSON,
+		h.Capacity.Arch,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert host %s: %w", h.ID, err)
@@ -755,7 +757,7 @@ const hostsSelect = `
 	       last_seen_at, created_at, updated_at,
 	       backend, gpus_total, gpu_kind, gpus_allocated,
 	       mig_profiles_json, mig_allocated_json, gpu_devices_json, mig_instances_json,
-	       labels_json
+	       labels_json, arch
 	FROM orchestrator_hosts`
 
 // scanHost maps a row from hostsSelect onto a HostRecord. Both
@@ -799,6 +801,7 @@ func scanHost(scan func(...any) error) (HostRecord, error) {
 		&gpuDevicesJSON,
 		&migInstancesJSON,
 		&labelsJSON,
+		&record.Capacity.Arch,
 	); err != nil {
 		return HostRecord{}, err
 	}

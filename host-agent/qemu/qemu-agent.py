@@ -26,6 +26,7 @@ import hmac
 import ipaddress
 import json
 import os
+import platform
 import pty
 import re
 import selectors
@@ -1486,6 +1487,7 @@ def host_capacity() -> dict:
         "cpus": cpus,
         "ram_mb": ram_mb,
         "storage_gb": free_bytes // (1024 ** 3),
+        "arch": goarch(),
         "gpus": gpus,
         "gpu_kind": gpu_kind,
         "gpu_devices": probe_gpu_devices(),
@@ -1495,6 +1497,16 @@ def host_capacity() -> dict:
     if mig_profiles:
         cap["mig_profiles"] = mig_profiles
     return cap
+
+
+def goarch() -> str:
+    """This host's cpu architecture in goarch vocabulary ("amd64", "arm64"),
+    which is what the orchestrator's scheduler matches specs against. An
+    unrecognized machine string is passed through lowercased so registration
+    can name it in an error instead of silently mis-scheduling.
+    """
+    machine = platform.machine().lower()
+    return {"x86_64": "amd64", "aarch64": "arm64"}.get(machine, machine)
 
 
 class Handler(BaseHTTPRequestHandler):
