@@ -668,7 +668,7 @@ def del_agent_forward(host_port: int, guest_ip: str) -> None:
 def _free_host_port() -> int:
     """Bind to port 0, read it back, then close. Small race is acceptable."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
+        s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
 
 
@@ -755,7 +755,15 @@ def wait_for_ssh(guest_ip: str, timeout: float = 30.0) -> bool:
 
 def vm_dir(vm_id: str) -> Path:
     """Filesystem directory holding a vm's meta.json, rootfs, and logs."""
-    return VMS_DIR / vm_id
+    # vm_id is expected to already be sanitize_name()'d by every caller, but
+    # this is the one choke point all vm filesystem paths pass through, so it
+    # re-checks: resolve and confirm the result stays under VMS_DIR rather
+    # than trusting callers not to pass something like "../../etc" through.
+    vms_root = os.path.realpath(str(VMS_DIR))
+    resolved = os.path.realpath(os.path.join(vms_root, vm_id))
+    if not resolved.startswith(vms_root + os.sep):
+        raise HTTPError(400, f"invalid vm id: {vm_id!r}")
+    return Path(resolved)
 
 
 def load_meta(vm_id: str) -> dict | None:

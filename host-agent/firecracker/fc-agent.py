@@ -198,6 +198,13 @@ class UnixHTTPConnection(http.client.HTTPConnection):
 
 def fc_api(sock_path: str, method: str, path: str, body: dict | None = None, timeout: float = 5.0) -> tuple[int, bytes]:
     # Uses sudo-owned socket; simplest is curl to avoid permission issues.
+    # method/path are always literals from call sites (see start_firecracker's
+    # `steps`), never guest- or request-derived; validate anyway so this stays
+    # true even if a future caller forwards something less trusted.
+    if method not in ("GET", "PUT", "POST", "DELETE", "PATCH"):
+        raise ValueError(f"invalid firecracker API method: {method!r}")
+    if not re.fullmatch(r"/[A-Za-z0-9/_-]*", path):
+        raise ValueError(f"invalid firecracker API path: {path!r}")
     data = json.dumps(body) if body is not None else None
     args = ["sudo", "-n", "curl", "-sS", "--unix-socket", sock_path,
             "-X", method, f"http://localhost{path}",
@@ -316,7 +323,7 @@ def _free_host_port() -> int:
     simplicity, matching fc-expose.sh's own lack of allocation/conflict
     detection."""
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("", 0))
+        s.bind(("127.0.0.1", 0))
         return s.getsockname()[1]
 
 
@@ -384,7 +391,15 @@ def wait_for_ssh(guest_ip: str, timeout: float = 30.0) -> bool:
 # -- VM lifecycle -------------------------------------------------------------
 
 def vm_dir(vm_id: str) -> Path:
-    return VMS_DIR / vm_id
+    # vm_id is expected to already be sanitize_name()'d by every caller, but
+    # this is the one choke point all vm filesystem paths pass through, so it
+    # re-checks: resolve and confirm the result stays under VMS_DIR rather
+    # than trusting callers not to pass something like "../../etc" through.
+    vms_root = os.path.realpath(str(VMS_DIR))
+    resolved = os.path.realpath(os.path.join(vms_root, vm_id))
+    if not resolved.startswith(vms_root + os.sep):
+        raise HTTPError(400, f"invalid vm id: {vm_id!r}")
+    return Path(resolved)
 
 
 def load_meta(vm_id: str) -> dict | None:
