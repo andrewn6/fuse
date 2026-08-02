@@ -100,6 +100,9 @@ func newSnapListCmd() *cobra.Command {
 		taskID   string
 		tenantID string
 		state    string
+		limit    int
+		cursor   string
+		allPages bool
 	)
 	cmd := &cobra.Command{
 		Use:     "list",
@@ -114,17 +117,38 @@ func newSnapListCmd() *cobra.Command {
 			if cur.ActiveHost != "" && vmID == "" && taskID == "" {
 				warnf("note: snapshot listing is not host-scoped (no host filter in the api); showing all matching snapshots")
 			}
-			snaps, err := cl.Snapshots.List(cmd.Context(), fuse.ListSnapshotsOptions{
-				VMID:     vmID,
-				TaskID:   taskID,
-				TenantID: tenantID,
-				State:    state,
-			})
+
+			var (
+				snaps []fuse.Snapshot
+				next  string
+			)
+			if allPages {
+				snaps, err = cl.Snapshots.List(cmd.Context(), fuse.ListSnapshotsOptions{
+					VMID:     vmID,
+					TaskID:   taskID,
+					TenantID: tenantID,
+					State:    state,
+					Cursor:   cursor,
+				})
+			} else {
+				var page *fuse.SnapshotPage
+				page, err = cl.Snapshots.ListPage(cmd.Context(), fuse.ListSnapshotsOptions{
+					VMID:     vmID,
+					TaskID:   taskID,
+					TenantID: tenantID,
+					State:    state,
+					Limit:    limit,
+					Cursor:   cursor,
+				})
+				if page != nil {
+					snaps, next = page.Snapshots, page.NextCursor
+				}
+			}
 			if err != nil {
 				return friendly(err)
 			}
 			if app.isJSON() {
-				return printJSON(snaps)
+				return printJSON(fuse.SnapshotPage{Snapshots: snaps, NextCursor: next})
 			}
 			rows := make([][]string, 0, len(snaps))
 			for _, s := range snaps {
@@ -134,6 +158,9 @@ func newSnapListCmd() *cobra.Command {
 				})
 			}
 			renderTable([]string{"ID", "VM ID", "STATE", "MODE", "SIZE", "PARENT", "CREATED", "COMMENT"}, rows)
+			if next != "" {
+				warnf("more results: rerun with --cursor %s (or pass --all-pages to fetch everything)", next)
+			}
 			return nil
 		},
 	}
@@ -141,6 +168,9 @@ func newSnapListCmd() *cobra.Command {
 	cmd.Flags().StringVar(&taskID, "task-id", "", "filter by task id")
 	cmd.Flags().StringVar(&tenantID, "tenant-id", "", "filter by tenant id")
 	cmd.Flags().StringVar(&state, "state", "", "filter by state (creating|ready|restoring|deleting|error)")
+	cmd.Flags().IntVar(&limit, "limit", 0, "max results per page (default 50, max 200)")
+	cmd.Flags().StringVar(&cursor, "cursor", "", "resume from a cursor returned by a previous page")
+	cmd.Flags().BoolVar(&allPages, "all-pages", false, "auto-paginate and fetch every matching snapshot")
 	return cmd
 }
 
