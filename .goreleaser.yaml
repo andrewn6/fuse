@@ -26,21 +26,6 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}}
 
-  - id: dbcheck
-    main: ./dbcheck
-    binary: dbcheck
-    env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-      - darwin
-    goarch:
-      - amd64
-      - arm64
-    # See the note above to inject version metadata via -X main.version={{.Version}} etc.
-    ldflags:
-      - -s -w -X main.version={{.Version}}
-
   # fused: the reference in-guest agent baked into the microVM rootfs (or fetched
   # at boot via AGENT_DOWNLOAD_URL / start-agent download_url). Linux only — it
   # runs inside a Firecracker guest, never on the control-plane host.
@@ -72,11 +57,10 @@ builds:
       - -s -w -X main.version={{.Version}}
 
 archives:
-  # Control-plane archive (orchestrator + dbcheck) as a tarball.
+  # Control-plane archive (orchestrator) as a tarball.
   - id: default
     ids:
       - orchestrator
-      - dbcheck
     formats:
       - tar.gz
     name_template: >-

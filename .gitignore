@@ -12,7 +12,6 @@ coverage/
 # Stray binaries from `go build ./cmd/...` at the repo root
 /fused
 /orchestrator
-/dbcheck
 
 # OS / editor
 .DS_Store
