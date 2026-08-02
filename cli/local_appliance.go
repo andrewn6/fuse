@@ -247,7 +247,7 @@ func startVfkit(s *localState, vfkit string, cpus, memMB int) error {
 	if err != nil {
 		return err
 	}
-	defer logf.Close()
+	defer func() { _ = logf.Close() }()
 	cmd.Stdout = logf
 	cmd.Stderr = logf
 	if err := cmd.Start(); err != nil {
@@ -450,7 +450,7 @@ func injectDevOrchestratorAppliance(s *localState, ip string) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	cmd.Stdin = f
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("push dev orchestrator: %w: %s", err, out)
