@@ -1,0 +1,144 @@
+---
+title: Local development
+sidebar:
+  icon: laptop
+description: Run the real fuse stack on your own machine with fuse local
+---
+
+`fuse local` runs the production stack on your machine: the orchestrator, the
+Firecracker host agent, and real microVMs. It is not a simulator or a stub —
+the same binaries that run a fleet run locally, so a Fusefile that works
+against `fuse local` works against production, and the failure modes you debug
+locally are the real ones.
+
+```bash
+fuse local up
+fuse up          # in any project with a Fusefile
+```
+
+`up` installs everything on first run, connects the CLI to a context named
+`local`, and registers your machine as a host. From there every command in the
+CLI works as it would against a fleet: `fuse up`, `fuse environment exec`,
+snapshots, forks, `fuse build`.
+
+## How close to production is it?
+
+The answer depends on your machine, and it is worth being precise:
+
+| Machine | What runs | Parity |
+| --- | --- | --- |
+| Linux, x86_64 | Firecracker directly on `/dev/kvm` | Exact: same hypervisor, agent, and networking as a fleet host |
+| Linux, arm64 | Firecracker directly on `/dev/kvm` | Same stack, arm64 images instead of x86 |
+| macOS, M3 or later | The same Linux stack inside a small appliance VM | Same stack and wire behavior, arm64 images, one VM boundary added |
+
+There is no QEMU and no container runtime in any of these paths. On Linux the
+local stack **is** a production host. On macOS, Firecracker cannot run
+natively, so `fuse local` boots a minimal Debian appliance with
+[vfkit](https://github.com/crc-org/vfkit) under nested virtualization and runs
+the identical stack inside it — the appliance is an invisible boundary, the
+same trick Docker Desktop uses to run dockerd on a Mac.
+
+:::note[Architecture matters]
+On Apple Silicon (and arm64 Linux), your environments boot **arm64** guests.
+The scheduler tracks this: every host reports its
+[arch](/docs/concepts/scheduling), and a spec pinned to `amd64` will
+correctly refuse to schedule on your laptop rather than booting an image that
+cannot run. Portability across dev and prod comes from the Fusefile, not from
+identical bytes — the same model as multi-arch container images.
+:::
+
+## Requirements
+
+**Linux**
+
+- `/dev/kvm` (check with `ls /dev/kvm`; enable virtualization in BIOS if missing)
+- `python3`, `curl`, and `sudo` (the agent manages tap devices and iptables)
+
+**macOS**
+
+- Apple Silicon, **M3 or later**, on **macOS 15+** — nested virtualization is
+  a hardware feature; M1/M2 cannot run Firecracker inside a VM
+- [vfkit](https://github.com/crc-org/vfkit): `brew install vfkit`
+
+## First run
+
+```bash
+fuse local up
+```
+
+On first run this downloads and installs, one time:
+
+- the Firecracker binary, a guest kernel, and a base rootfs (on macOS, also a
+  ~210MB Debian appliance image)
+- the `orchestrator` and `fused` binaries from the fuse release matching your
+  CLI, checksum-verified
+
+Everything lands under `~/.fuse/local/`. When it finishes you are connected:
+
+```text
+registered host "local"
+connected: context "local" -> http://192.168.64.3:8080
+```
+
+`fuse host get local` shows your machine as a normal host — probed CPUs, RAM,
+disk, and arch, with `vm_count` capped at 8 by default.
+
+## The daily loop
+
+```bash
+fuse local up        # seconds after the first run
+fuse up              # boot your project's environment
+fuse environment exec <id> -- ./run-tests.sh
+fuse local down      # stops the stack; state and images persist
+```
+
+`down` stops the processes (and on macOS the appliance VM) but keeps all
+installed state, so the next `up` is a restart, not a reinstall — typically a
+few seconds. `fuse local status` reports what is running.
+
+To switch between local and a real fleet, use contexts like you would for any
+two orchestrators:
+
+```bash
+fuse context use local
+fuse context use prod-east
+```
+
+## Uninstalling
+
+```bash
+fuse local down --purge
+```
+
+removes `~/.fuse/local` entirely: images, disks, tokens, logs. The `local`
+context remains in your CLI config; remove it with `fuse context remove local`.
+
+## Troubleshooting
+
+- **`vfkit not found`** — `brew install vfkit`.
+- **vfkit exits immediately on `up`** — usually nested virtualization: you
+  need an M3 or later on macOS 15+, and a vfkit new enough to have `--nested`
+  (0.6+). The error output includes vfkit's own message.
+- **Appliance boots but never becomes healthy** — the console log is at
+  `~/.fuse/local/appliance-console.log`; stack logs are inside the appliance
+  under `/opt/fuse-local/*.log`.
+- **Linux: install fails at the rootfs step** — injecting `fused` into the
+  base rootfs loop-mounts it, which needs `sudo`. The command prompts if your
+  sudo does.
+- **A spec refuses to schedule with a `no host has sufficient capacity`
+  error** — check `arch`: an `amd64`-pinned spec cannot land on an Apple
+  Silicon or arm64 host. See [Scheduling](/docs/concepts/scheduling).
+
+## What it is not
+
+`fuse local` is a development tool, not a small production deployment. It uses
+the in-memory state store (no Postgres), a single host, and default timeouts.
+For a real single-box deployment, see
+[Orchestrator deploy](/docs/cloud/orchestrator-deploy) and
+[Firecracker host setup](/docs/cloud/firecracker-host-setup).
+
+## Related
+
+- [`fuse local` command reference](/reference/cli/local)
+- [Providers](/docs/concepts/providers) — why local dev is not a separate backend
+- [Scheduling](/docs/concepts/scheduling) — the arch gate

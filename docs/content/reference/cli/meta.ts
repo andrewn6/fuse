@@ -6,6 +6,7 @@ export default defineMeta({
   pages: [
     "index",
     "quickstart",
+    "local",
     "contexts",
     "hosts",
     "environment",

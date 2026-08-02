@@ -42,10 +42,15 @@ the CPU, RAM, storage, and VM-count figures with free headroom; its `--json` out
 carries the full capacity and allocated objects, GPU and MIG counts included.
 
 Most of that capacity is **probed** from the host agent at registration time. The
-CPU count, RAM, storage, GPU count, and GPU kind come back from the agent whenever
-you leave them at 0 or empty, and passing an explicit value overrides the probe
-instead, so a deliberate overcommit or carve-out still registers (with a warning
-when the declared value exceeds what was probed). The per-device GPU list is always
+CPU count, RAM, storage, GPU count, GPU kind, and CPU architecture come back from
+the agent whenever you leave them at 0 or empty, and passing an explicit value
+overrides the probe instead, so a deliberate overcommit or carve-out still
+registers (with a warning when the declared value exceeds what was probed). The
+architecture (`--arch`, `amd64` or `arm64`) is the one field where a
+declared-vs-probed contradiction is a hard error rather than a warning: a host
+whose declared arch disagrees with what its agent reports would receive images
+that cannot boot, so registration refuses it outright. A host with no arch at all
+counts as `amd64`. The per-device GPU list is always
 taken from the probe. The example above declares CPUs, RAM, and storage, so those
 three override the probe rather than being read from the agent. Two values are
 instead **operator-declared**, because they are policy or pre-created state rather

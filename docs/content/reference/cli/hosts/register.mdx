@@ -23,6 +23,7 @@ operator-supplied string and is the host's primary key, use a readable one
 | `--token` | The host agent token the orchestrator uses to call this host (its `FC_AGENT_TOKEN`). Required for the `firecracker` backend unless `--no-verify`. |
 | `--no-verify` | Allow an empty `--token` (for a genuinely unauthenticated dev agent). |
 | `--backend` | `firecracker` (default) or `qemu`. |
+| `--arch` | Host CPU architecture, `amd64` or `arm64`, override. Empty (default) probes the host agent. A declared value that contradicts the probe is rejected. |
 | `--cpus` | CPU capacity override. `0` (default) probes the host agent. |
 | `--ram-mb` | RAM capacity in MB, override. `0` (default) probes the host agent. |
 | `--storage-gb` | Storage capacity in GB, override. `0` (default) probes the host agent. |

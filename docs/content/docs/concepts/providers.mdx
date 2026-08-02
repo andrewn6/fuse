@@ -50,6 +50,15 @@ simulates provider behavior without booting real microVMs. This is what the
 the orchestrator's own test suite. The orchestrator logs which mode it's running in
 at boot.
 
+## Local development is not a third backend
+
+[`fuse local`](/docs/guides/local-development) runs environments on your own
+machine, but it adds no new provider: it is the Firecracker backend pointed at
+a host agent running locally (on Linux, directly against `/dev/kvm`; on macOS,
+inside a small appliance VM). The scheduler, the wire contract, and the agent
+are the production ones, which is the point — anything that works locally
+works against a fleet because it is the same code path, not a compatible one.
+
 ## Choosing a backend
 
 Backend selection happens once, at host registration time:
