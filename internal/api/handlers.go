@@ -406,20 +406,32 @@ func validateTimeoutSpec(s ResourceSpec) error {
 //	@Param		task_id	query		string	false	"Filter by task ID"
 //	@Param		state	query		string	false	"Filter by state"	Enums(provisioning, running, destroying)
 //	@Param		host_id	query		string	false	"Filter by host ID"
+//	@Param		limit	query		int		false	"Max results per page (default 50, max 200)"
+//	@Param		cursor	query		string	false	"Opaque pagination cursor from a previous response's next_cursor"
 //	@Success	200		{object}	EnvironmentList
 //	@Security	BearerAuth
 //	@Router		/v1/environments [get]
 func (h *Handler) listEnvironments(w http.ResponseWriter, r *http.Request) {
+	limit, cursor := parsePagination(r)
 	filter := orchestrator.VMFilter{
 		TaskID: r.URL.Query().Get("task_id"),
 		State:  orchestrator.VMState(r.URL.Query().Get("state")),
 		HostID: r.URL.Query().Get("host_id"),
+		Limit:  limit,
+		Cursor: cursor,
 	}
 
-	fleet := h.Fleet.ListFleetFiltered(filter)
+	fleet, next, err := h.Fleet.ListFleetFiltered(filter)
+	if err != nil {
+		writeFleetError(w, err)
+		return
+	}
 	out := EnvironmentList{Environments: make([]Environment, 0, len(fleet))}
 	for _, v := range fleet {
 		out.Environments = append(out.Environments, toAPIEnvironment(v))
+	}
+	if next != "" {
+		out.NextCursor = &next
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -538,10 +550,13 @@ func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 //	@Param		state		query		string	false	"Filter by state"	Enums(creating, ready, restoring, deleting, error)
 //	@Param		mode		query		string	false	"Filter by creation mode"	Enums(manual, auto, build)
 //	@Param		name		query		string	false	"Filter by metadata name (build artifact lookup key)"
+//	@Param		limit		query		int		false	"Max results per page (default 50, max 200)"
+//	@Param		cursor		query		string	false	"Opaque pagination cursor from a previous response's next_cursor"
 //	@Success	200			{object}	SnapshotList
 //	@Security	BearerAuth
 //	@Router		/v1/snapshots [get]
 func (h *Handler) listSnapshots(w http.ResponseWriter, r *http.Request) {
+	limit, cursor := parsePagination(r)
 	filter := orchestrator.SnapshotFilter{
 		VMID:     r.URL.Query().Get("vm_id"),
 		TaskID:   r.URL.Query().Get("task_id"),
@@ -549,9 +564,11 @@ func (h *Handler) listSnapshots(w http.ResponseWriter, r *http.Request) {
 		State:    orchestrator.SnapshotState(r.URL.Query().Get("state")),
 		Mode:     orchestrator.SnapshotMode(r.URL.Query().Get("mode")),
 		Name:     r.URL.Query().Get("name"),
+		Limit:    limit,
+		Cursor:   cursor,
 	}
 
-	records, err := h.Fleet.ListSnapshotsFiltered(r.Context(), filter)
+	records, next, err := h.Fleet.ListSnapshotsFiltered(r.Context(), filter)
 	if err != nil {
 		writeFleetError(w, err)
 		return
@@ -559,6 +576,9 @@ func (h *Handler) listSnapshots(w http.ResponseWriter, r *http.Request) {
 	out := SnapshotList{Snapshots: make([]Snapshot, 0, len(records))}
 	for _, s := range records {
 		out.Snapshots = append(out.Snapshots, toAPISnapshot(s))
+	}
+	if next != "" {
+		out.NextCursor = &next
 	}
 	writeJSON(w, http.StatusOK, out)
 }
@@ -1052,14 +1072,24 @@ func isAgentUnauthorized(err error) bool {
 //	@Summary	List hosts
 //	@Tags		hosts
 //	@Produce	json
-//	@Success	200	{object}	HostList
+//	@Param		limit	query		int		false	"Max results per page (default 50, max 200)"
+//	@Param		cursor	query		string	false	"Opaque pagination cursor from a previous response's next_cursor"
+//	@Success	200		{object}	HostList
 //	@Security	BearerAuth
 //	@Router		/v1/hosts [get]
 func (h *Handler) listHosts(w http.ResponseWriter, r *http.Request) {
-	hosts := h.Fleet.ListHosts()
+	limit, cursor := parsePagination(r)
+	hosts, next, err := h.Fleet.ListHostsFiltered(orchestrator.HostFilter{Limit: limit, Cursor: cursor})
+	if err != nil {
+		writeFleetError(w, err)
+		return
+	}
 	out := HostList{Hosts: make([]HostInfo, 0, len(hosts))}
 	for _, host := range hosts {
 		out.Hosts = append(out.Hosts, toAPIHost(host))
+	}
+	if next != "" {
+		out.NextCursor = &next
 	}
 	writeJSON(w, http.StatusOK, out)
 }

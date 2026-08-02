@@ -467,6 +467,70 @@ func TestListEnvironments_filtersByTaskID(t *testing.T) {
 	}
 }
 
+func TestListEnvironments_paginatesWithLimitAndCursor(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	r := mustRouter(t, h)
+
+	for i := 0; i < 5; i++ {
+		_ = doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+			TaskID:         fmt.Sprintf("task-%d", i),
+			ManifestInline: encodeManifest(t),
+		})
+	}
+
+	rr := doJSON(t, r, http.MethodGet, "/v1/environments?limit=2", nil)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("status = %d", rr.Code)
+	}
+	var page1 EnvironmentList
+	_ = json.NewDecoder(rr.Body).Decode(&page1)
+	if len(page1.Environments) != 2 {
+		t.Fatalf("page 1 len = %d, want 2", len(page1.Environments))
+	}
+	if page1.NextCursor == nil || *page1.NextCursor == "" {
+		t.Fatal("expected a next_cursor on page 1")
+	}
+
+	seen := map[string]bool{}
+	for _, e := range page1.Environments {
+		seen[e.ID] = true
+	}
+
+	cursor := *page1.NextCursor
+	for {
+		rr := doJSON(t, r, http.MethodGet, "/v1/environments?limit=2&cursor="+cursor, nil)
+		if rr.Code != http.StatusOK {
+			t.Fatalf("status = %d, body: %s", rr.Code, rr.Body.String())
+		}
+		var page EnvironmentList
+		_ = json.NewDecoder(rr.Body).Decode(&page)
+		for _, e := range page.Environments {
+			if seen[e.ID] {
+				t.Fatalf("id %s returned twice across pages", e.ID)
+			}
+			seen[e.ID] = true
+		}
+		if page.NextCursor == nil {
+			break
+		}
+		cursor = *page.NextCursor
+	}
+
+	if len(seen) != 5 {
+		t.Fatalf("saw %d unique environments across pages, want 5", len(seen))
+	}
+}
+
+func TestListEnvironments_invalidCursorReturns400(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	r := mustRouter(t, h)
+
+	rr := doJSON(t, r, http.MethodGet, "/v1/environments?cursor=not-valid-base64!!", nil)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400. body: %s", rr.Code, rr.Body.String())
+	}
+}
+
 func TestDestroyEnvironment_returns204AndMissingReturns404(t *testing.T) {
 	h, _, _ := newTestHandler(t)
 	r := mustRouter(t, h)
