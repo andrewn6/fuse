@@ -127,6 +127,7 @@ func newUpCmd() *cobra.Command {
 					RamMB:              c.Spec.RamMB,
 					StorageGB:          c.Spec.StorageGB,
 					Region:             c.Spec.Region,
+					Arch:               c.Spec.Arch,
 					MaxRuntimeSeconds:  c.Spec.MaxRuntimeSeconds,
 					IdleTimeoutSeconds: c.Spec.IdleTimeoutSeconds,
 					Image:              c.Spec.Image,

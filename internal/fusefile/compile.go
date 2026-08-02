@@ -21,10 +21,14 @@ import (
 // happens at Provider.Create — before the guest boots and long before the
 // manifest is ever uploaded to it.
 type ResourceSpec struct {
-	CPUs              int32
-	RamMB             int32
-	StorageGB         int32
-	Region            string
+	CPUs      int32
+	RamMB     int32
+	StorageGB int32
+	Region    string
+	// Arch restricts scheduling to hosts of this CPU architecture ("amd64",
+	// "arm64"). Not yet authorable in a Fusefile; carried for wire parity
+	// so compile output mirrors the orchestrator's spec shape.
+	Arch              string
 	MaxRuntimeSeconds int64
 	// IdleTimeoutSeconds destroys the environment after this many seconds
 	// with no exec and no attach session. Zero means no idle expiry.

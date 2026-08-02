@@ -12,8 +12,11 @@ type Spec struct {
 	// GPUProfile requests fractional GPU allocation: a MIG profile in
 	// mig-parted vocabulary (e.g. "1g.10gb"). When set, GPUs counts MIG
 	// instances of this profile rather than whole devices.
-	GPUProfile        string `json:"gpu_profile,omitempty"`
-	Region            string `json:"region,omitempty"`
+	GPUProfile string `json:"gpu_profile,omitempty"`
+	Region     string `json:"region,omitempty"`
+	// Arch restricts scheduling to hosts of this CPU architecture ("amd64",
+	// "arm64"). Empty means any host.
+	Arch              string `json:"arch,omitempty"`
 	MaxRuntimeSeconds int64  `json:"max_runtime_seconds,omitempty"`
 	// IdleTimeoutSeconds destroys the environment after this many seconds
 	// with no exec and no attach session. Zero means no idle expiry. Unlike
@@ -216,12 +219,15 @@ type snapshotList struct {
 
 // HostCapacity is a host's resource envelope.
 type HostCapacity struct {
-	CPUs      int    `json:"cpus"`
-	RamMB     int    `json:"ram_mb"`
-	StorageGB int    `json:"storage_gb"`
-	VMCount   int    `json:"vm_count"`
-	GPUs      int    `json:"gpus,omitempty"`
-	GPUKind   string `json:"gpu_kind,omitempty"`
+	CPUs      int `json:"cpus"`
+	RamMB     int `json:"ram_mb"`
+	StorageGB int `json:"storage_gb"`
+	VMCount   int `json:"vm_count"`
+	// Arch is the host's CPU architecture in GOARCH vocabulary ("amd64",
+	// "arm64"). Empty means amd64 (hosts registered before arch existed).
+	Arch    string `json:"arch,omitempty"`
+	GPUs    int    `json:"gpus,omitempty"`
+	GPUKind string `json:"gpu_kind,omitempty"`
 
 	// MIGProfiles advertises fractional GPU capacity: MIG instance count
 	// by profile name (e.g. {"1g.10gb": 4}). Requires backend "qemu". When the
