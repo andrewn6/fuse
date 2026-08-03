@@ -35,10 +35,13 @@ func newEnvironmentCmd() *cobra.Command {
 
 func newEnvListCmd() *cobra.Command {
 	var (
-		taskID string
-		state  string
-		hostID string
-		all    bool
+		taskID   string
+		state    string
+		hostID   string
+		all      bool
+		limit    int
+		cursor   string
+		allPages bool
 	)
 	cmd := &cobra.Command{
 		Use:     "list",
@@ -54,16 +57,36 @@ func newEnvListCmd() *cobra.Command {
 			if hostID == "" && !all {
 				hostID = cur.ActiveHost
 			}
-			envs, err := cl.Environments.List(cmd.Context(), fuse.ListEnvironmentsOptions{
-				TaskID: taskID,
-				State:  state,
-				HostID: hostID,
-			})
+
+			var (
+				envs []fuse.EnvironmentInfo
+				next string
+			)
+			if allPages {
+				envs, err = cl.Environments.List(cmd.Context(), fuse.ListEnvironmentsOptions{
+					TaskID: taskID,
+					State:  state,
+					HostID: hostID,
+					Cursor: cursor,
+				})
+			} else {
+				var page *fuse.EnvironmentPage
+				page, err = cl.Environments.ListPage(cmd.Context(), fuse.ListEnvironmentsOptions{
+					TaskID: taskID,
+					State:  state,
+					HostID: hostID,
+					Limit:  limit,
+					Cursor: cursor,
+				})
+				if page != nil {
+					envs, next = page.Environments, page.NextCursor
+				}
+			}
 			if err != nil {
 				return friendly(err)
 			}
 			if app.isJSON() {
-				return printJSON(envs)
+				return printJSON(fuse.EnvironmentPage{Environments: envs, NextCursor: next})
 			}
 			rows := make([][]string, 0, len(envs))
 			for _, e := range envs {
@@ -72,6 +95,9 @@ func newEnvListCmd() *cobra.Command {
 				})
 			}
 			renderTable([]string{"ID", "STATE", "TASK ID", "HOST", "URL", "CREATED"}, rows)
+			if next != "" {
+				warnf("more results: rerun with --cursor %s (or pass --all-pages to fetch everything)", next)
+			}
 			return nil
 		},
 	}
@@ -79,6 +105,9 @@ func newEnvListCmd() *cobra.Command {
 	cmd.Flags().StringVar(&state, "state", "", "filter by state (provisioning|running|draining|destroying|destroyed|failed)")
 	cmd.Flags().StringVar(&hostID, "host-id", "", "filter by host id (default: active host)")
 	cmd.Flags().BoolVar(&all, "all", false, "list across all hosts (ignore the active host)")
+	cmd.Flags().IntVar(&limit, "limit", 0, "max results per page (default 50, max 200)")
+	cmd.Flags().StringVar(&cursor, "cursor", "", "resume from a cursor returned by a previous page")
+	cmd.Flags().BoolVar(&allPages, "all-pages", false, "auto-paginate and fetch every matching environment")
 	return cmd
 }
 

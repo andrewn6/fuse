@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -136,15 +137,83 @@ func (fm *FleetManager) GetHost(hostID string) (Host, bool) {
 	return *h, true
 }
 
-// ListHosts returns all registered hosts.
+// HostFilter controls pagination for ListHostsFiltered. There is no
+// exact-match filtering today (registration/listing never narrowed hosts by
+// field) — this only carries Limit/Cursor, kept as its own type for
+// symmetry with VMFilter/SnapshotFilter and so a future field doesn't need
+// a signature change.
+type HostFilter struct {
+	Limit  int
+	Cursor string
+}
+
+// hostCursor is the opaque cursor payload for host listing. Host ids are
+// operator-chosen and unique, so an ascending id sort is a stable
+// pagination key.
+type hostCursor struct {
+	ID string `json:"id"`
+}
+
+// ListHosts returns every registered host, transparently paginating
+// through the full result set. Intended for internal/test callers that
+// want "everything"; the REST API uses ListHostsFiltered directly so it
+// can return a cursor to the caller.
 func (fm *FleetManager) ListHosts() []Host {
-	fm.mu.RLock()
-	defer fm.mu.RUnlock()
-	out := make([]Host, 0, len(fm.hosts))
-	for _, h := range fm.hosts {
-		out = append(out, *h)
+	var out []Host
+	cursor := ""
+	for {
+		page, next, err := fm.ListHostsFiltered(HostFilter{Limit: MaxPageLimit, Cursor: cursor})
+		if err != nil {
+			return out
+		}
+		out = append(out, page...)
+		if next == "" {
+			break
+		}
+		cursor = next
 	}
 	return out
+}
+
+// ListHostsFiltered returns one page of registered hosts sorted ascending
+// by host id. It returns the page, a next-page cursor (empty when there
+// are no more results), and an error only for a malformed cursor.
+func (fm *FleetManager) ListHostsFiltered(filter HostFilter) ([]Host, string, error) {
+	limit := clampLimit(filter.Limit)
+
+	var after string
+	if filter.Cursor != "" {
+		var c hostCursor
+		if err := decodeCursor(filter.Cursor, &c); err != nil {
+			return nil, "", err
+		}
+		after = c.ID
+	}
+
+	fm.mu.RLock()
+	all := make([]Host, 0, len(fm.hosts))
+	for _, h := range fm.hosts {
+		all = append(all, *h)
+	}
+	fm.mu.RUnlock()
+
+	sort.Slice(all, func(i, j int) bool { return all[i].ID < all[j].ID })
+
+	start := 0
+	if after != "" {
+		start = sort.Search(len(all), func(i int) bool { return all[i].ID > after })
+	}
+
+	end := len(all)
+	var next string
+	if start+limit < end {
+		end = start + limit
+		next, _ = encodeCursor(hostCursor{ID: all[end-1].ID})
+	}
+	if start > end {
+		start = end
+	}
+	return all[start:end], next, nil
 }
 
 // activeHosts returns a point-in-time snapshot of all hosts eligible for

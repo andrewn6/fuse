@@ -237,8 +237,57 @@ describe("environments", () => {
 
     expect(method).toBe("GET");
     expect(path).toBe("/v1/environments");
-    expect(query).toBe("task_id=task-1");
+    // list() auto-paginates (walks every page), so it always sends the max
+    // page size alongside the caller's filters.
+    expect(query).toBe("task_id=task-1&limit=200");
     expect(envs.map((e) => e.id)).toEqual(["vm-1", "vm-2"]);
+  });
+
+  it("listPage round-trips the next_cursor into the cursor query param", async () => {
+    const seen: (string | undefined)[] = [];
+    current = await serve((req, res) => {
+      const q = queryOf(req);
+      seen.push(q);
+      res.setHeader("Content-Type", "application/json");
+      if (!q.includes("cursor=")) {
+        res.end(
+          `{"environments":[{"id":"vm-1","state":"running","url":"u"}],"next_cursor":"YWJj"}`,
+        );
+      } else {
+        res.end(`{"environments":[{"id":"vm-2","state":"running","url":"u"}]}`);
+      }
+    });
+
+    const page1 = await current.client.environments.listPage({ limit: 1 });
+    expect(page1.nextCursor).toBe("YWJj");
+    expect(page1.environments.map((e) => e.id)).toEqual(["vm-1"]);
+
+    const page2 = await current.client.environments.listPage({
+      cursor: page1.nextCursor,
+    });
+    expect(page2.nextCursor).toBeUndefined();
+    expect(page2.environments.map((e) => e.id)).toEqual(["vm-2"]);
+    expect(seen).toEqual(["limit=1", "cursor=YWJj"]);
+  });
+
+  it("list auto-paginates across next_cursor pages", async () => {
+    let calls = 0;
+    current = await serve((req, res) => {
+      calls++;
+      const q = queryOf(req);
+      res.setHeader("Content-Type", "application/json");
+      if (!q.includes("cursor=")) {
+        res.end(
+          `{"environments":[{"id":"vm-1","state":"running","url":"u"}],"next_cursor":"YWJj"}`,
+        );
+      } else {
+        res.end(`{"environments":[{"id":"vm-2","state":"running","url":"u"}]}`);
+      }
+    });
+
+    const envs = await current.client.environments.list();
+    expect(envs.map((e) => e.id)).toEqual(["vm-1", "vm-2"]);
+    expect(calls).toBe(2);
   });
 
   it("drain posts action=drain and returns the updated environment", async () => {

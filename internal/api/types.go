@@ -109,8 +109,12 @@ type Environment struct {
 }
 
 // EnvironmentList is the response body for GET /v1/environments.
+//
+// NextCursor is an opaque token: pass it back as the "cursor" query param
+// to fetch the next page. It is absent once there are no more results.
 type EnvironmentList struct {
 	Environments []Environment `json:"environments"`
+	NextCursor   *string       `json:"next_cursor,omitempty"`
 }
 
 // CreateSnapshotRequest is the optional body for POST
@@ -163,8 +167,12 @@ type Snapshot struct {
 }
 
 // SnapshotList is the response body for GET /v1/snapshots.
+//
+// NextCursor is an opaque token: pass it back as the "cursor" query param
+// to fetch the next page. It is absent once there are no more results.
 type SnapshotList struct {
-	Snapshots []Snapshot `json:"snapshots"`
+	Snapshots  []Snapshot `json:"snapshots"`
+	NextCursor *string    `json:"next_cursor,omitempty"`
 }
 
 // Error is the JSON envelope returned for every non-2xx response. It
@@ -380,6 +388,10 @@ type HostInfo struct {
 }
 
 // HostList is the response body for GET /v1/hosts.
+//
+// NextCursor is an opaque token: pass it back as the "cursor" query param
+// to fetch the next page. It is absent once there are no more results.
 type HostList struct {
-	Hosts []HostInfo `json:"hosts"`
+	Hosts      []HostInfo `json:"hosts"`
+	NextCursor *string    `json:"next_cursor,omitempty"`
 }

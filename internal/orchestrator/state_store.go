@@ -188,6 +188,14 @@ type HostRecord struct {
 	UpdatedAt      time.Time
 }
 
+// SnapshotQuotaUsage summarizes a tenant's in-flight/ready snapshot usage
+// (count and aggregate size) for quota enforcement, without requiring the
+// caller to load every snapshot record to compute it.
+type SnapshotQuotaUsage struct {
+	Count int
+	Bytes int64
+}
+
 // StateStore persists orchestrator control-plane state.
 type StateStore interface {
 	UpsertVM(ctx context.Context, vm VMRecord) error
@@ -201,6 +209,19 @@ type StateStore interface {
 	GetSnapshot(ctx context.Context, snapshotID string) (SnapshotRecord, error)
 	ListSnapshots(ctx context.Context) ([]SnapshotRecord, error)
 	DeleteSnapshot(ctx context.Context, snapshotID string) error
+
+	// ListSnapshotsByVM returns snapshots for a single VM, scoped at the
+	// store layer (a WHERE clause for Postgres) rather than requiring the
+	// caller to load and filter every snapshot in the fleet.
+	ListSnapshotsByVM(ctx context.Context, vmID string) ([]SnapshotRecord, error)
+
+	// SnapshotQuotaUsage returns the count and aggregate size of snapshots
+	// for tenantID that count toward the per-tenant quota: states
+	// Creating/Ready/Restoring, excluding SnapshotModeBuild artifacts (see
+	// FleetManager.enforceSnapshotQuota). Computed at the store layer (a
+	// COUNT/SUM query for Postgres) so quota checks don't require a
+	// full-table scan on every CreateSnapshot call.
+	SnapshotQuotaUsage(ctx context.Context, tenantID string) (SnapshotQuotaUsage, error)
 
 	AppendEvent(ctx context.Context, event EventRecord) error
 
@@ -343,6 +364,42 @@ func (s *MemoryStateStore) DeleteSnapshot(_ context.Context, snapshotID string) 
 	defer s.mu.Unlock()
 	delete(s.snapshots, snapshotID)
 	return nil
+}
+
+func (s *MemoryStateStore) ListSnapshotsByVM(_ context.Context, vmID string) ([]SnapshotRecord, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]SnapshotRecord, 0)
+	for _, snapshot := range s.snapshots {
+		if snapshot.VMID == vmID {
+			out = append(out, snapshot)
+		}
+	}
+	return out, nil
+}
+
+func (s *MemoryStateStore) SnapshotQuotaUsage(_ context.Context, tenantID string) (SnapshotQuotaUsage, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var usage SnapshotQuotaUsage
+	for _, snapshot := range s.snapshots {
+		if snapshot.TenantID != tenantID {
+			continue
+		}
+		// mirrors FleetManager.enforceSnapshotQuota's scope: build
+		// artifacts are exempt, only in-flight/ready checkpoints count.
+		if snapshot.Mode == SnapshotModeBuild {
+			continue
+		}
+		switch snapshot.State {
+		case SnapshotStateCreating, SnapshotStateReady, SnapshotStateRestoring:
+			usage.Count++
+			usage.Bytes += snapshot.SizeBytes
+		}
+	}
+	return usage, nil
 }
 
 func (s *MemoryStateStore) AppendEvent(_ context.Context, event EventRecord) error {

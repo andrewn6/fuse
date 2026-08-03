@@ -32,7 +32,12 @@ type SnapshotOptions struct {
 	Exports []SnapshotExportRecord
 }
 
-// SnapshotFilter narrows ListSnapshotsFiltered results on exact-match fields.
+// SnapshotFilter narrows ListSnapshotsFiltered results on exact-match
+// fields, plus pagination controls.
+//
+// Limit caps the page size (<=0 defaults to DefaultPageLimit, >MaxPageLimit
+// is clamped down to it). Cursor, when non-empty, resumes after the last
+// item of a previous page (see ListSnapshotsFiltered's NextCursor return).
 type SnapshotFilter struct {
 	VMID     string
 	TaskID   string
@@ -48,6 +53,17 @@ type SnapshotFilter struct {
 	// Metadata is free-form JSON, so an absent key or a malformed blob simply
 	// does not match rather than erroring.
 	Name string
+
+	Limit  int
+	Cursor string
+}
+
+// snapshotCursor is the opaque cursor payload for snapshot listing. It
+// mirrors sortSnapshotRecords' sort key (CreatedAt desc, SnapshotID desc as
+// tiebreak) so pagination and the existing display order stay consistent.
+type snapshotCursor struct {
+	CreatedAt time.Time `json:"created_at"`
+	ID        string    `json:"id"`
 }
 
 // CreateSnapshot quiesces the given VM, invokes Environment.Checkpoint,
@@ -86,15 +102,15 @@ func (fm *FleetManager) CreateSnapshot(ctx context.Context, vmID string, opts Sn
 	}
 
 	tenantID := snapshotTenantID(taskID, vmID)
-	allSnapshots, err := fm.loadSnapshots(ctx)
-	if err != nil {
-		return SnapshotRecord{}, err
-	}
-	if err := fm.enforceSnapshotQuota(allSnapshots, tenantID); err != nil {
+	if err := fm.enforceSnapshotQuota(ctx, tenantID); err != nil {
 		return SnapshotRecord{}, err
 	}
 
-	parentSnapshotID := latestReadySnapshotID(allSnapshots, vmID)
+	vmSnapshots, err := fm.loadSnapshotsByVM(ctx, vmID)
+	if err != nil {
+		return SnapshotRecord{}, err
+	}
+	parentSnapshotID := latestReadySnapshotID(vmSnapshots, vmID)
 	metadataJSON, err := marshalSnapshotMetadata(opts.Comment, opts.Metadata)
 	if err != nil {
 		return SnapshotRecord{}, fmt.Errorf("marshal snapshot metadata: %w", err)
@@ -160,7 +176,8 @@ func (fm *FleetManager) CreateSnapshot(ctx context.Context, vmID string, opts Sn
 
 // ListSnapshots returns all snapshots known to the state store for the
 // given VM ID, newest first. Returns an empty slice when the VM exists
-// but has no snapshots.
+// but has no snapshots. Scoped to one VM's snapshots, so it is not the
+// full-table scan ListSnapshotsFiltered can be; it does not paginate.
 func (fm *FleetManager) ListSnapshots(ctx context.Context, vmID string) ([]SnapshotRecord, error) {
 	fm.mu.RLock()
 	_, ok := fm.vms[vmID]
@@ -169,27 +186,34 @@ func (fm *FleetManager) ListSnapshots(ctx context.Context, vmID string) ([]Snaps
 		return nil, fmt.Errorf("%w: %s", ErrVMNotFound, vmID)
 	}
 
-	all, err := fm.loadSnapshots(ctx)
+	out, err := fm.loadSnapshotsByVM(ctx, vmID)
 	if err != nil {
 		return nil, err
-	}
-
-	out := make([]SnapshotRecord, 0, len(all))
-	for _, s := range all {
-		if s.VMID == vmID {
-			out = append(out, s)
-		}
 	}
 	sortSnapshotRecords(out)
 	return out, nil
 }
 
-// ListSnapshotsFiltered returns snapshots across the fleet filtered by
-// optional exact-match fields. Missing resources yield an empty list.
-func (fm *FleetManager) ListSnapshotsFiltered(ctx context.Context, filter SnapshotFilter) ([]SnapshotRecord, error) {
-	all, err := fm.loadSnapshots(ctx)
+// ListSnapshotsFiltered returns one page of snapshots across the fleet
+// filtered by optional exact-match fields, newest first (see
+// sortSnapshotRecords). Missing resources yield an empty list. It returns
+// the page, a next-page cursor (empty when there are no more results), and
+// an error only for a malformed cursor or a store failure.
+//
+// When filter.VMID is set, the underlying lookup is scoped to that VM at
+// the store layer instead of loading every snapshot in the fleet.
+func (fm *FleetManager) ListSnapshotsFiltered(ctx context.Context, filter SnapshotFilter) ([]SnapshotRecord, string, error) {
+	var (
+		all []SnapshotRecord
+		err error
+	)
+	if filter.VMID != "" {
+		all, err = fm.loadSnapshotsByVM(ctx, filter.VMID)
+	} else {
+		all, err = fm.loadSnapshots(ctx)
+	}
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 
 	out := make([]SnapshotRecord, 0, len(all))
@@ -215,7 +239,29 @@ func (fm *FleetManager) ListSnapshotsFiltered(ctx context.Context, filter Snapsh
 		out = append(out, s)
 	}
 	sortSnapshotRecords(out)
-	return out, nil
+
+	limit := clampLimit(filter.Limit)
+	start := 0
+	if filter.Cursor != "" {
+		var c snapshotCursor
+		if err := decodeCursor(filter.Cursor, &c); err != nil {
+			return nil, "", err
+		}
+		cursorRec := SnapshotRecord{CreatedAt: c.CreatedAt, SnapshotID: c.ID}
+		start = sort.Search(len(out), func(i int) bool { return snapshotRecordLess(cursorRec, out[i]) })
+	}
+
+	end := len(out)
+	var next string
+	if start+limit < end {
+		end = start + limit
+		last := out[end-1]
+		next, _ = encodeCursor(snapshotCursor{CreatedAt: last.CreatedAt, ID: last.SnapshotID})
+	}
+	if start > end {
+		start = end
+	}
+	return out[start:end], next, nil
 }
 
 // GetSnapshot returns one persisted snapshot resource scoped to the VM.
@@ -465,35 +511,29 @@ func (fm *FleetManager) reconcileSnapshots(ctx context.Context) {
 	}
 }
 
-func (fm *FleetManager) enforceSnapshotQuota(all []SnapshotRecord, tenantID string) error {
+// enforceSnapshotQuota checks a tenant's in-flight/ready snapshot usage
+// against the configured count/byte ceilings. It asks the state store for a
+// scoped count+bytes aggregate (SnapshotQuotaUsage) instead of loading
+// every snapshot in the fleet — this runs on every CreateSnapshot call, so
+// a full-table scan here would cost every create, quota check, and
+// reconcile tick.
+func (fm *FleetManager) enforceSnapshotQuota(ctx context.Context, tenantID string) error {
 	if fm.snapshotQuotaMaxCount <= 0 && fm.snapshotQuotaMaxBytes <= 0 {
 		return nil
 	}
-
-	var (
-		count int
-		bytes int64
-	)
-	for _, snapshot := range all {
-		if snapshot.TenantID != tenantID {
-			continue
-		}
-		// See reconcileSnapshots: a build artifact is not an ephemeral
-		// checkpoint, so it is not charged against the checkpoint quota.
-		if snapshot.Mode == SnapshotModeBuild {
-			continue
-		}
-		switch snapshot.State {
-		case SnapshotStateCreating, SnapshotStateReady, SnapshotStateRestoring:
-			count++
-			bytes += snapshot.SizeBytes
-		}
+	if fm.store == nil {
+		return nil
 	}
 
-	if fm.snapshotQuotaMaxCount > 0 && count >= fm.snapshotQuotaMaxCount {
+	usage, err := fm.store.SnapshotQuotaUsage(ctx, tenantID)
+	if err != nil {
+		return fmt.Errorf("snapshot quota usage for tenant %s: %w", tenantID, err)
+	}
+
+	if fm.snapshotQuotaMaxCount > 0 && usage.Count >= fm.snapshotQuotaMaxCount {
 		return fmt.Errorf("%w: tenant %s exceeds max snapshot count (%d)", ErrSnapshotQuotaExceeded, tenantID, fm.snapshotQuotaMaxCount)
 	}
-	if fm.snapshotQuotaMaxBytes > 0 && bytes >= fm.snapshotQuotaMaxBytes {
+	if fm.snapshotQuotaMaxBytes > 0 && usage.Bytes >= fm.snapshotQuotaMaxBytes {
 		return fmt.Errorf("%w: tenant %s exceeds max snapshot bytes (%d)", ErrSnapshotQuotaExceeded, tenantID, fm.snapshotQuotaMaxBytes)
 	}
 	return nil
@@ -569,6 +609,25 @@ func (fm *FleetManager) loadSnapshots(ctx context.Context) ([]SnapshotRecord, er
 	return all, nil
 }
 
+// loadSnapshotsByVM is loadSnapshots scoped to one VM. It is what
+// CreateSnapshot uses to find the parent lineage snapshot, so that call
+// does not pull the whole fleet's snapshots on every create.
+func (fm *FleetManager) loadSnapshotsByVM(ctx context.Context, vmID string) ([]SnapshotRecord, error) {
+	if fm.store == nil {
+		return []SnapshotRecord{}, nil
+	}
+	all, err := fm.store.ListSnapshotsByVM(ctx, vmID)
+	if err != nil {
+		return nil, fmt.Errorf("list snapshots for vm %s: %w", vmID, err)
+	}
+	for i := range all {
+		if all[i].State == "" {
+			all[i].State = SnapshotStateReady
+		}
+	}
+	return all, nil
+}
+
 func (fm *FleetManager) upsertSnapshotRecord(ctx context.Context, record SnapshotRecord) error {
 	if fm.store == nil {
 		return nil
@@ -627,13 +686,20 @@ func latestReadySnapshotID(all []SnapshotRecord, vmID string) string {
 	return best.SnapshotID
 }
 
+// snapshotRecordLess reports whether a sorts strictly before b in the
+// order sortSnapshotRecords produces (newest first, snapshot id descending
+// as a tiebreak for equal timestamps). Shared with ListSnapshotsFiltered's
+// cursor search so pagination boundaries line up exactly with display
+// order.
+func snapshotRecordLess(a, b SnapshotRecord) bool {
+	if a.CreatedAt.Equal(b.CreatedAt) {
+		return a.SnapshotID > b.SnapshotID
+	}
+	return a.CreatedAt.After(b.CreatedAt)
+}
+
 func sortSnapshotRecords(records []SnapshotRecord) {
-	sort.Slice(records, func(i, j int) bool {
-		if records[i].CreatedAt.Equal(records[j].CreatedAt) {
-			return records[i].SnapshotID > records[j].SnapshotID
-		}
-		return records[i].CreatedAt.After(records[j].CreatedAt)
-	})
+	sort.Slice(records, func(i, j int) bool { return snapshotRecordLess(records[i], records[j]) })
 }
 
 func snapshotTenantID(taskID, vmID string) string {

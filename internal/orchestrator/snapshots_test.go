@@ -362,19 +362,25 @@ func TestEnforceSnapshotQuota_ignoresBuildArtifacts(t *testing.T) {
 		SnapshotQuotaMaxCount: 1,
 	})
 
-	all := []SnapshotRecord{
+	ctx := context.Background()
+	for _, rec := range []SnapshotRecord{
 		{SnapshotID: "s-build", TenantID: "t1", State: SnapshotStateReady, Mode: SnapshotModeBuild},
 		{SnapshotID: "s-build-2", TenantID: "t1", State: SnapshotStateReady, Mode: SnapshotModeBuild},
+	} {
+		if err := fm.upsertSnapshotRecord(ctx, rec); err != nil {
+			t.Fatalf("seed snapshot %s: %v", rec.SnapshotID, err)
+		}
 	}
-	if err := fm.enforceSnapshotQuota(all, "t1"); err != nil {
+	if err := fm.enforceSnapshotQuota(ctx, "t1"); err != nil {
 		t.Fatalf("build artifacts should not count against the quota: %v", err)
 	}
 
 	// a single ordinary checkpoint still trips the same quota of 1.
-	all = append(all, SnapshotRecord{
-		SnapshotID: "s-manual", TenantID: "t1", State: SnapshotStateReady, Mode: SnapshotModeManual,
-	})
-	if err := fm.enforceSnapshotQuota(all, "t1"); !errors.Is(err, ErrSnapshotQuotaExceeded) {
+	manual := SnapshotRecord{SnapshotID: "s-manual", TenantID: "t1", State: SnapshotStateReady, Mode: SnapshotModeManual}
+	if err := fm.upsertSnapshotRecord(ctx, manual); err != nil {
+		t.Fatalf("seed manual snapshot: %v", err)
+	}
+	if err := fm.enforceSnapshotQuota(ctx, "t1"); !errors.Is(err, ErrSnapshotQuotaExceeded) {
 		t.Fatalf("manual snapshot should still be charged: got %v", err)
 	}
 }
@@ -406,7 +412,7 @@ func TestListSnapshotsFiltered_modeAndName(t *testing.T) {
 		t.Fatalf("create manual snapshot: %v", err)
 	}
 
-	got, err := fm.ListSnapshotsFiltered(context.Background(), SnapshotFilter{
+	got, _, err := fm.ListSnapshotsFiltered(context.Background(), SnapshotFilter{
 		Mode: SnapshotModeBuild,
 		Name: "api",
 	})
@@ -418,7 +424,7 @@ func TestListSnapshotsFiltered_modeAndName(t *testing.T) {
 	}
 
 	// mode alone excludes the manual snapshot but keeps both artifacts.
-	got, err = fm.ListSnapshotsFiltered(context.Background(), SnapshotFilter{Mode: SnapshotModeBuild})
+	got, _, err = fm.ListSnapshotsFiltered(context.Background(), SnapshotFilter{Mode: SnapshotModeBuild})
 	if err != nil {
 		t.Fatalf("list by mode: %v", err)
 	}
@@ -427,7 +433,7 @@ func TestListSnapshotsFiltered_modeAndName(t *testing.T) {
 	}
 
 	// an unknown name matches nothing rather than erroring.
-	got, err = fm.ListSnapshotsFiltered(context.Background(), SnapshotFilter{Name: "nope"})
+	got, _, err = fm.ListSnapshotsFiltered(context.Background(), SnapshotFilter{Name: "nope"})
 	if err != nil {
 		t.Fatalf("list by unknown name: %v", err)
 	}

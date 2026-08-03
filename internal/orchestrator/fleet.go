@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -990,24 +991,72 @@ func (fm *FleetManager) DestroyVM(ctx context.Context, vmID string) error {
 	return nil
 }
 
-// VMFilter narrows ListFleetFiltered results on exact-match fields.
+// VMFilter narrows ListFleetFiltered results on exact-match fields, plus
+// pagination controls.
+//
+// Limit caps the page size (<=0 defaults to DefaultPageLimit, >MaxPageLimit
+// is clamped down to it). Cursor, when non-empty, resumes after the last
+// item of a previous page (see ListFleetFiltered's NextCursor return).
 type VMFilter struct {
 	TaskID string
 	State  VMState
 	HostID string
+	Limit  int
+	Cursor string
 }
 
-// ListFleet returns a snapshot of all tracked VMs.
+// vmCursor is the opaque cursor payload for VM listing. VM ids are unique
+// and stable for the life of a VM, so an ascending id sort is a simple,
+// stable pagination key — no separate sequence column needed.
+type vmCursor struct {
+	ID string `json:"id"`
+}
+
+// ListFleet returns every tracked VM matching no filter, transparently
+// paginating through the full result set. Intended for internal/test
+// callers that want "everything" rather than one page; the REST API uses
+// ListFleetFiltered directly so it can return a cursor to the caller.
 func (fm *FleetManager) ListFleet() []VMInfo {
-	return fm.ListFleetFiltered(VMFilter{})
+	var out []VMInfo
+	cursor := ""
+	for {
+		page, next, err := fm.ListFleetFiltered(VMFilter{Limit: MaxPageLimit, Cursor: cursor})
+		if err != nil {
+			// cursor is always well-formed here (we generated it ourselves),
+			// so this should be unreachable; bail out defensively.
+			return out
+		}
+		out = append(out, page...)
+		if next == "" {
+			break
+		}
+		cursor = next
+	}
+	return out
 }
 
-// ListFleetFiltered returns tracked VMs filtered by optional exact-match fields.
-func (fm *FleetManager) ListFleetFiltered(filter VMFilter) []VMInfo {
-	fm.mu.RLock()
-	defer fm.mu.RUnlock()
+// ListFleetFiltered returns one page of tracked VMs filtered by optional
+// exact-match fields, sorted ascending by VM id. It returns the page, a
+// next-page cursor (empty when there are no more results), and an error
+// only for a malformed cursor.
+//
+// The filter+copy pass runs under fm.mu.RLock (reading vm fields is only
+// safe under lock); sorting and windowing the resulting VMInfo copies runs
+// after the lock is released, since those are plain value data by then.
+func (fm *FleetManager) ListFleetFiltered(filter VMFilter) ([]VMInfo, string, error) {
+	limit := clampLimit(filter.Limit)
 
-	out := make([]VMInfo, 0, len(fm.vms))
+	var after string
+	if filter.Cursor != "" {
+		var c vmCursor
+		if err := decodeCursor(filter.Cursor, &c); err != nil {
+			return nil, "", err
+		}
+		after = c.ID
+	}
+
+	fm.mu.RLock()
+	matched := make([]VMInfo, 0, len(fm.vms))
 	for _, v := range fm.vms {
 		if filter.TaskID != "" && v.taskID != filter.TaskID {
 			continue
@@ -1018,9 +1067,27 @@ func (fm *FleetManager) ListFleetFiltered(filter VMFilter) []VMInfo {
 		if filter.HostID != "" && v.hostID != filter.HostID {
 			continue
 		}
-		out = append(out, v.toInfo())
+		matched = append(matched, v.toInfo())
 	}
-	return out
+	fm.mu.RUnlock()
+
+	sort.Slice(matched, func(i, j int) bool { return matched[i].ID < matched[j].ID })
+
+	start := 0
+	if after != "" {
+		start = sort.Search(len(matched), func(i int) bool { return matched[i].ID > after })
+	}
+
+	end := len(matched)
+	var next string
+	if start+limit < end {
+		end = start + limit
+		next, _ = encodeCursor(vmCursor{ID: matched[end-1].ID})
+	}
+	if start > end {
+		start = end
+	}
+	return matched[start:end], next, nil
 }
 
 // GetVM returns info for a specific VM.

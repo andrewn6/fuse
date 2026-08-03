@@ -453,6 +453,51 @@ func (s *PostgresStateStore) DeleteSnapshot(ctx context.Context, snapshotID stri
 	return nil
 }
 
+func (s *PostgresStateStore) ListSnapshotsByVM(ctx context.Context, vmID string) ([]SnapshotRecord, error) {
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT snapshot_id, vm_id, task_id, host_id, tenant_id, parent_snapshot_id, mode, state, size_bytes,
+		       retention_until, metadata_json, exports_json, last_error, created_at, updated_at
+		FROM orchestrator_snapshots
+		WHERE vm_id=$1
+	`, vmID)
+	if err != nil {
+		return nil, fmt.Errorf("list snapshots for vm %s: %w", vmID, err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []SnapshotRecord
+	for rows.Next() {
+		record, err := scanSnapshotRow(rows.Scan)
+		if err != nil {
+			return nil, fmt.Errorf("scan snapshot row: %w", err)
+		}
+		out = append(out, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate snapshots for vm %s: %w", vmID, err)
+	}
+	return out, nil
+}
+
+// SnapshotQuotaUsage aggregates count and size for tenantID directly in
+// SQL, scoped to the same states/mode enforceSnapshotQuota cares about, so
+// per-tenant quota checks never require a full-table scan.
+func (s *PostgresStateStore) SnapshotQuotaUsage(ctx context.Context, tenantID string) (SnapshotQuotaUsage, error) {
+	row := s.db.QueryRowContext(ctx, `
+		SELECT COUNT(*), COALESCE(SUM(size_bytes), 0)
+		FROM orchestrator_snapshots
+		WHERE tenant_id=$1
+		  AND mode <> $2
+		  AND state IN ($3, $4, $5)
+	`, tenantID, string(SnapshotModeBuild), string(SnapshotStateCreating), string(SnapshotStateReady), string(SnapshotStateRestoring))
+
+	var usage SnapshotQuotaUsage
+	if err := row.Scan(&usage.Count, &usage.Bytes); err != nil {
+		return SnapshotQuotaUsage{}, fmt.Errorf("snapshot quota usage for tenant %s: %w", tenantID, err)
+	}
+	return usage, nil
+}
+
 func scanSnapshotRow(scan func(dest ...any) error) (SnapshotRecord, error) {
 	var (
 		record       SnapshotRecord

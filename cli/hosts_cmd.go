@@ -13,6 +13,15 @@ import (
 	fuse "github.com/folsomintel/fuse/sdks/go"
 )
 
+// addHostsListFlags registers the pagination flags shared by both `fuse
+// hosts` and `fuse hosts list`, since they are separate *cobra.Command
+// values with independent flag sets but the same RunE.
+func addHostsListFlags(cmd *cobra.Command) {
+	cmd.Flags().Int("limit", 0, "max results per page (default 50, max 200)")
+	cmd.Flags().String("cursor", "", "resume from a cursor returned by a previous page")
+	cmd.Flags().Bool("all-pages", false, "auto-paginate and fetch every registered host")
+}
+
 // newHostsCmd implements `fuse hosts list` (and bare `fuse hosts`).
 func newHostsCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -22,13 +31,16 @@ func newHostsCmd() *cobra.Command {
 		RunE:    runHostsList,
 		Aliases: []string{"host-list"},
 	}
-	cmd.AddCommand(&cobra.Command{
+	addHostsListFlags(cmd)
+	listCmd := &cobra.Command{
 		Use:     "list",
 		Aliases: []string{"ls"},
 		Short:   "List compute hosts",
 		Args:    cobra.NoArgs,
 		RunE:    runHostsList,
-	})
+	}
+	addHostsListFlags(listCmd)
+	cmd.AddCommand(listCmd)
 	// The `hosts`/`host` split is a trap: everyone reaches for
 	// `fuse hosts register` first. Register the same management
 	// subcommands under both so either name works.
@@ -55,12 +67,28 @@ func runHostsList(cmd *cobra.Command, _ []string) error {
 	if err != nil {
 		return err
 	}
-	hosts, err := cl.Hosts.List(cmd.Context())
+	limit, _ := cmd.Flags().GetInt("limit")
+	cursor, _ := cmd.Flags().GetString("cursor")
+	allPages, _ := cmd.Flags().GetBool("all-pages")
+
+	var (
+		hosts []fuse.Host
+		next  string
+	)
+	if allPages {
+		hosts, err = cl.Hosts.List(cmd.Context())
+	} else {
+		var page *fuse.HostPage
+		page, err = cl.Hosts.ListPage(cmd.Context(), fuse.ListHostsOptions{Limit: limit, Cursor: cursor})
+		if page != nil {
+			hosts, next = page.Hosts, page.NextCursor
+		}
+	}
 	if err != nil {
 		return friendly(err)
 	}
 	if app.isJSON() {
-		return printJSON(hosts)
+		return printJSON(fuse.HostPage{Hosts: hosts, NextCursor: next})
 	}
 	rows := make([][]string, 0, len(hosts))
 	for _, h := range hosts {
@@ -81,6 +109,9 @@ func runHostsList(cmd *cobra.Command, _ []string) error {
 		})
 	}
 	renderTable([]string{"", "ID", "REGION", "STATE", "CPUS", "RAM MB", "GPUS", "VMS", "LAST SEEN"}, rows)
+	if next != "" {
+		warnf("more results: rerun with --cursor %s (or pass --all-pages to fetch everything)", next)
+	}
 	return nil
 }
 
