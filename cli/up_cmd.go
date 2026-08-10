@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -179,7 +180,7 @@ func newUpCmd() *cobra.Command {
 				if s := steps.summary(time.Since(started)); s != "" && !app.isJSON() {
 					_, _ = fmt.Fprintln(os.Stdout, s)
 				}
-				return nil
+				return reportReady(cmd.Context(), cl, e.ID)
 			}
 			if app.isJSON() {
 				return printJSON(e)
@@ -200,6 +201,45 @@ func newUpCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&plan, "plan", false, "print the derived setup layer cache plan and exit without creating anything")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "ignore the Fusefile's cache block and run every setup step")
 	return cmd
+}
+
+// reportReady prints the summary that ends a waiting `fuse up`. The event
+// stream carries a state and nothing else, so the addresses the author needs
+// have to be re-fetched once the environment settles.
+//
+// The environment is already up by the time this runs, so a failed fetch is
+// reported as a warning and not as a failed `up`: the command did its job and
+// the author can still run `fuse environment get`.
+func reportReady(ctx context.Context, cl *fuse.Client, vmID string) error {
+	e, err := cl.Environments.Get(ctx, vmID)
+	if err != nil {
+		warnf("environment %s is up, but reading its details failed: %v", vmID, friendly(err))
+		return nil
+	}
+	if app.isJSON() {
+		return printJSON(e)
+	}
+	renderUpSummary(e)
+	return nil
+}
+
+// renderUpSummary prints what the author can act on: where the environment is,
+// what it published, and how to get inside it. It is deliberately shorter than
+// renderEnvDetail, which repeats the spec the author just wrote.
+func renderUpSummary(e *fuse.EnvironmentInfo) {
+	pairs := [][2]string{
+		{"environment", fmt.Sprintf("%s  %s", e.ID, stateStyle(e.State))},
+		{"task", dash(e.TaskID)},
+	}
+	if e.HostID != "" {
+		pairs = append(pairs, [2]string{"host", e.HostID})
+	}
+	if e.URL != "" {
+		pairs = append(pairs, [2]string{"agent", e.URL})
+	}
+	pairs = append(pairs, endpointPairs(e.Endpoints)...)
+	pairs = append(pairs, [2]string{"shell", "fuse environment shell " + e.ID})
+	renderDetail(pairs)
 }
 
 // fusefileNames are the filenames a command that reads a Fusefile looks for
