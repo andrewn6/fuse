@@ -180,6 +180,78 @@ func TestUpSendsGPUSpec(t *testing.T) {
 	}
 }
 
+// up reaches parity with `fuse environment create`: the gateway is settable
+// from the Fusefile path too.
+func TestUpSendsGatewayFlags(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		fmt.Fprint(w, `{"id":"vm1","state":"pending","task_id":"t","url":"","spec":{}}`)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeGPUFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	_, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{
+			"--config", cfg, "-o", "json",
+			"up", "-f", fusefilePath,
+			"--task-id", "t",
+			"--gateway-url", "https://gw.internal",
+			"--gateway-token", "gw-token",
+			"--no-wait",
+		})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if gotBody["gateway_url"] != "https://gw.internal" {
+		t.Errorf("gateway_url = %v, want https://gw.internal", gotBody["gateway_url"])
+	}
+	if gotBody["gateway_token"] != "gw-token" {
+		t.Errorf("gateway_token = %v, want gw-token", gotBody["gateway_token"])
+	}
+}
+
+// with no gateway flags the fields stay off the wire, so a Fusefile that never
+// mentioned a gateway posts exactly what it posted before.
+func TestUpWithoutGatewayOmitsTheFields(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		fmt.Fprint(w, `{"id":"vm1","state":"pending","task_id":"t","url":"","spec":{}}`)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeGPUFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	_, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{
+			"--config", cfg, "-o", "json",
+			"up", "-f", fusefilePath, "--task-id", "t", "--no-wait",
+		})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if _, present := gotBody["gateway_url"]; present {
+		t.Errorf("gateway_url present (%v), want it omitted", gotBody["gateway_url"])
+	}
+	if _, present := gotBody["gateway_token"]; present {
+		t.Errorf("gateway_token present (%v), want it omitted", gotBody["gateway_token"])
+	}
+}
+
 func TestUpMissingRequiredSecretFails(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("server should not have been called: %s %s", r.Method, r.URL.Path)

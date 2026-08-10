@@ -21,6 +21,8 @@ func newUpCmd() *cobra.Command {
 		secretsFile       string
 		allowEmptySecrets bool
 		taskID            string
+		gatewayURL        string
+		gatewayToken      string
 		noWait            bool
 		fromBuild         string
 		plan              bool
@@ -147,6 +149,11 @@ func newUpCmd() *cobra.Command {
 				StartupScriptTimeoutSeconds: c.StartupTimeoutSeconds,
 				Expose:                      toSDKExpose(c.Expose),
 				SeedSnapshotID:              fromBuild,
+				// the gateway carries a credential, so it is a flag rather
+				// than a Fusefile field. matching `fuse environment create`
+				// keeps the Fusefile path from being the less capable one.
+				GatewayURL:   gatewayURL,
+				GatewayToken: gatewayToken,
 			})
 			if err != nil {
 				return friendly(err)
@@ -181,6 +188,8 @@ func newUpCmd() *cobra.Command {
 	cmd.Flags().StringVar(&secretsFile, "secrets-file", "", "path to a file of KEY=VALUE secret lines")
 	cmd.Flags().BoolVar(&allowEmptySecrets, "allow-empty-secrets", false, "treat an empty value as satisfying a required secret")
 	cmd.Flags().StringVar(&taskID, "task-id", "", "environment task id (default: the Fusefile's parent directory name)")
+	cmd.Flags().StringVar(&gatewayURL, "gateway-url", "", "gateway url")
+	cmd.Flags().StringVar(&gatewayToken, "gateway-token", "", "gateway token")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "create the environment without streaming provisioning events")
 	cmd.Flags().StringVar(&fromBuild, "from-build", "", "boot from a `fuse build` artifact instead of a base image (skips the setup phase)")
 	cmd.Flags().BoolVar(&plan, "plan", false, "print the derived setup layer cache plan and exit without creating anything")
