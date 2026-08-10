@@ -15,12 +15,18 @@ import (
 	fuse "github.com/folsomintel/fuse/sdks/go"
 )
 
+// colors are adaptive (light/dark terminal variants) rather than fixed ANSI
+// indices, so output stays readable on both light and dark backgrounds.
 var (
+	colorGood = lipgloss.AdaptiveColor{Light: "#0A7A2C", Dark: "#3ECF6E"}
+	colorWarn = lipgloss.AdaptiveColor{Light: "#946200", Dark: "#E5B85E"}
+	colorBad  = lipgloss.AdaptiveColor{Light: "#B3231C", Dark: "#FF6B6B"}
+
 	styleHeader = lipgloss.NewStyle().Bold(true)
 	styleFaint  = lipgloss.NewStyle().Faint(true)
-	styleGood   = lipgloss.NewStyle().Foreground(lipgloss.Color("2"))
-	styleWarn   = lipgloss.NewStyle().Foreground(lipgloss.Color("3"))
-	styleBad    = lipgloss.NewStyle().Foreground(lipgloss.Color("1"))
+	styleGood   = lipgloss.NewStyle().Foreground(colorGood)
+	styleWarn   = lipgloss.NewStyle().Foreground(colorWarn)
+	styleBad    = lipgloss.NewStyle().Foreground(colorBad)
 	styleKey    = lipgloss.NewStyle().Bold(true).Width(18)
 )
 
