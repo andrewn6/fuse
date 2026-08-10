@@ -33,7 +33,10 @@ func newUpCmd() *cobra.Command {
 			"provisioning events until a terminal state unless --no-wait is set.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path := resolveFusefilePath(file, args)
+			path, err := findFusefilePath(file, args)
+			if err != nil {
+				return err
+			}
 
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -183,8 +186,17 @@ func newUpCmd() *cobra.Command {
 	return cmd
 }
 
+// fusefileNames are the filenames a command that reads a Fusefile looks for
+// in the working directory when neither -f/--file nor a positional path names
+// one, in priority order. The first that exists wins, so a directory holding
+// two of them is resolved deterministically.
+var fusefileNames = []string{"Fusefile", "Fusefile.yaml", "Fusefile.yml", "fusefile.yaml", "fusefile.yml"}
+
 // resolveFusefilePath picks the Fusefile path from -f/--file, a positional
-// argument, or the default "Fusefile", in that priority order.
+// argument, or the default "Fusefile", in that priority order. It never
+// touches the filesystem, so it names a path that need not exist yet: `fuse
+// init` uses it to pick a write target. Commands that read a Fusefile want
+// findFusefilePath instead.
 func resolveFusefilePath(file string, args []string) string {
 	if file != "" {
 		return file
@@ -192,7 +204,29 @@ func resolveFusefilePath(file string, args []string) string {
 	if len(args) > 0 {
 		return args[0]
 	}
-	return "Fusefile"
+	return fusefileNames[0]
+}
+
+// findFusefilePath resolves the Fusefile to read. An explicit -f/--file or
+// positional path is returned as given, so a typo is reported against the name
+// the caller typed rather than against a default. With neither, every name in
+// fusefileNames is tried in the working directory and the not-found error
+// names all of them, since "no such file or directory: Fusefile" does not say
+// that Fusefile.yaml would also have worked.
+func findFusefilePath(file string, args []string) (string, error) {
+	if file != "" {
+		return file, nil
+	}
+	if len(args) > 0 {
+		return args[0], nil
+	}
+	for _, name := range fusefileNames {
+		if st, err := os.Stat(name); err == nil && !st.IsDir() {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("no Fusefile in the current directory (looked for %s): run `fuse init` to scaffold one, or pass -f <path>",
+		strings.Join(fusefileNames, ", "))
 }
 
 // defaultTaskID derives a task id from the resolved Fusefile's parent

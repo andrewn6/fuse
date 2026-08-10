@@ -63,8 +63,16 @@ func newValidateCmd() *cobra.Command {
 		// diagnostics the user has already read. Same reason as
 		// `environment exec`.
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path := resolveFusefilePath(file, args)
 			app.exitCode = 0
+
+			path, err := findFusefilePath(file, args)
+			if err != nil {
+				if !quiet {
+					warnf("%v", err)
+				}
+				app.exitCode = validateExitIOError
+				return nil
+			}
 
 			data, err := os.ReadFile(path)
 			if err != nil {

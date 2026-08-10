@@ -437,6 +437,84 @@ func TestUpWithoutPlacementOmitsTheFields(t *testing.T) {
 	}
 }
 
+func TestFindFusefilePath(t *testing.T) {
+	// an explicit -f or positional path is used as given, even when it does
+	// not exist: the caller gets an error naming what they typed.
+	if got, err := findFusefilePath("custom.yaml", nil); err != nil || got != "custom.yaml" {
+		t.Errorf("findFusefilePath(-f custom.yaml) = %q, %v, want custom.yaml, nil", got, err)
+	}
+	if got, err := findFusefilePath("", []string{"other/Fusefile"}); err != nil || got != "other/Fusefile" {
+		t.Errorf("findFusefilePath(positional) = %q, %v, want other/Fusefile, nil", got, err)
+	}
+
+	for _, name := range []string{"Fusefile", "Fusefile.yaml", "Fusefile.yml", "fusefile.yaml", "fusefile.yml"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, name, "version: 1\nrun: ./start.sh\n")
+			t.Chdir(dir)
+
+			got, err := findFusefilePath("", nil)
+			if err != nil {
+				t.Fatalf("findFusefilePath: %v", err)
+			}
+			// case-insensitively: on a case-insensitive filesystem the
+			// candidate that matches first differs only in case from the name
+			// on disk, and still opens the same file.
+			if !strings.EqualFold(got, name) {
+				t.Errorf("findFusefilePath = %q, want %q", got, name)
+			}
+		})
+	}
+
+	t.Run("prefers Fusefile when several exist", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "fusefile.yml", "version: 1\nrun: ./start.sh\n")
+		writeFile(t, dir, "Fusefile", "version: 1\nrun: ./start.sh\n")
+		t.Chdir(dir)
+
+		got, err := findFusefilePath("", nil)
+		if err != nil {
+			t.Fatalf("findFusefilePath: %v", err)
+		}
+		if got != "Fusefile" {
+			t.Errorf("findFusefilePath = %q, want Fusefile", got)
+		}
+	})
+
+	t.Run("not found names every candidate", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+
+		_, err := findFusefilePath("", nil)
+		if err == nil {
+			t.Fatal("want an error in a directory with no Fusefile")
+		}
+		for _, name := range fusefileNames {
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("error does not name %q: %v", name, err)
+			}
+		}
+	})
+
+	// a directory named Fusefile is not a Fusefile, and must not shadow the
+	// other candidates.
+	t.Run("skips a directory", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, "Fusefile"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, dir, "Fusefile.yaml", "version: 1\nrun: ./start.sh\n")
+		t.Chdir(dir)
+
+		got, err := findFusefilePath("", nil)
+		if err != nil {
+			t.Fatalf("findFusefilePath: %v", err)
+		}
+		if got != "Fusefile.yaml" {
+			t.Errorf("findFusefilePath = %q, want Fusefile.yaml", got)
+		}
+	})
+}
+
 func TestParseHostLabels(t *testing.T) {
 	got, err := parseHostLabels([]string{"disk=nvme", "tier=build"})
 	if err != nil {
