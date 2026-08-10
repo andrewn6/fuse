@@ -27,14 +27,19 @@ are supplied at `fuse up`.
 
 | Flag | Purpose |
 | --- | --- |
-| `-f, --file` | Path to the Fusefile. Default: `./Fusefile`, or a positional path argument. |
+| `-f, --file` | Path to the Fusefile. Default: a discovered Fusefile, or a positional path argument. |
 | `--task-id` | Task ID to render. Default: the Fusefile's parent directory name, matching `fuse up`. |
 | `--format` | Output format: `text` \| `json` \| `yaml`. Overrides the global `-o/--output`. |
 | `--only` | Print one part undecorated: `spec` \| `startup-script` \| `manifest` \| `expose` \| `secrets`. |
 | `--from-build` | Compile as [`fuse up --from-build`](/reference/cli/up) would: set `seed_snapshot_id` and send the `run:` phase alone. |
 
-Path resolution is identical to [`fuse up`](/reference/cli/up): `-f/--file`
-first, then a positional argument, then `./Fusefile`.
+Path resolution is identical to
+[`fuse up`](/reference/cli/up#path-resolution): `-f/--file` first, then a
+positional argument, then the first Fusefile discovered in the working
+directory.
+
+`fuse up --dry-run` prints the same thing this command does, for the cases
+where you want the compiled request without switching commands.
 
 Without `--format`, the global `-o/--output` decides: `table` (the default)
 renders the human view, `json` renders the wire body. `--only` selects a single
