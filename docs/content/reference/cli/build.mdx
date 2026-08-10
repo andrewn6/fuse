@@ -60,16 +60,18 @@ accumulate on the host with no ceiling. Delete them yourself with
 
 | Flag | Purpose |
 | --- | --- |
-| `-f, --file` | Path to the Fusefile. Default: `./Fusefile`, or a positional path argument. |
+| `-f, --file` | Path to the Fusefile. Default: a discovered Fusefile, or a positional path argument. |
 | `--name` | Name for the build artifact, recorded as its lookup key. Default: the Fusefile's parent directory name. |
 | `--secret` | Secret as `key=value`. Repeatable. Overrides `--secrets-file` on key collision. |
 | `--secrets-file` | Path to a file of `KEY=VALUE` secret lines. |
+| `--allow-empty-secrets` | Treat an empty value as satisfying a required secret. |
 | `--keep` | Leave the builder environment running instead of destroying it. For debugging a failed build. |
 | `--plan` | Print the derived [setup layer cache](/docs/concepts/fusefile#the-setup-layer-cache) plan and exit without building anything. |
 | `--no-cache` | Ignore the Fusefile's `cache` block and run every setup step. |
 
-Path resolution matches [`fuse up`](/reference/cli/up): `-f/--file`, then a
-positional argument, then `./Fusefile`.
+Path resolution matches [`fuse up`](/reference/cli/up#path-resolution):
+`-f/--file`, then a positional argument, then the first discovered Fusefile in
+the working directory.
 
 ## Finding an artifact later
 

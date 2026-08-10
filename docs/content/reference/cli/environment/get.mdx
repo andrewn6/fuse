@@ -11,27 +11,35 @@ fuse environment get <id>
 ```
 
 No flags beyond the globals. Prints the environment's full detail: state, task
-ID, host ID, URL, resource spec (CPUs, RAM, storage, region, max runtime), and,
-whenever the environment carries an error message (a failed drain command, say,
-or a stuck-task teardown), an `error` row. `failed` is not a state `get` can
-return, it appears only in the event stream.
+ID, host ID, agent address, resource spec (CPUs, RAM, storage, region, max
+runtime), one row per published endpoint, and, whenever the environment carries
+an error message (a failed drain command, say, or a stuck-task teardown), an
+`error` row. `failed` is not a state `get` can return, it appears only in the
+event stream.
 
 ```bash
 $ fuse environment get fuse-abc123
-id             fuse-abc123
-state          running
-task id        my-task
-host id        prod-east-1
-url            10.0.0.5:19551
-cpus           2
-ram mb         2048
-storage gb     10
-region         us-east
-max runtime s  3600
-created        2026-01-15 10:00
-updated        2026-01-15 10:01
+id              fuse-abc123
+state           running
+task id         my-task
+host id         prod-east-1
+agent           10.0.0.5:19551
+cpus            2
+ram mb          2048
+storage gb      10
+region          us-east
+max runtime s   3600
+created         2026-01-15 10:00
+updated         2026-01-15 10:01
+endpoint http   10.0.0.5:41337  ->  guest :8080
 ```
 
-The `url` is the host-side DNAT address for the guest agent
+The `agent` row is the host-side DNAT address for the guest agent
 (`FUSE_HOST_PORT_BASE` plus the VM's slot index), not the in-guest port, and it
-carries no scheme.
+carries no scheme. It is the environment's `url` field on the wire.
+
+An `endpoint` row appears for each entry the Fusefile's
+[`expose:`](/docs/concepts/fusefile) block published, once the provider reports
+an address for it. The label is the entry's `as` name, or its guest port when
+it has none, and the value pairs the reachable address with the guest port it
+forwards to. An environment with no `expose:` block has no endpoint rows.

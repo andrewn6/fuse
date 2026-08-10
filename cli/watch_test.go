@@ -116,6 +116,12 @@ func newSSEEnvServer(t *testing.T, hold bool, states ...string) *httptest.Server
 		switch {
 		case r.URL.Path == "/v1/environments" && r.Method == http.MethodPost:
 			fmt.Fprint(w, `{"id":"vm1","state":"pending","task_id":"t","url":"","spec":{}}`)
+		case r.URL.Path == "/v1/environments/vm1" && r.Method == http.MethodGet:
+			// the settled environment `up` re-fetches to build its summary,
+			// since the event stream carries a state and nothing else.
+			fmt.Fprint(w, `{"id":"vm1","state":"running","task_id":"t","host_id":"h1",
+				"url":"10.0.0.4:19551","spec":{"cpus":2,"ram_mb":2048},
+				"endpoints":[{"as":"http","url":"10.0.0.4:41337","port":8080}]}`)
 		case r.URL.Path == "/v1/environments/vm1/events":
 			w.Header().Set("Content-Type", "text/event-stream")
 			flusher, ok := w.(http.Flusher)
@@ -151,21 +157,67 @@ func newSSEEnvServer(t *testing.T, hold bool, states ...string) *httptest.Server
 	return srv
 }
 
-// runUp executes `fuse up` against srv with the wait path enabled.
+// runUp executes `fuse up` against srv with the wait path enabled, in json
+// mode so the assertions read the raw events.
 func runUp(t *testing.T, srv *httptest.Server) (string, error) {
+	t.Helper()
+	return runUpWith(t, srv, "-o", "json")
+}
+
+// runUpWith is runUp with extra root-level arguments, for tests that need a
+// different output mode.
+func runUpWith(t *testing.T, srv *httptest.Server, rootArgs ...string) (string, error) {
 	t.Helper()
 	fusefilePath := writeFusefile(t, t.TempDir())
 	cfg := writeConfig(t, srv.URL)
+	args := append([]string{"--config", cfg}, rootArgs...)
+	args = append(args,
+		"up", "-f", fusefilePath,
+		"--task-id", "t",
+		"--secret", "pg_password=shh",
+	)
 	return captureWithDeadline(t, 20*time.Second, func() error {
 		root := newRootCmd()
-		root.SetArgs([]string{
-			"--config", cfg, "-o", "json",
-			"up", "-f", fusefilePath,
-			"--task-id", "t",
-			"--secret", "pg_password=shh",
-		})
+		root.SetArgs(args)
 		return root.Execute()
 	})
+}
+
+// the waiting path used to print nothing at all: the stream settled, the TUI
+// wrote a faint "done", and the process exited leaving the author with no
+// address to curl.
+func TestUpPrintsSummaryWhenReady(t *testing.T) {
+	srv := sseEnvServer(t, fuse.StateProvisioning, fuse.StateRunning)
+	out, err := runUpWith(t, srv)
+	if err != nil {
+		t.Fatalf("up returned an error: %v", err)
+	}
+	for _, want := range []string{
+		"environment",
+		"vm1",
+		"agent",
+		"10.0.0.4:19551",
+		"endpoint http",
+		"10.0.0.4:41337  ->  guest :8080",
+		"fuse environment shell vm1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary missing %q:\n%s", want, out)
+		}
+	}
+}
+
+// in json mode the summary is the environment object, so stdout stays
+// machine-readable.
+func TestUpPrintsEnvironmentJSONWhenReady(t *testing.T) {
+	srv := sseEnvServer(t, fuse.StateProvisioning, fuse.StateRunning)
+	out, err := runUp(t, srv)
+	if err != nil {
+		t.Fatalf("up returned an error: %v", err)
+	}
+	if !strings.Contains(out, `"endpoints"`) || !strings.Contains(out, `"10.0.0.4:41337"`) {
+		t.Errorf("json output missing the settled environment:\n%s", out)
+	}
 }
 
 func TestUpReturnsOnceRunning(t *testing.T) {

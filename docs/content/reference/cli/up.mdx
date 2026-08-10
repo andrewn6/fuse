@@ -27,10 +27,14 @@ which streams until the environment is destroyed or fails.
 
 | Flag | Purpose |
 | --- | --- |
-| `-f, --file` | Path to the Fusefile. Default: `./Fusefile`, or a positional path argument. |
+| `-f, --file` | Path to the Fusefile. Default: the first of the discovered names below, or a positional path argument. |
 | `--secret` | Secret as `key=value`. Repeatable. Overrides `--secrets-file` on key collision. |
 | `--secrets-file` | Path to a file of `KEY=VALUE` secret lines. `#`-prefixed lines and blanks are ignored. |
+| `--allow-empty-secrets` | Treat an empty value as satisfying a required secret. |
 | `--task-id` | Environment task ID. Default: the Fusefile's parent directory name. |
+| `--gateway-url` | Gateway URL, matching [`fuse environment create`](/reference/cli/environment/create). |
+| `--gateway-token` | Gateway token. |
+| `--dry-run` | Print the create request this Fusefile would post and exit without connecting to the orchestrator. |
 | `--no-wait` | Create the environment without streaming provisioning events. |
 | `--from-build` | Boot from a [`fuse build`](/reference/cli/build) artifact instead of a base image. Skips the `setup:` phase. |
 | `--plan` | Print the derived [setup layer cache](/docs/concepts/fusefile#the-setup-layer-cache) plan and exit without creating anything. |
@@ -40,18 +44,35 @@ which streams until the environment is destroyed or fails.
 `--from-build` boot runs no setup steps, so there is no layer plan for it to
 print and nothing for it to re-run. Use those flags on
 [`fuse build`](/reference/cli/build), which is where the setup phase runs.
+`--dry-run` and `--plan` are mutually exclusive for a different reason: both
+print and exit, and they print different things.
+
+The gateway carries a credential, so it is a flag rather than a Fusefile
+field. Setting it here is the only difference that remained between the
+Fusefile path and `fuse environment create`.
 
 ## Path resolution
 
-The Fusefile path is resolved in this priority order: `-f/--file` if set, then
-a positional argument, then `./Fusefile` as the default. Both `-f` and the
-positional argument name the **file** itself, neither appends `Fusefile` to a
-directory, so pointing either at a directory fails with
-`read ./services/api: read ./services/api: is a directory` (the operation and
-path appear twice because the CLI prefixes an error that already names them).
+`-f/--file` wins if set, then a positional argument. With neither, `up` looks
+in the working directory for these names, in order, and uses the first that
+exists:
+
+```
+Fusefile   Fusefile.yaml   Fusefile.yml   fusefile.yaml   fusefile.yml
+```
+
+If none of them is there, the error names all five rather than reporting a
+failed open of one. Discovery does not walk up to a parent directory: one
+level too deep, pass `-f`.
+
+Both `-f` and the positional argument name the **file** itself, neither
+appends a Fusefile name to a directory, so pointing either at a directory
+fails with `read ./services/api: read ./services/api: is a directory` (the
+operation and path appear twice because the CLI prefixes an error that already
+names them).
 
 ```bash
-fuse up                                 # ./Fusefile
+fuse up                                 # ./Fusefile, ./Fusefile.yaml, ...
 fuse up ./services/api/Fusefile
 fuse up -f custom.fusefile.yaml
 ```
@@ -68,6 +89,41 @@ If any secret named in the Fusefile's `secrets` list is missing from the
 resolved set (flags plus file), `up` fails fast with the list of missing names
 rather than creating a broken environment.
 
+An empty value does not count as supplied: `--secret pg_password=` is a typo
+far more often than a deliberate empty credential, and an environment that
+boots with one fails later and further from the cause. Pass
+`--allow-empty-secrets` when the empty value is intentional.
+
+## Task ID
+
+The Fusefile has no task ID field, so with no `--task-id` the CLI derives one
+from the Fusefile's parent directory name and says so before it creates
+anything:
+
+```bash
+fuse up
+# no --task-id: using "my-service", derived from the Fusefile's directory
+```
+
+Two checkouts of the same repository derive the same ID, so pass `--task-id`
+explicitly when that matters.
+
+## Dry run
+
+`--dry-run` prints the create request `up` would post and exits before it
+connects to anything, so it needs no [context](/reference/cli/connect) and no
+configured host. Everything up to the network still runs, which means a dry
+run still applies the secret gate and still reports a derived task ID.
+
+The output is the same rendering [`fuse compile`](/reference/cli/compile)
+produces, and honours `-o json` for a body you can diff or post by hand.
+Secret values are never printed, only the names the create would require.
+
+```bash
+fuse up --dry-run
+fuse up --dry-run -o json | jq .spec
+```
+
 ## Examples
 
 ```bash
@@ -75,13 +131,50 @@ fuse up
 # creating environment fuse-abc123 (task my-service)
 # provisioning
 # running
+# environment       fuse-abc123  running
+# task              my-service
+# host              build-3
+# agent             10.0.0.4:19551
+# endpoint http     10.0.0.4:41337  ->  guest :8080
+# shell             fuse environment shell fuse-abc123
 ```
+
+The summary is printed once the environment settles at `running`. The
+`endpoint` rows are the ports the Fusefile's [`expose:`](/docs/concepts/fusefile)
+block published, paired with the guest port each one forwards to. The `agent`
+row is the guest agent's own address, not an exposed port. In `-o json` mode
+the summary is the environment object instead, so stdout stays pipeable.
 
 ```bash
 fuse up --no-wait
 # creates immediately, does not stream events; watch separately with
 # `fuse environment watch <id>`
 ```
+
+```bash
+fuse up --gateway-url https://gw.internal --gateway-token "$GW_TOKEN"
+```
+
+## Startup script timeouts
+
+The Fusefile's `setup:` and `run:` compile into one startup script that the
+orchestrator runs **synchronously inside the create request**, so its ceiling
+is bounded by the control plane's HTTP write timeout. A setup phase that
+exceeds it fails the create:
+
+```
+startup script did not complete in time after 30s: ...
+  the startup script runs synchronously inside create, so its ceiling is bounded by the
+  control plane's http write timeout. raise it a little with `startup_timeout` in the
+  Fusefile, or move the slow work out of `setup:` and bake it once with `fuse build`,
+  then boot it with `fuse up --from-build <id>`
+```
+
+`startup_timeout` buys a little headroom but cannot exceed the fleet's ceiling.
+For anything genuinely long, such as an `apt-get install`, run it once with
+[`fuse build`](/reference/cli/build) and boot the artifact with `--from-build`:
+that path runs the setup phase through `exec` under a much larger ceiling, and
+later boots skip it entirely.
 
 See [Fusefile](/docs/concepts/fusefile) for the full field reference,
 [`fuse init`](/reference/cli/init) to scaffold one, and

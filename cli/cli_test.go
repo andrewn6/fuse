@@ -102,6 +102,24 @@ func capture(t *testing.T, fn func() error) (string, error) {
 	return string(data), err
 }
 
+// captureBoth is capture for commands whose interesting output is on stderr:
+// infof, successf, and warnf all write there so that -o json keeps stdout
+// machine-readable. It returns stdout and stderr separately.
+func captureBoth(t *testing.T, fn func() error) (string, string, error) {
+	t.Helper()
+	oldOut, oldErr := os.Stdout, os.Stderr
+	outR, outW, _ := os.Pipe()
+	errR, errW, _ := os.Pipe()
+	os.Stdout, os.Stderr = outW, errW
+	err := fn()
+	_ = outW.Close()
+	_ = errW.Close()
+	os.Stdout, os.Stderr = oldOut, oldErr
+	outData, _ := io.ReadAll(outR)
+	errData, _ := io.ReadAll(errR)
+	return string(outData), string(errData), err
+}
+
 func TestHostsListJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/hosts" {
@@ -126,6 +144,64 @@ func TestHostsListJSON(t *testing.T) {
 	}
 	if !strings.Contains(out, `"h1"`) || !strings.Contains(out, `"active"`) {
 		t.Errorf("output missing host fields: %s", out)
+	}
+}
+
+// TestEnvGetRendersEndpoints checks that the detail view renders one row per
+// published endpoint, labelled by the author's `as` name when there is one and
+// by the guest port otherwise, and that the agent address is labelled as such
+// rather than as the environment's url.
+func TestEnvGetRendersEndpoints(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"id":"vm1","state":"running","task_id":"t","host_id":"h1",
+			"url":"10.0.0.4:19551","spec":{"cpus":2,"ram_mb":2048},
+			"endpoints":[
+				{"as":"http","url":"10.0.0.4:41337","port":8080},
+				{"url":"10.0.0.4:41338","port":5432}
+			]}`)
+	}))
+	defer srv.Close()
+
+	cfg := writeConfig(t, srv.URL)
+	out, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{"--config", cfg, "environment", "get", "vm1"})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !strings.Contains(out, "endpoint http") || !strings.Contains(out, "10.0.0.4:41337  ->  guest :8080") {
+		t.Errorf("output missing the named endpoint row:\n%s", out)
+	}
+	// no `as`, so the guest port labels the row.
+	if !strings.Contains(out, "endpoint 5432") || !strings.Contains(out, "10.0.0.4:41338  ->  guest :5432") {
+		t.Errorf("output missing the unnamed endpoint row:\n%s", out)
+	}
+	if !strings.Contains(out, "agent") || !strings.Contains(out, "10.0.0.4:19551") {
+		t.Errorf("output missing the agent row:\n%s", out)
+	}
+}
+
+// an environment with no expose block renders exactly the rows it did before
+// endpoints existed.
+func TestEnvGetWithoutEndpoints(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"id":"vm1","state":"running","task_id":"t","url":"10.0.0.4:19551","spec":{}}`)
+	}))
+	defer srv.Close()
+
+	cfg := writeConfig(t, srv.URL)
+	out, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{"--config", cfg, "environment", "get", "vm1"})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if strings.Contains(out, "endpoint") {
+		t.Errorf("output has an endpoint row for an environment with none:\n%s", out)
 	}
 }
 

@@ -180,6 +180,263 @@ func TestUpSendsGPUSpec(t *testing.T) {
 	}
 }
 
+// a startup script that blows its ceiling arrives as a bare invalid_argument,
+// which said nothing about what to do next.
+func TestUpStartupScriptTimeoutIsExplained(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":{"code":"invalid_argument","message":"startup script did not complete in time after 30s: a startup script must terminate; background long-lived processes or declare them under `+"`services`"+`"}}`)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeGPUFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", cfg, "up", "-f", fusefilePath, "--task-id", "t", "--no-wait"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("want an error for a startup script timeout")
+	}
+	// the ceiling the orchestrator actually applied is carried in its own
+	// message; the cli adds what to do about it.
+	for _, want := range []string{"after 30s", "startup_timeout", "fuse build", "--from-build"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q:\n%v", want, err)
+		}
+	}
+}
+
+func TestUpStartupScriptTimeoutTooLargeIsExplained(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":{"code":"invalid_argument","message":"startup script timeout exceeds the configured maximum: requested 5m0s, maximum 55s"}}`)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeGPUFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", cfg, "up", "-f", fusefilePath, "--task-id", "t", "--no-wait"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("want an error for an over-large startup timeout")
+	}
+	if !strings.Contains(err.Error(), "maximum 55s") || !strings.Contains(err.Error(), "fuse build") {
+		t.Errorf("error missing the ceiling or the remediation:\n%v", err)
+	}
+}
+
+// --dry-run prints the request and makes no request of its own.
+func TestUpDryRun(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("--dry-run must not call the orchestrator: %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	out, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{
+			"--config", cfg,
+			"up", "-f", fusefilePath,
+			"--task-id", "t",
+			"--secret", "pg_password=shh",
+			"--dry-run",
+		})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	// the shared `fuse compile` renderer, so the two cannot drift.
+	if !strings.Contains(out, "task id  t") || !strings.Contains(out, "ram mb") {
+		t.Errorf("dry run did not print the compiled request:\n%s", out)
+	}
+}
+
+// -o json makes the dry run emit the wire body itself, so it can be diffed or
+// posted by hand.
+func TestUpDryRunJSON(t *testing.T) {
+	fusefilePath := writeFusefile(t, t.TempDir())
+	cfg := writeConfig(t, "http://127.0.0.1:1")
+
+	out, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{
+			"--config", cfg, "-o", "json",
+			"up", "-f", fusefilePath,
+			"--task-id", "t",
+			"--secret", "pg_password=shh",
+			"--dry-run",
+		})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	var req map[string]any
+	if err := json.Unmarshal([]byte(out), &req); err != nil {
+		t.Fatalf("dry run output is not json: %v\n%s", err, out)
+	}
+	if req["task_id"] != "t" {
+		t.Errorf("task_id = %v, want t", req["task_id"])
+	}
+	// secret values are never printed, only the names the create would need.
+	secrets, _ := req["secrets"].(map[string]any)
+	if len(secrets) != 0 {
+		t.Errorf("secrets = %v, want it empty", secrets)
+	}
+}
+
+// the secret gate is client-side, so a dry run still catches a missing secret.
+func TestUpDryRunAppliesTheSecretGate(t *testing.T) {
+	fusefilePath := writeFusefile(t, t.TempDir())
+	cfg := writeConfig(t, "http://127.0.0.1:1")
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", cfg, "up", "-f", fusefilePath, "--task-id", "t", "--dry-run"})
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "missing required secrets") {
+		t.Fatalf("want missing required secrets error, got %v", err)
+	}
+}
+
+func TestUpDryRunRejectsPlan(t *testing.T) {
+	fusefilePath := writeFusefile(t, t.TempDir())
+	cfg := writeConfig(t, "http://127.0.0.1:1")
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", cfg, "up", "-f", fusefilePath, "--dry-run", "--plan"})
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("want a mutual-exclusion error, got %v", err)
+	}
+}
+
+// a derived task id is announced before the create, since the Fusefile has no
+// task id field and the derivation is not obvious from the command line.
+func TestUpReportsDerivedTaskID(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		fmt.Fprint(w, `{"id":"vm1","state":"pending","task_id":"t","url":"","spec":{}}`)
+	}))
+	defer srv.Close()
+
+	dir := filepath.Join(t.TempDir(), "my-service")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fusefilePath := writeGPUFusefile(t, dir)
+	cfg := writeConfig(t, srv.URL)
+
+	_, stderr, err := captureBoth(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{"--config", cfg, "-o", "json", "up", "-f", fusefilePath, "--no-wait"})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if gotBody["task_id"] != "my-service" {
+		t.Errorf("task_id = %v, want my-service", gotBody["task_id"])
+	}
+	if !strings.Contains(stderr, `using "my-service"`) {
+		t.Errorf("stderr does not report the derived task id:\n%s", stderr)
+	}
+
+	// an explicit --task-id was not derived, so there is nothing to report.
+	_, stderr, err = captureBoth(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{"--config", cfg, "-o", "json", "up", "-f", fusefilePath, "--task-id", "explicit", "--no-wait"})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if strings.Contains(stderr, "derived from") {
+		t.Errorf("stderr reports a derived task id despite --task-id:\n%s", stderr)
+	}
+}
+
+// up reaches parity with `fuse environment create`: the gateway is settable
+// from the Fusefile path too.
+func TestUpSendsGatewayFlags(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		fmt.Fprint(w, `{"id":"vm1","state":"pending","task_id":"t","url":"","spec":{}}`)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeGPUFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	_, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{
+			"--config", cfg, "-o", "json",
+			"up", "-f", fusefilePath,
+			"--task-id", "t",
+			"--gateway-url", "https://gw.internal",
+			"--gateway-token", "gw-token",
+			"--no-wait",
+		})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if gotBody["gateway_url"] != "https://gw.internal" {
+		t.Errorf("gateway_url = %v, want https://gw.internal", gotBody["gateway_url"])
+	}
+	if gotBody["gateway_token"] != "gw-token" {
+		t.Errorf("gateway_token = %v, want gw-token", gotBody["gateway_token"])
+	}
+}
+
+// with no gateway flags the fields stay off the wire, so a Fusefile that never
+// mentioned a gateway posts exactly what it posted before.
+func TestUpWithoutGatewayOmitsTheFields(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		fmt.Fprint(w, `{"id":"vm1","state":"pending","task_id":"t","url":"","spec":{}}`)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeGPUFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	_, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{
+			"--config", cfg, "-o", "json",
+			"up", "-f", fusefilePath, "--task-id", "t", "--no-wait",
+		})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if _, present := gotBody["gateway_url"]; present {
+		t.Errorf("gateway_url present (%v), want it omitted", gotBody["gateway_url"])
+	}
+	if _, present := gotBody["gateway_token"]; present {
+		t.Errorf("gateway_token present (%v), want it omitted", gotBody["gateway_token"])
+	}
+}
+
 func TestUpMissingRequiredSecretFails(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("server should not have been called: %s %s", r.Method, r.URL.Path)
@@ -199,6 +456,72 @@ func TestUpMissingRequiredSecretFails(t *testing.T) {
 	err := root.Execute()
 	if err == nil || !strings.Contains(err.Error(), "missing required secrets") {
 		t.Fatalf("want missing required secrets error, got %v", err)
+	}
+}
+
+// an empty value does not satisfy a required secret, so a typo'd
+// `--secret name=` fails the gate rather than booting with a blank credential.
+func TestUpEmptySecretValueFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("server should not have been called: %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	root := newRootCmd()
+	root.SetArgs([]string{
+		"--config", cfg,
+		"up", "-f", fusefilePath,
+		"--task-id", "t",
+		"--secret", "pg_password=",
+		"--no-wait",
+	})
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "missing required secrets: pg_password") {
+		t.Fatalf("want missing required secrets error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "--allow-empty-secrets") {
+		t.Errorf("error does not mention the opt-out flag: %v", err)
+	}
+}
+
+// --allow-empty-secrets is the escape hatch for a genuinely empty credential.
+func TestUpAllowEmptySecrets(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		fmt.Fprint(w, `{"id":"vm1","state":"pending","task_id":"t","url":"","spec":{}}`)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	_, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{
+			"--config", cfg, "-o", "json",
+			"up", "-f", fusefilePath,
+			"--task-id", "t",
+			"--secret", "pg_password=",
+			"--allow-empty-secrets",
+			"--no-wait",
+		})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	secrets, ok := gotBody["secrets"].(map[string]any)
+	if !ok {
+		t.Fatalf("secrets missing or wrong type: %v", gotBody["secrets"])
+	}
+	if secrets["pg_password"] != "" {
+		t.Errorf("secrets.pg_password = %v, want the empty string", secrets["pg_password"])
 	}
 }
 
@@ -435,6 +758,84 @@ func TestUpWithoutPlacementOmitsTheFields(t *testing.T) {
 	if _, present := spec["labels"]; present {
 		t.Errorf("spec.labels present (%v), want it omitted", spec["labels"])
 	}
+}
+
+func TestFindFusefilePath(t *testing.T) {
+	// an explicit -f or positional path is used as given, even when it does
+	// not exist: the caller gets an error naming what they typed.
+	if got, err := findFusefilePath("custom.yaml", nil); err != nil || got != "custom.yaml" {
+		t.Errorf("findFusefilePath(-f custom.yaml) = %q, %v, want custom.yaml, nil", got, err)
+	}
+	if got, err := findFusefilePath("", []string{"other/Fusefile"}); err != nil || got != "other/Fusefile" {
+		t.Errorf("findFusefilePath(positional) = %q, %v, want other/Fusefile, nil", got, err)
+	}
+
+	for _, name := range []string{"Fusefile", "Fusefile.yaml", "Fusefile.yml", "fusefile.yaml", "fusefile.yml"} {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeFile(t, dir, name, "version: 1\nrun: ./start.sh\n")
+			t.Chdir(dir)
+
+			got, err := findFusefilePath("", nil)
+			if err != nil {
+				t.Fatalf("findFusefilePath: %v", err)
+			}
+			// case-insensitively: on a case-insensitive filesystem the
+			// candidate that matches first differs only in case from the name
+			// on disk, and still opens the same file.
+			if !strings.EqualFold(got, name) {
+				t.Errorf("findFusefilePath = %q, want %q", got, name)
+			}
+		})
+	}
+
+	t.Run("prefers Fusefile when several exist", func(t *testing.T) {
+		dir := t.TempDir()
+		writeFile(t, dir, "fusefile.yml", "version: 1\nrun: ./start.sh\n")
+		writeFile(t, dir, "Fusefile", "version: 1\nrun: ./start.sh\n")
+		t.Chdir(dir)
+
+		got, err := findFusefilePath("", nil)
+		if err != nil {
+			t.Fatalf("findFusefilePath: %v", err)
+		}
+		if got != "Fusefile" {
+			t.Errorf("findFusefilePath = %q, want Fusefile", got)
+		}
+	})
+
+	t.Run("not found names every candidate", func(t *testing.T) {
+		t.Chdir(t.TempDir())
+
+		_, err := findFusefilePath("", nil)
+		if err == nil {
+			t.Fatal("want an error in a directory with no Fusefile")
+		}
+		for _, name := range fusefileNames {
+			if !strings.Contains(err.Error(), name) {
+				t.Errorf("error does not name %q: %v", name, err)
+			}
+		}
+	})
+
+	// a directory named Fusefile is not a Fusefile, and must not shadow the
+	// other candidates.
+	t.Run("skips a directory", func(t *testing.T) {
+		dir := t.TempDir()
+		if err := os.Mkdir(filepath.Join(dir, "Fusefile"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		writeFile(t, dir, "Fusefile.yaml", "version: 1\nrun: ./start.sh\n")
+		t.Chdir(dir)
+
+		got, err := findFusefilePath("", nil)
+		if err != nil {
+			t.Fatalf("findFusefilePath: %v", err)
+		}
+		if got != "Fusefile.yaml" {
+			t.Errorf("findFusefilePath = %q, want Fusefile.yaml", got)
+		}
+	})
 }
 
 func TestParseHostLabels(t *testing.T) {

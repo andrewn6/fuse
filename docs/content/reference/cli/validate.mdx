@@ -34,9 +34,9 @@ human-facing message in the CLI.
 
 | Flag | Purpose |
 | --- | --- |
-| `-f, --file` | Path to the Fusefile. Default: `./Fusefile`, or a positional path argument. |
+| `-f, --file` | Path to the Fusefile. Default: a discovered Fusefile, or a positional path argument. |
 | `--quiet` | Suppress all output. The verdict is the exit code only. |
-| `--check-secrets` | Also fail when a secret the Fusefile requires is missing from the resolved set. |
+| `--check-secrets` | Also fail when a secret the Fusefile requires is missing from the resolved set. An empty value counts as missing, matching [`fuse up`](/reference/cli/up#secrets). |
 | `--secret` | Secret as `key=value`, for `--check-secrets`. Repeatable. Overrides `--secrets-file`. |
 | `--secrets-file` | Path to a file of `KEY=VALUE` secret lines, for `--check-secrets`. |
 
@@ -44,12 +44,14 @@ Pass `-o json` for a machine-readable report.
 
 ## Path resolution
 
-The path is resolved exactly as it is for [`fuse up`](/reference/cli/up) and
-[`fuse init`](/reference/cli/init): `-f/--file` if set, then a positional
-argument, then `./Fusefile`.
+The path is resolved exactly as it is for
+[`fuse up`](/reference/cli/up#path-resolution): `-f/--file` if set, then a
+positional argument, then the first Fusefile discovered in the working
+directory. ([`fuse init`](/reference/cli/init) differs: it picks a write
+target, so it always defaults to the literal `./Fusefile`.)
 
 ```bash
-fuse validate                        # ./Fusefile
+fuse validate                        # ./Fusefile, ./Fusefile.yaml, ...
 fuse validate ./repro/Fusefile
 fuse validate -f custom.fusefile.yaml
 ```

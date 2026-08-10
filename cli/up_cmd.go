@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"os"
@@ -16,14 +17,18 @@ import (
 
 func newUpCmd() *cobra.Command {
 	var (
-		file        string
-		secrets     []string
-		secretsFile string
-		taskID      string
-		noWait      bool
-		fromBuild   string
-		plan        bool
-		noCache     bool
+		file              string
+		secrets           []string
+		secretsFile       string
+		allowEmptySecrets bool
+		taskID            string
+		gatewayURL        string
+		gatewayToken      string
+		noWait            bool
+		dryRun            bool
+		fromBuild         string
+		plan              bool
+		noCache           bool
 	)
 	cmd := &cobra.Command{
 		Use:   "up [path]",
@@ -33,7 +38,16 @@ func newUpCmd() *cobra.Command {
 			"provisioning events until a terminal state unless --no-wait is set.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path := resolveFusefilePath(file, args)
+			// both print and exit, and they print different things, so asking
+			// for both is a mistake rather than a combination to resolve.
+			if dryRun && plan {
+				return fmt.Errorf("--dry-run and --plan are mutually exclusive: --dry-run prints the create request, --plan prints the setup layer cache plan")
+			}
+
+			path, err := findFusefilePath(file, args)
+			if err != nil {
+				return err
+			}
 
 			data, err := os.ReadFile(path)
 			if err != nil {
@@ -95,12 +109,17 @@ func newUpCmd() *cobra.Command {
 			for k, v := range flagSecrets {
 				secretMap[k] = v
 			}
-			if missing := missingSecrets(c.RequiredSecrets, secretMap); len(missing) > 0 {
-				return fmt.Errorf("missing required secrets: %s", strings.Join(missing, ", "))
+			if missing := missingSecrets(c.RequiredSecrets, secretMap, allowEmptySecrets); len(missing) > 0 {
+				return fmt.Errorf("missing required secrets: %s (pass --allow-empty-secrets to accept empty values)", strings.Join(missing, ", "))
 			}
 
 			if taskID == "" {
 				taskID = defaultTaskID(path)
+				// the Fusefile has no task id field, so the cli invents one
+				// from the parent directory name. say so before the create,
+				// since two checkouts of the same repo derive the same id and
+				// the second one collides.
+				infof("no --task-id: using %q, derived from the Fusefile's directory", taskID)
 			}
 
 			// a build artifact already carries the setup phase's result baked
@@ -112,6 +131,18 @@ func newUpCmd() *cobra.Command {
 					return fmt.Errorf("--from-build and the Fusefile's `image` are mutually exclusive: both name the rootfs to boot")
 				}
 				startupScript = c.RunScript
+			}
+
+			if dryRun {
+				// everything above this point is what `up` does before it
+				// touches the network, so a dry run still applies the secret
+				// gate and still reports the derived task id. the rendering
+				// belongs to `fuse compile`, which owns the format.
+				format, err := resolveCompileFormat("")
+				if err != nil {
+					return err
+				}
+				return writeCompiled(cmd.OutOrStdout(), format, c, newCompiledRequest(taskID, fromBuild, c))
 			}
 
 			manifestInline := base64.StdEncoding.EncodeToString(c.ManifestJSON)
@@ -143,6 +174,11 @@ func newUpCmd() *cobra.Command {
 				StartupScriptTimeoutSeconds: c.StartupTimeoutSeconds,
 				Expose:                      toSDKExpose(c.Expose),
 				SeedSnapshotID:              fromBuild,
+				// the gateway carries a credential, so it is a flag rather
+				// than a Fusefile field. matching `fuse environment create`
+				// keeps the Fusefile path from being the less capable one.
+				GatewayURL:   gatewayURL,
+				GatewayToken: gatewayToken,
 			})
 			if err != nil {
 				return friendly(err)
@@ -163,7 +199,7 @@ func newUpCmd() *cobra.Command {
 				if s := steps.summary(time.Since(started)); s != "" && !app.isJSON() {
 					_, _ = fmt.Fprintln(os.Stdout, s)
 				}
-				return nil
+				return reportReady(cmd.Context(), cl, e.ID)
 			}
 			if app.isJSON() {
 				return printJSON(e)
@@ -175,7 +211,11 @@ func newUpCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&file, "file", "f", "", "path to the Fusefile (default: ./Fusefile, or the positional path)")
 	cmd.Flags().StringArrayVar(&secrets, "secret", nil, "secret as key=value (repeatable, overrides --secrets-file)")
 	cmd.Flags().StringVar(&secretsFile, "secrets-file", "", "path to a file of KEY=VALUE secret lines")
+	cmd.Flags().BoolVar(&allowEmptySecrets, "allow-empty-secrets", false, "treat an empty value as satisfying a required secret")
 	cmd.Flags().StringVar(&taskID, "task-id", "", "environment task id (default: the Fusefile's parent directory name)")
+	cmd.Flags().StringVar(&gatewayURL, "gateway-url", "", "gateway url")
+	cmd.Flags().StringVar(&gatewayToken, "gateway-token", "", "gateway token")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the create request this Fusefile would post and exit without connecting to the orchestrator")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "create the environment without streaming provisioning events")
 	cmd.Flags().StringVar(&fromBuild, "from-build", "", "boot from a `fuse build` artifact instead of a base image (skips the setup phase)")
 	cmd.Flags().BoolVar(&plan, "plan", false, "print the derived setup layer cache plan and exit without creating anything")
@@ -183,8 +223,56 @@ func newUpCmd() *cobra.Command {
 	return cmd
 }
 
+// reportReady prints the summary that ends a waiting `fuse up`. The event
+// stream carries a state and nothing else, so the addresses the author needs
+// have to be re-fetched once the environment settles.
+//
+// The environment is already up by the time this runs, so a failed fetch is
+// reported as a warning and not as a failed `up`: the command did its job and
+// the author can still run `fuse environment get`.
+func reportReady(ctx context.Context, cl *fuse.Client, vmID string) error {
+	e, err := cl.Environments.Get(ctx, vmID)
+	if err != nil {
+		warnf("environment %s is up, but reading its details failed: %v", vmID, friendly(err))
+		return nil
+	}
+	if app.isJSON() {
+		return printJSON(e)
+	}
+	renderUpSummary(e)
+	return nil
+}
+
+// renderUpSummary prints what the author can act on: where the environment is,
+// what it published, and how to get inside it. It is deliberately shorter than
+// renderEnvDetail, which repeats the spec the author just wrote.
+func renderUpSummary(e *fuse.EnvironmentInfo) {
+	pairs := [][2]string{
+		{"environment", fmt.Sprintf("%s  %s", e.ID, stateStyle(e.State))},
+		{"task", dash(e.TaskID)},
+	}
+	if e.HostID != "" {
+		pairs = append(pairs, [2]string{"host", e.HostID})
+	}
+	if e.URL != "" {
+		pairs = append(pairs, [2]string{"agent", e.URL})
+	}
+	pairs = append(pairs, endpointPairs(e.Endpoints)...)
+	pairs = append(pairs, [2]string{"shell", "fuse environment shell " + e.ID})
+	renderDetail(pairs)
+}
+
+// fusefileNames are the filenames a command that reads a Fusefile looks for
+// in the working directory when neither -f/--file nor a positional path names
+// one, in priority order. The first that exists wins, so a directory holding
+// two of them is resolved deterministically.
+var fusefileNames = []string{"Fusefile", "Fusefile.yaml", "Fusefile.yml", "fusefile.yaml", "fusefile.yml"}
+
 // resolveFusefilePath picks the Fusefile path from -f/--file, a positional
-// argument, or the default "Fusefile", in that priority order.
+// argument, or the default "Fusefile", in that priority order. It never
+// touches the filesystem, so it names a path that need not exist yet: `fuse
+// init` uses it to pick a write target. Commands that read a Fusefile want
+// findFusefilePath instead.
 func resolveFusefilePath(file string, args []string) string {
 	if file != "" {
 		return file
@@ -192,7 +280,29 @@ func resolveFusefilePath(file string, args []string) string {
 	if len(args) > 0 {
 		return args[0]
 	}
-	return "Fusefile"
+	return fusefileNames[0]
+}
+
+// findFusefilePath resolves the Fusefile to read. An explicit -f/--file or
+// positional path is returned as given, so a typo is reported against the name
+// the caller typed rather than against a default. With neither, every name in
+// fusefileNames is tried in the working directory and the not-found error
+// names all of them, since "no such file or directory: Fusefile" does not say
+// that Fusefile.yaml would also have worked.
+func findFusefilePath(file string, args []string) (string, error) {
+	if file != "" {
+		return file, nil
+	}
+	if len(args) > 0 {
+		return args[0], nil
+	}
+	for _, name := range fusefileNames {
+		if st, err := os.Stat(name); err == nil && !st.IsDir() {
+			return name, nil
+		}
+	}
+	return "", fmt.Errorf("no Fusefile in the current directory (looked for %s): run `fuse init` to scaffold one, or pass -f <path>",
+		strings.Join(fusefileNames, ", "))
 }
 
 // defaultTaskID derives a task id from the resolved Fusefile's parent
@@ -223,11 +333,16 @@ func toSDKExpose(in []fusefile.ExposeSpec) []fuse.ExposeSpec {
 	return out
 }
 
-// missingSecrets returns the entries of required absent from have.
-func missingSecrets(required []string, have map[string]string) []string {
+// missingSecrets returns the entries of required that have does not supply a
+// value for. An empty value counts as missing: `--secret PG_PASSWORD=` is a
+// typo far more often than it is a deliberate empty credential, and an
+// environment that boots with one fails later and further from the cause.
+// --allow-empty-secrets is the opt-out.
+func missingSecrets(required []string, have map[string]string, allowEmpty bool) []string {
 	var missing []string
 	for _, name := range required {
-		if _, ok := have[name]; !ok {
+		v, ok := have[name]
+		if !ok || (v == "" && !allowEmpty) {
 			missing = append(missing, name)
 		}
 	}

@@ -102,7 +102,10 @@ func newCompileCmd() *cobra.Command {
 			"the same Fusefile would require.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			path := resolveFusefilePath(file, args)
+			path, err := findFusefilePath(file, args)
+			if err != nil {
+				return err
+			}
 
 			data, err := os.ReadFile(path)
 			if err != nil {

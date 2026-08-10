@@ -140,7 +140,11 @@ func renderEnvDetail(e *fuse.EnvironmentInfo) {
 		{"state", stateStyle(e.State)},
 		{"task id", dash(e.TaskID)},
 		{"host id", dash(e.HostID)},
-		{"url", dash(e.URL)},
+		// the "url" row is the guest agent's own address, not anything the
+		// Fusefile's expose block published; those are the endpoint rows
+		// below. It is a bare host:port with no scheme, so it is not labelled
+		// as a url.
+		{"agent", dash(e.URL)},
 		{"cpus", strconv.Itoa(int(e.Spec.CPUs))},
 		{"ram mb", strconv.Itoa(int(e.Spec.RamMB))},
 		{"storage gb", strconv.Itoa(int(e.Spec.StorageGB))},
@@ -150,10 +154,32 @@ func renderEnvDetail(e *fuse.EnvironmentInfo) {
 		{"created", shortTime(e.CreatedAt)},
 		{"updated", shortTime(e.UpdatedAt)},
 	}
+	pairs = append(pairs, endpointPairs(e.Endpoints)...)
 	if e.Error != "" {
 		pairs = append(pairs, [2]string{"error", styleBad.Render(e.Error)})
 	}
 	renderDetail(pairs)
+}
+
+// endpointPairs renders the environment's published endpoints as detail rows,
+// one per `expose:` entry that the provider reported an address for. The label
+// is the author's `as` name when they gave one, so the row reads the way the
+// Fusefile does; the value pairs the copyable address with the guest port it
+// forwards to, since the two differ and only the guest port appears in the
+// Fusefile.
+func endpointPairs(endpoints []fuse.Endpoint) [][2]string {
+	pairs := make([][2]string, 0, len(endpoints))
+	for _, ep := range endpoints {
+		label := ep.As
+		if label == "" {
+			label = strconv.Itoa(ep.Port)
+		}
+		pairs = append(pairs, [2]string{
+			"endpoint " + label,
+			fmt.Sprintf("%s  ->  guest :%d", ep.URL, ep.Port),
+		})
+	}
+	return pairs
 }
 
 func newEnvCreateCmd() *cobra.Command {
