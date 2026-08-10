@@ -180,6 +180,54 @@ func TestUpSendsGPUSpec(t *testing.T) {
 	}
 }
 
+// a derived task id is announced before the create, since the Fusefile has no
+// task id field and the derivation is not obvious from the command line.
+func TestUpReportsDerivedTaskID(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		fmt.Fprint(w, `{"id":"vm1","state":"pending","task_id":"t","url":"","spec":{}}`)
+	}))
+	defer srv.Close()
+
+	dir := filepath.Join(t.TempDir(), "my-service")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	fusefilePath := writeGPUFusefile(t, dir)
+	cfg := writeConfig(t, srv.URL)
+
+	_, stderr, err := captureBoth(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{"--config", cfg, "-o", "json", "up", "-f", fusefilePath, "--no-wait"})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if gotBody["task_id"] != "my-service" {
+		t.Errorf("task_id = %v, want my-service", gotBody["task_id"])
+	}
+	if !strings.Contains(stderr, `using "my-service"`) {
+		t.Errorf("stderr does not report the derived task id:\n%s", stderr)
+	}
+
+	// an explicit --task-id was not derived, so there is nothing to report.
+	_, stderr, err = captureBoth(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{"--config", cfg, "-o", "json", "up", "-f", fusefilePath, "--task-id", "explicit", "--no-wait"})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if strings.Contains(stderr, "derived from") {
+		t.Errorf("stderr reports a derived task id despite --task-id:\n%s", stderr)
+	}
+}
+
 // up reaches parity with `fuse environment create`: the gateway is settable
 // from the Fusefile path too.
 func TestUpSendsGatewayFlags(t *testing.T) {

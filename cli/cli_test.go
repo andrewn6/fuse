@@ -102,6 +102,24 @@ func capture(t *testing.T, fn func() error) (string, error) {
 	return string(data), err
 }
 
+// captureBoth is capture for commands whose interesting output is on stderr:
+// infof, successf, and warnf all write there so that -o json keeps stdout
+// machine-readable. It returns stdout and stderr separately.
+func captureBoth(t *testing.T, fn func() error) (string, string, error) {
+	t.Helper()
+	oldOut, oldErr := os.Stdout, os.Stderr
+	outR, outW, _ := os.Pipe()
+	errR, errW, _ := os.Pipe()
+	os.Stdout, os.Stderr = outW, errW
+	err := fn()
+	_ = outW.Close()
+	_ = errW.Close()
+	os.Stdout, os.Stderr = oldOut, oldErr
+	outData, _ := io.ReadAll(outR)
+	errData, _ := io.ReadAll(errR)
+	return string(outData), string(errData), err
+}
+
 func TestHostsListJSON(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/hosts" {

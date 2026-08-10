@@ -107,6 +107,11 @@ func newUpCmd() *cobra.Command {
 
 			if taskID == "" {
 				taskID = defaultTaskID(path)
+				// the Fusefile has no task id field, so the cli invents one
+				// from the parent directory name. say so before the create,
+				// since two checkouts of the same repo derive the same id and
+				// the second one collides.
+				infof("no --task-id: using %q, derived from the Fusefile's directory", taskID)
 			}
 
 			// a build artifact already carries the setup phase's result baked
