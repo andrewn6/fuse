@@ -74,6 +74,7 @@ func newRootCmd() *cobra.Command {
 
 	root.AddCommand(
 		newQuickstartCmd(),
+		newStatusCmd(),
 		newConnectCmd(),
 		newContextCmd(),
 		newHostsCmd(),

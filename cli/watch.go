@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -115,15 +116,16 @@ type eventMsg fuse.Event
 type streamClosedMsg struct{}
 
 type watchModel struct {
-	vmID    string
-	ch      <-chan fuse.Event
-	until   func(string) bool
-	spinner spinner.Model
-	steps   *stepTracker
-	lines   []string
-	last    string
-	done    bool
-	err     error
+	vmID     string
+	ch       <-chan fuse.Event
+	until    func(string) bool
+	spinner  spinner.Model
+	progress progress.Model
+	steps    *stepTracker
+	lines    []string
+	last     string
+	done     bool
+	err      error
 }
 
 func newWatchModel(vmID string, ch <-chan fuse.Event, until func(string) bool, steps *stepTracker) watchModel {
@@ -132,7 +134,25 @@ func newWatchModel(vmID string, ch <-chan fuse.Event, until func(string) bool, s
 	if steps == nil {
 		steps = newStepTracker(nil)
 	}
-	return watchModel{vmID: vmID, ch: ch, until: until, spinner: sp, steps: steps}
+	prog := progress.New(progress.WithDefaultGradient())
+	prog.Width = 40
+	return watchModel{vmID: vmID, ch: ch, until: until, spinner: sp, progress: prog, steps: steps}
+}
+
+// stepProgress reports the fraction of known setup steps completed so far,
+// and whether there are any known steps to show a bar for at all. an
+// environment watch with no compiled Fusefile (steps.labels is empty) has
+// nothing to show a bar against.
+func (m watchModel) stepProgress() (float64, bool) {
+	total := len(m.steps.labels)
+	if total == 0 {
+		return 0, false
+	}
+	frac := float64(m.steps.count()) / float64(total)
+	if frac > 1 {
+		frac = 1
+	}
+	return frac, true
 }
 
 func (m watchModel) Init() tea.Cmd {
@@ -152,6 +172,12 @@ func waitForEvent(ch <-chan fuse.Event) tea.Cmd {
 
 func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.progress.Width = msg.Width - 4
+		if m.progress.Width > 60 {
+			m.progress.Width = 60
+		}
+		return m, nil
 	case tea.KeyMsg:
 		switch msg.String() {
 		case "ctrl+c", "q", "esc":
@@ -167,7 +193,11 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case ev.Kind == fuse.EventKindStep:
 			// a step event has no state, so it must not touch last or until.
 			m.lines = append(m.lines, renderStepEntry(m.steps.add(ev))...)
-			return m, waitForEvent(m.ch)
+			cmds := []tea.Cmd{waitForEvent(m.ch)}
+			if frac, ok := m.stepProgress(); ok {
+				cmds = append(cmds, m.progress.SetPercent(frac))
+			}
+			return m, tea.Batch(cmds...)
 		case !fuse.IsStateEvent(ev.Kind):
 			return m, waitForEvent(m.ch)
 		}
@@ -185,6 +215,12 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		var cmd tea.Cmd
 		m.spinner, cmd = m.spinner.Update(msg)
 		return m, cmd
+	case progress.FrameMsg:
+		newModel, cmd := m.progress.Update(msg)
+		if pm, ok := newModel.(progress.Model); ok {
+			m.progress = pm
+		}
+		return m, cmd
 	}
 	return m, nil
 }
@@ -192,6 +228,9 @@ func (m watchModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m watchModel) View() string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "%s\n", styleHeader.Render("watching "+m.vmID))
+	if frac, ok := m.stepProgress(); ok && !m.done {
+		b.WriteString(m.progress.ViewAs(frac) + "\n")
+	}
 	for _, line := range m.lines {
 		b.WriteString(line + "\n")
 	}
