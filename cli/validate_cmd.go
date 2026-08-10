@@ -100,7 +100,9 @@ func newValidateCmd() *cobra.Command {
 					app.exitCode = validateExitIOError
 					return nil
 				}
-				for _, name := range missingSecrets(required, have) {
+				// an empty value is reported as unset: validate is a dry run of
+				// the same gate `up` applies.
+				for _, name := range missingSecrets(required, have, false) {
 					diags = append(diags, diagnostic{
 						Path:    "secrets",
 						Message: fmt.Sprintf("required secret %q is not set", name),

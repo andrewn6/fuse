@@ -202,6 +202,72 @@ func TestUpMissingRequiredSecretFails(t *testing.T) {
 	}
 }
 
+// an empty value does not satisfy a required secret, so a typo'd
+// `--secret name=` fails the gate rather than booting with a blank credential.
+func TestUpEmptySecretValueFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("server should not have been called: %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	root := newRootCmd()
+	root.SetArgs([]string{
+		"--config", cfg,
+		"up", "-f", fusefilePath,
+		"--task-id", "t",
+		"--secret", "pg_password=",
+		"--no-wait",
+	})
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "missing required secrets: pg_password") {
+		t.Fatalf("want missing required secrets error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "--allow-empty-secrets") {
+		t.Errorf("error does not mention the opt-out flag: %v", err)
+	}
+}
+
+// --allow-empty-secrets is the escape hatch for a genuinely empty credential.
+func TestUpAllowEmptySecrets(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		fmt.Fprint(w, `{"id":"vm1","state":"pending","task_id":"t","url":"","spec":{}}`)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	_, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{
+			"--config", cfg, "-o", "json",
+			"up", "-f", fusefilePath,
+			"--task-id", "t",
+			"--secret", "pg_password=",
+			"--allow-empty-secrets",
+			"--no-wait",
+		})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	secrets, ok := gotBody["secrets"].(map[string]any)
+	if !ok {
+		t.Fatalf("secrets missing or wrong type: %v", gotBody["secrets"])
+	}
+	if secrets["pg_password"] != "" {
+		t.Errorf("secrets.pg_password = %v, want the empty string", secrets["pg_password"])
+	}
+}
+
 func TestUpSecretsFile(t *testing.T) {
 	var gotBody map[string]any
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

@@ -16,14 +16,15 @@ import (
 
 func newUpCmd() *cobra.Command {
 	var (
-		file        string
-		secrets     []string
-		secretsFile string
-		taskID      string
-		noWait      bool
-		fromBuild   string
-		plan        bool
-		noCache     bool
+		file              string
+		secrets           []string
+		secretsFile       string
+		allowEmptySecrets bool
+		taskID            string
+		noWait            bool
+		fromBuild         string
+		plan              bool
+		noCache           bool
 	)
 	cmd := &cobra.Command{
 		Use:   "up [path]",
@@ -98,8 +99,8 @@ func newUpCmd() *cobra.Command {
 			for k, v := range flagSecrets {
 				secretMap[k] = v
 			}
-			if missing := missingSecrets(c.RequiredSecrets, secretMap); len(missing) > 0 {
-				return fmt.Errorf("missing required secrets: %s", strings.Join(missing, ", "))
+			if missing := missingSecrets(c.RequiredSecrets, secretMap, allowEmptySecrets); len(missing) > 0 {
+				return fmt.Errorf("missing required secrets: %s (pass --allow-empty-secrets to accept empty values)", strings.Join(missing, ", "))
 			}
 
 			if taskID == "" {
@@ -178,6 +179,7 @@ func newUpCmd() *cobra.Command {
 	cmd.Flags().StringVarP(&file, "file", "f", "", "path to the Fusefile (default: ./Fusefile, or the positional path)")
 	cmd.Flags().StringArrayVar(&secrets, "secret", nil, "secret as key=value (repeatable, overrides --secrets-file)")
 	cmd.Flags().StringVar(&secretsFile, "secrets-file", "", "path to a file of KEY=VALUE secret lines")
+	cmd.Flags().BoolVar(&allowEmptySecrets, "allow-empty-secrets", false, "treat an empty value as satisfying a required secret")
 	cmd.Flags().StringVar(&taskID, "task-id", "", "environment task id (default: the Fusefile's parent directory name)")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "create the environment without streaming provisioning events")
 	cmd.Flags().StringVar(&fromBuild, "from-build", "", "boot from a `fuse build` artifact instead of a base image (skips the setup phase)")
@@ -257,11 +259,16 @@ func toSDKExpose(in []fusefile.ExposeSpec) []fuse.ExposeSpec {
 	return out
 }
 
-// missingSecrets returns the entries of required absent from have.
-func missingSecrets(required []string, have map[string]string) []string {
+// missingSecrets returns the entries of required that have does not supply a
+// value for. An empty value counts as missing: `--secret PG_PASSWORD=` is a
+// typo far more often than it is a deliberate empty credential, and an
+// environment that boots with one fails later and further from the cause.
+// --allow-empty-secrets is the opt-out.
+func missingSecrets(required []string, have map[string]string, allowEmpty bool) []string {
 	var missing []string
 	for _, name := range required {
-		if _, ok := have[name]; !ok {
+		v, ok := have[name]
+		if !ok || (v == "" && !allowEmpty) {
 			missing = append(missing, name)
 		}
 	}

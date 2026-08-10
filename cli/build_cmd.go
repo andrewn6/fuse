@@ -22,13 +22,14 @@ const buildExecTimeout = 600 * time.Second
 
 func newBuildCmd() *cobra.Command {
 	var (
-		file        string
-		name        string
-		secrets     []string
-		secretsFile string
-		keep        bool
-		plan        bool
-		noCache     bool
+		file              string
+		name              string
+		secrets           []string
+		secretsFile       string
+		allowEmptySecrets bool
+		keep              bool
+		plan              bool
+		noCache           bool
 	)
 	cmd := &cobra.Command{
 		Use:   "build [path]",
@@ -95,8 +96,8 @@ func newBuildCmd() *cobra.Command {
 			for k, v := range flagSecrets {
 				secretMap[k] = v
 			}
-			if missing := missingSecrets(c.RequiredSecrets, secretMap); len(missing) > 0 {
-				return fmt.Errorf("missing required secrets: %s", strings.Join(missing, ", "))
+			if missing := missingSecrets(c.RequiredSecrets, secretMap, allowEmptySecrets); len(missing) > 0 {
+				return fmt.Errorf("missing required secrets: %s (pass --allow-empty-secrets to accept empty values)", strings.Join(missing, ", "))
 			}
 
 			if name == "" {
@@ -199,6 +200,7 @@ func newBuildCmd() *cobra.Command {
 	cmd.Flags().StringVar(&name, "name", "", "name for the build artifact (default: the Fusefile's parent directory name)")
 	cmd.Flags().StringArrayVar(&secrets, "secret", nil, "secret as key=value (repeatable, overrides --secrets-file)")
 	cmd.Flags().StringVar(&secretsFile, "secrets-file", "", "path to a file of KEY=VALUE secret lines")
+	cmd.Flags().BoolVar(&allowEmptySecrets, "allow-empty-secrets", false, "treat an empty value as satisfying a required secret")
 	cmd.Flags().BoolVar(&keep, "keep", false, "leave the builder environment running instead of destroying it")
 	cmd.Flags().BoolVar(&plan, "plan", false, "print the derived setup layer cache plan and exit without building anything")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "ignore the Fusefile's cache block and run every setup step")
