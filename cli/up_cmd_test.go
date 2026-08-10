@@ -180,6 +180,95 @@ func TestUpSendsGPUSpec(t *testing.T) {
 	}
 }
 
+// --dry-run prints the request and makes no request of its own.
+func TestUpDryRun(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("--dry-run must not call the orchestrator: %s %s", r.Method, r.URL.Path)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	out, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{
+			"--config", cfg,
+			"up", "-f", fusefilePath,
+			"--task-id", "t",
+			"--secret", "pg_password=shh",
+			"--dry-run",
+		})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	// the shared `fuse compile` renderer, so the two cannot drift.
+	if !strings.Contains(out, "task id  t") || !strings.Contains(out, "ram mb") {
+		t.Errorf("dry run did not print the compiled request:\n%s", out)
+	}
+}
+
+// -o json makes the dry run emit the wire body itself, so it can be diffed or
+// posted by hand.
+func TestUpDryRunJSON(t *testing.T) {
+	fusefilePath := writeFusefile(t, t.TempDir())
+	cfg := writeConfig(t, "http://127.0.0.1:1")
+
+	out, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{
+			"--config", cfg, "-o", "json",
+			"up", "-f", fusefilePath,
+			"--task-id", "t",
+			"--secret", "pg_password=shh",
+			"--dry-run",
+		})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	var req map[string]any
+	if err := json.Unmarshal([]byte(out), &req); err != nil {
+		t.Fatalf("dry run output is not json: %v\n%s", err, out)
+	}
+	if req["task_id"] != "t" {
+		t.Errorf("task_id = %v, want t", req["task_id"])
+	}
+	// secret values are never printed, only the names the create would need.
+	secrets, _ := req["secrets"].(map[string]any)
+	if len(secrets) != 0 {
+		t.Errorf("secrets = %v, want it empty", secrets)
+	}
+}
+
+// the secret gate is client-side, so a dry run still catches a missing secret.
+func TestUpDryRunAppliesTheSecretGate(t *testing.T) {
+	fusefilePath := writeFusefile(t, t.TempDir())
+	cfg := writeConfig(t, "http://127.0.0.1:1")
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", cfg, "up", "-f", fusefilePath, "--task-id", "t", "--dry-run"})
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "missing required secrets") {
+		t.Fatalf("want missing required secrets error, got %v", err)
+	}
+}
+
+func TestUpDryRunRejectsPlan(t *testing.T) {
+	fusefilePath := writeFusefile(t, t.TempDir())
+	cfg := writeConfig(t, "http://127.0.0.1:1")
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", cfg, "up", "-f", fusefilePath, "--dry-run", "--plan"})
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), "mutually exclusive") {
+		t.Fatalf("want a mutual-exclusion error, got %v", err)
+	}
+}
+
 // a derived task id is announced before the create, since the Fusefile has no
 // task id field and the derivation is not obvious from the command line.
 func TestUpReportsDerivedTaskID(t *testing.T) {

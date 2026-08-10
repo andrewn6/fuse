@@ -25,6 +25,7 @@ func newUpCmd() *cobra.Command {
 		gatewayURL        string
 		gatewayToken      string
 		noWait            bool
+		dryRun            bool
 		fromBuild         string
 		plan              bool
 		noCache           bool
@@ -37,6 +38,12 @@ func newUpCmd() *cobra.Command {
 			"provisioning events until a terminal state unless --no-wait is set.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			// both print and exit, and they print different things, so asking
+			// for both is a mistake rather than a combination to resolve.
+			if dryRun && plan {
+				return fmt.Errorf("--dry-run and --plan are mutually exclusive: --dry-run prints the create request, --plan prints the setup layer cache plan")
+			}
+
 			path, err := findFusefilePath(file, args)
 			if err != nil {
 				return err
@@ -126,6 +133,18 @@ func newUpCmd() *cobra.Command {
 				startupScript = c.RunScript
 			}
 
+			if dryRun {
+				// everything above this point is what `up` does before it
+				// touches the network, so a dry run still applies the secret
+				// gate and still reports the derived task id. the rendering
+				// belongs to `fuse compile`, which owns the format.
+				format, err := resolveCompileFormat("")
+				if err != nil {
+					return err
+				}
+				return writeCompiled(cmd.OutOrStdout(), format, c, newCompiledRequest(taskID, fromBuild, c))
+			}
+
 			manifestInline := base64.StdEncoding.EncodeToString(c.ManifestJSON)
 
 			cl, _, err := app.client()
@@ -196,6 +215,7 @@ func newUpCmd() *cobra.Command {
 	cmd.Flags().StringVar(&taskID, "task-id", "", "environment task id (default: the Fusefile's parent directory name)")
 	cmd.Flags().StringVar(&gatewayURL, "gateway-url", "", "gateway url")
 	cmd.Flags().StringVar(&gatewayToken, "gateway-token", "", "gateway token")
+	cmd.Flags().BoolVar(&dryRun, "dry-run", false, "print the create request this Fusefile would post and exit without connecting to the orchestrator")
 	cmd.Flags().BoolVar(&noWait, "no-wait", false, "create the environment without streaming provisioning events")
 	cmd.Flags().StringVar(&fromBuild, "from-build", "", "boot from a `fuse build` artifact instead of a base image (skips the setup phase)")
 	cmd.Flags().BoolVar(&plan, "plan", false, "print the derived setup layer cache plan and exit without creating anything")
