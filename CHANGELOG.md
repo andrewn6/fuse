@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.17.0](https://github.com/folsomintel/fuse/compare/v0.16.0...v0.17.0) (2026-08-10)
+
+
+### Features
+
+* **cli:** adaptive colors, progress bar, and status dashboard ([e7c114f](https://github.com/folsomintel/fuse/commit/e7c114f9dff01f77a0f37cb17f86d48c3ce4e55a))
+* **cli:** adaptive colors, provisioning progress bar, and status dashboard ([04a72b6](https://github.com/folsomintel/fuse/commit/04a72b6472cfc965abb3d773210702ae6d1e43c4))
+* cursor-paginate list endpoints, drop CreateSnapshot full-table scan ([7a804a1](https://github.com/folsomintel/fuse/commit/7a804a1204919c76fab4a49707b4ac0f5993105e))
+
+
+### Bug Fixes
+
+* address codeql alerts in host agents ([c2f3f06](https://github.com/folsomintel/fuse/commit/c2f3f065abe36ef0c4b3578808ad8fb3003db73b))
+
 ## [0.16.0](https://github.com/folsomintel/fuse/compare/v0.15.0...v0.16.0) (2026-08-02)
 
 
