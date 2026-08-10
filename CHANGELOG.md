@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.18.0](https://github.com/folsomintel/fuse/compare/v0.17.0...v0.18.0) (2026-08-10)
+
+
+### Features
+
+* **cli:** explain startup script timeouts instead of relaying invalid argument ([5670404](https://github.com/folsomintel/fuse/commit/56704045cfcad6049d6e415614ee30588dd76092))
+* **cli:** harden `fuse up` for the v2 authoring surface ([6508108](https://github.com/folsomintel/fuse/commit/6508108259c72970cace2269893da30af2852985))
+
 ## [0.17.0](https://github.com/folsomintel/fuse/compare/v0.16.0...v0.17.0) (2026-08-10)
 
 
