@@ -180,6 +180,54 @@ func TestUpSendsGPUSpec(t *testing.T) {
 	}
 }
 
+// a startup script that blows its ceiling arrives as a bare invalid_argument,
+// which said nothing about what to do next.
+func TestUpStartupScriptTimeoutIsExplained(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":{"code":"invalid_argument","message":"startup script did not complete in time after 30s: a startup script must terminate; background long-lived processes or declare them under `+"`services`"+`"}}`)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeGPUFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", cfg, "up", "-f", fusefilePath, "--task-id", "t", "--no-wait"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("want an error for a startup script timeout")
+	}
+	// the ceiling the orchestrator actually applied is carried in its own
+	// message; the cli adds what to do about it.
+	for _, want := range []string{"after 30s", "startup_timeout", "fuse build", "--from-build"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error does not mention %q:\n%v", want, err)
+		}
+	}
+}
+
+func TestUpStartupScriptTimeoutTooLargeIsExplained(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		fmt.Fprint(w, `{"error":{"code":"invalid_argument","message":"startup script timeout exceeds the configured maximum: requested 5m0s, maximum 55s"}}`)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeGPUFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", cfg, "up", "-f", fusefilePath, "--task-id", "t", "--no-wait"})
+	err := root.Execute()
+	if err == nil {
+		t.Fatal("want an error for an over-large startup timeout")
+	}
+	if !strings.Contains(err.Error(), "maximum 55s") || !strings.Contains(err.Error(), "fuse build") {
+		t.Errorf("error missing the ceiling or the remediation:\n%v", err)
+	}
+}
+
 // --dry-run prints the request and makes no request of its own.
 func TestUpDryRun(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

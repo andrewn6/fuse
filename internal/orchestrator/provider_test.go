@@ -199,6 +199,20 @@ func TestBoot_startup_script_timeout(t *testing.T) {
 	}
 }
 
+// The API classifies both startup-script timeout sentinels as a plain
+// invalid_argument with no distinguishing code, and cli/ must not import
+// internal/, so `friendly` in cli/render.go matches these messages by text to
+// attach a remediation hint. Reword one and the hint silently stops firing;
+// update the matching constant in cli/render.go at the same time.
+func TestStartupScriptTimeoutMessagesAreStable(t *testing.T) {
+	if got, want := ErrStartupScriptTimeout.Error(), "startup script did not complete in time"; got != want {
+		t.Errorf("ErrStartupScriptTimeout = %q, want %q (cli/render.go matches on it)", got, want)
+	}
+	if got, want := ErrStartupScriptTimeoutTooLarge.Error(), "startup script timeout exceeds the configured maximum"; got != want {
+		t.Errorf("ErrStartupScriptTimeoutTooLarge = %q, want %q (cli/render.go matches on it)", got, want)
+	}
+}
+
 // A deadline inherited from the caller is a genuine request timeout, not a
 // misbehaving script, so it must not be reported as ErrStartupScriptTimeout.
 func TestBoot_startup_script_respects_caller_cancellation(t *testing.T) {

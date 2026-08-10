@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/charmbracelet/lipgloss"
@@ -72,6 +73,16 @@ func warnf(format string, a ...any) {
 	fmt.Fprintln(os.Stderr, styleWarn.Render(fmt.Sprintf(format, a...)))
 }
 
+// The orchestrator reports both startup-script timeout sentinels
+// (internal/orchestrator/fleet.go) as a plain invalid_argument with no
+// distinguishing code, and cli/ must not import internal/, so the message text
+// is the only handle friendly has on them. A drift here costs the remediation
+// hint, not correctness: the message itself still reaches the user.
+const (
+	errStartupScriptTimeoutText         = "startup script did not complete in time"
+	errStartupScriptTimeoutTooLargeText = "startup script timeout exceeds the configured maximum"
+)
+
 // friendly maps an sdk *APIError to an actionable message. non-api errors pass
 // through unchanged.
 func friendly(err error) error {
@@ -97,6 +108,16 @@ func friendly(err error) error {
 		return fmt.Errorf("not found: %s", msg)
 	case fuse.IsConflict(err):
 		return fmt.Errorf("conflict: %s", msg)
+	case strings.Contains(msg, errStartupScriptTimeoutText):
+		return fmt.Errorf("%s\n"+
+			"  the startup script runs synchronously inside create, so its ceiling is bounded by the\n"+
+			"  control plane's http write timeout. raise it a little with `startup_timeout` in the\n"+
+			"  Fusefile, or move the slow work out of `setup:` and bake it once with `fuse build`,\n"+
+			"  then boot it with `fuse up --from-build <id>`", msg)
+	case strings.Contains(msg, errStartupScriptTimeoutTooLargeText):
+		return fmt.Errorf("%s\n"+
+			"  `startup_timeout` cannot exceed the fleet's ceiling. for setup work that needs longer,\n"+
+			"  bake it once with `fuse build` and boot it with `fuse up --from-build <id>`", msg)
 	case fuse.IsInvalidArgument(err):
 		return fmt.Errorf("invalid argument: %s", msg)
 	case fuse.IsUnavailable(err):
