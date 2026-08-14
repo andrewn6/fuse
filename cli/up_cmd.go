@@ -83,13 +83,16 @@ func newUpCmd() *cobra.Command {
 				return fmt.Errorf("%s: %w", path, err)
 			}
 
+			var lp *layerPlan
 			if fromBuild == "" {
 				// derive layer keys when caching is on (so a bad `inputs` entry
 				// fails here rather than mid-provision) or when the user asked
 				// to see the plan.
-				if lp, err := planSetupLayers(path, f, plan); err != nil {
+				lp, err = planSetupLayers(path, f, plan)
+				if err != nil {
 					return err
-				} else if plan {
+				}
+				if plan {
 					return renderLayerPlan(lp)
 				}
 			}
@@ -147,10 +150,35 @@ func newUpCmd() *cobra.Command {
 
 			manifestInline := base64.StdEncoding.EncodeToString(c.ManifestJSON)
 
-			cl, _, err := app.client()
+			cl, cur, err := app.client()
 			if err != nil {
 				return err
 			}
+
+			// `up` consumes the layer cache but never produces it: snapshotting
+			// mid-boot would mean pausing an environment somebody asked to have
+			// running. a hit here just means booting from an artifact `fuse
+			// build` already made and skipping the setup steps it covers.
+			seedID := fromBuild
+			image := c.Spec.Image
+			if lp != nil && lp.CacheEnabled {
+				if arch := targetArch(cmd.Context(), cl, cur.ActiveHost); arch != "" {
+					lp.Arch = arch
+					hit, err := resolveDeepestLayer(cmd.Context(), cl, lp, arch)
+					if err != nil {
+						warnf("layer cache lookup failed, booting cold: %v", err)
+					} else if hit != nil {
+						lp.markHit(hit.Index)
+						seedID = hit.Snapshot.ID
+						// seed and image both name the rootfs to boot, and the
+						// api rejects being given two answers.
+						image = ""
+						startupScript = fusefile.StartupScriptFrom(f, hit.Index+1)
+						successf("reusing %d cached layer(s) from %s", lp.hitCount(), hit.Snapshot.ID)
+					}
+				}
+			}
+
 			e, err := cl.Environments.Create(cmd.Context(), fuse.CreateRequest{
 				TaskID: taskID,
 				Spec: fuse.Spec{
@@ -161,7 +189,7 @@ func newUpCmd() *cobra.Command {
 					Arch:               c.Spec.Arch,
 					MaxRuntimeSeconds:  c.Spec.MaxRuntimeSeconds,
 					IdleTimeoutSeconds: c.Spec.IdleTimeoutSeconds,
-					Image:              c.Spec.Image,
+					Image:              image,
 					GPUs:               c.Spec.GPUs,
 					GPUKind:            c.Spec.GPUKind,
 					GPUProfile:         c.Spec.GPUProfile,
@@ -173,7 +201,7 @@ func newUpCmd() *cobra.Command {
 				StartupScript:               startupScript,
 				StartupScriptTimeoutSeconds: c.StartupTimeoutSeconds,
 				Expose:                      toSDKExpose(c.Expose),
-				SeedSnapshotID:              fromBuild,
+				SeedSnapshotID:              seedID,
 				// the gateway carries a credential, so it is a flag rather
 				// than a Fusefile field. matching `fuse environment create`
 				// keeps the Fusefile path from being the less capable one.

@@ -30,15 +30,43 @@ type layerPlan struct {
 	Statuses     []layerPlanStepStatus `json:"-"`
 }
 
-// layerPlanStepStatus is the per-step outcome. Increment 1 has no layer index
-// to consult, so a cacheable step is always a miss; the field exists so a
-// later change can report a hit without reshaping the plan.
+// layerPlanStepStatus is the per-step outcome.
 type layerPlanStepStatus string
 
 const (
+	// layerStatusHit means a stored artifact already covers this step, so it
+	// does not run. Every step at or below the deepest hit is a hit: one
+	// artifact satisfies the whole chain leading to it.
+	layerStatusHit = layerPlanStepStatus("hit")
+	// layerStatusMiss means the step is cacheable but has no stored artifact,
+	// so it runs and is snapshotted.
 	layerStatusMiss = layerPlanStepStatus("miss")
+	// layerStatusSkip means the step cannot be cached at all; LayerKey.Reason
+	// says why. It runs as part of the uncacheable tail.
 	layerStatusSkip = layerPlanStepStatus("skip")
 )
+
+// markHit records that a resolved artifact covers every step up to and
+// including index, so `--plan`-style reporting and the build loop agree about
+// what was reused.
+func (p *layerPlan) markHit(index int) {
+	for i := 0; i <= index && i < len(p.Statuses); i++ {
+		if p.Steps[i].Cacheable {
+			p.Statuses[i] = layerStatusHit
+		}
+	}
+}
+
+// hitCount reports how many steps a resolved artifact covered.
+func (p *layerPlan) hitCount() int {
+	n := 0
+	for _, s := range p.Statuses {
+		if s == layerStatusHit {
+			n++
+		}
+	}
+	return n
+}
 
 // planSetupLayers derives the plan for the commands that run the setup phase
 // (`fuse up` and `fuse build`), or returns (nil, nil) when there is no reason
@@ -90,8 +118,13 @@ func buildLayerPlan(fusefilePath string, f *fusefile.Fusefile) (*layerPlan, erro
 	return plan, nil
 }
 
-// renderLayerPlan prints the derived plan. Every cacheable step reports as a
-// miss: there is no layer store to look keys up in yet.
+// renderLayerPlan prints the derived plan.
+//
+// `--plan` deliberately does not resolve anything, so every cacheable step
+// reports as a miss here. Resolution needs a target architecture, which needs
+// the fleet, and a command whose entire purpose is "show me what would happen"
+// should not depend on the orchestrator being reachable. The real hit/miss
+// breakdown is reported by the build itself.
 func renderLayerPlan(p *layerPlan) error {
 	if app.isJSON() {
 		return printJSON(p.jsonView())
@@ -113,10 +146,10 @@ func renderLayerPlan(p *layerPlan) error {
 
 	rows := make([][]string, 0, len(p.Steps))
 	for i, k := range p.Steps {
+		// only an uncacheable step needs a note: the reason it cannot be
+		// cached is not derivable from anything else on the row. for a
+		// cacheable step the status column already says everything.
 		note := k.Reason
-		if k.Cacheable {
-			note = "no layer store yet"
-		}
 		rows = append(rows, []string{
 			fmt.Sprintf("%d", k.Index),
 			string(p.Statuses[i]),
