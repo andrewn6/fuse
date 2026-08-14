@@ -34,8 +34,13 @@ Issues = "https://github.com/folsomintel/fuse/issues"
 
 [dependency-groups]
 dev = [
-    "pytest>=8",
-    "pytest-asyncio>=0.23",
+    # pytest 9.0.3 is the first release with the tmpdir fix (GHSA-6w46-j5rx-g56g)
+    # and it requires python >= 3.10. the package itself still supports 3.9, but
+    # the test suite only ever runs on the ci interpreter, so gate the test deps
+    # instead of holding the lock on a vulnerable pytest 8 for a 3.9 fork that
+    # nothing executes.
+    "pytest>=9.0.3; python_version >= '3.10'",
+    "pytest-asyncio>=0.23; python_version >= '3.10'",
     "respx>=0.21",
     "ruff>=0.5",
     "mypy>=1.10",
