@@ -6,7 +6,7 @@ description: The declarative spec format for a Fuse environment
 ---
 
 A **Fusefile** is the canonical, human-authored way to describe a Fuse environment:
-what image or rootfs to use, how much CPU/memory/storage/GPU it needs, what setup
+what image or rootfs to use, how much CPU/memory/storage/GPU it needs, what build
 and run commands to execute, what services to bring up alongside it, and what ports
 to expose.
 
@@ -70,8 +70,8 @@ version: 1
 # against the rootfs images baked on that host. omit for the host's default.
 image: worker-base
 
-# files materialized in the guest before setup runs. config and small code only;
-# the combined size is capped at 64KiB.
+# files materialized in the guest before the build steps run. config and small
+# code only; the combined size is capped at 64KiB.
 files:
   - path: config/app.yaml # relative paths resolve against the workspace
     source: ./app.yaml # read relative to this Fusefile, not the cwd
@@ -103,12 +103,14 @@ placement:
     disk: nvme
     tier: build
 
-# opt in to the setup layer cache. off by default.
+# opt in to the build layer cache. off by default.
 cache:
   enabled: true
 
-# convenience layer run once at boot, before run. compiles into startup_script.
-setup:
+# work that prepares the environment. runs to completion before run, and
+# compiles into startup_script ahead of it. `setup:` is the old name for this
+# block and still works; setting both is an error.
+build:
   # bare string form: one step, keyed on its bytes plus the step before it.
   - apt-get update -qq && apt-get install -y --no-install-recommends ripgrep
 
@@ -138,18 +140,18 @@ services:
     image: redis:7
     ports: [6379]
 
-# bound on setup + run. default 30s, ceiling is an operator setting (55s out of
-# the box). headroom for a slow setup, not a budget for a long one.
+# bound on build + run. default 30s, ceiling is an operator setting (55s out of
+# the box). headroom for a slow build, not a budget for a long one.
 startup_timeout: 55s
 
-# the main task entrypoint, compiled into startup_script (after setup). a plain
+# the main task entrypoint, compiled into startup_script (after build). a plain
 # string is interpreted by sh -lc; a list ["python", "app.py"] is an argv whose
 # elements are shell-quoted, so spaces, quotes, $, and globs in an argument
 # cannot alter the command. use the list form only when an argument would
 # otherwise be reinterpreted by the shell.
 run: ./start.sh
 
-# absolute path, created with `mkdir -p`. setup and run execute here.
+# absolute path, created with `mkdir -p`. the build steps and run execute here.
 # defaults to /workspace when omitted. see Workspace below for what does not
 # inherit it.
 workspace: /workspace
@@ -190,7 +192,7 @@ you can stop reading at [The setup layer cache](#the-setup-layer-cache).
 | --- | --- | --- |
 | `version` | int | Currently always `1`. A Fusefile is a single yaml document; anything after a second `---` is rejected rather than silently dropped. |
 | `image` | string | Name of a rootfs pre-baked on the host, **not** an OCI image ref. There is no OCI pull: fc-agent resolves it to `<IMAGES_DIR>/<image>.ext4` and qemu-agent to `<IMAGES_DIR>/<image>.qcow2`, and returns a 400 if no such file exists. An operator bakes and places it out of band (e.g. with `fc-bake-rootfs.sh`). Omit to use the baked base rootfs. See [Base images](#base-images-are-not-oci-images). |
-| `files` | list of `{path, source \| content, mode}` | Files written into the guest before `setup` runs. See [Files](#files). |
+| `files` | list of `{path, source \| content, mode}` | Files written into the guest before the `build` steps run. See [Files](#files). |
 | `resources.cpus` | int | Whole vCPU count. A whole-valued float (`2.0`) is accepted; a fraction (`0.5`) is rejected, because Firecracker takes an integer `vcpu_count` and QEMU an integer `-smp`. A negative count is rejected. Omitting it (or `0`) means "host default": the host agent boots the VM with 1 vCPU. |
 | `resources.memory` | string | A size, e.g. `2GB`. Compiles to `ram_mb`. See [Size units](#size-units). |
 | `resources.disk` | string | Size of the guest root disk, e.g. `10GB`. Compiles to `storage_gb`, rounded **up** to a whole GB, so `512MB` provisions 1GB. See [Size units](#size-units). |
@@ -200,18 +202,19 @@ you can stop reading at [The setup layer cache](#the-setup-layer-cache).
 | `resources.idle_timeout` | string | Go duration, minimum `1m`; compiles to `idle_timeout_seconds`. Destroys the environment once it has gone this long with no exec and no attach session. Omit for no idle expiry. |
 | `placement.host` | string | Pins the environment to an exact host id. A pin is not an override: the host must still be active, run the right backend, and fit the request. An unknown host id fails fast with a 404. |
 | `placement.labels` | map | Label selectors matched against the labels an operator declared with `fuse host register --label key=value`. Every pair must match (AND). A selector that matches no host is rejected immediately. |
-| `cache.enabled` | bool | Opt in to the setup layer cache. Off by default. |
-| `setup` | list of strings or steps | Commands run once at boot, before `run`. Compiled into `startup_script`. Each entry is either a bare string or a `{run, inputs, cache}` mapping. |
-| `setup[].run` | string | The step's shell command. Required in the mapping form. |
-| `setup[].inputs` | list of strings | Files (or directories, or globs) whose contents are hashed into the step's cache key. Relative to the Fusefile's directory; absolute and `..`-traversing paths are rejected. |
-| `setup[].cache` | bool | Set `false` to make the step uncacheable. Required for a step that reads secrets or has effects outside the rootfs. |
-| `setup[].workdir` | string | Directory this one step runs in. A relative path resolves against `workspace`; an absolute path is taken as-is. `..` segments are rejected. The step is emitted as a subshell, so the directory does not leak into the next step. See [Workspace](#workspace). |
+| `cache.enabled` | bool | Opt in to the build layer cache. Off by default. |
+| `build` | list of strings or steps | Steps that prepare the environment. They run once at boot, to completion, before `run`, and compile into `startup_script` ahead of it. Each entry is either a bare string or a `{run, inputs, cache, workdir}` mapping. See [Build and run](#build-and-run). |
+| `build[].run` | string | The step's shell command. Required in the mapping form. |
+| `build[].inputs` | list of strings | Files (or directories, or globs) whose contents are hashed into the step's cache key. Relative to the Fusefile's directory; absolute and `..`-traversing paths are rejected. |
+| `build[].cache` | bool | Set `false` to make the step uncacheable. Required for a step that reads secrets or has effects outside the rootfs. |
+| `build[].workdir` | string | Directory this one step runs in. A relative path resolves against `workspace`; an absolute path is taken as-is. `..` segments are rejected. The step is emitted as a subshell, so the directory does not leak into the next step. See [Workspace](#workspace). |
+| `setup` | list of strings or steps | **Deprecated alias for `build`**, kept accepted so every Fusefile written before the rename keeps working unchanged. It takes the same entries and compiles to the same bytes. Setting both `build` and `setup` is an error. |
 | `services` | map | In-VM services, each with `image`, `ports`, and `env`. Compiles to `manifest.services` plus a compose project. |
 | `services.*.ports` | list of ints | Container ports, each between 1 and 65535. |
 | `services.*.env.*` | literal or secret ref | Exactly one of `value` or `secret` must be set per entry. The variable name must not be empty. `{ secret: name }` resolves from the `secrets` you supply at `up` time. |
-| `run` | string or list of strings | The main entrypoint, compiled into `startup_script` after `setup`. A string is interpreted by `sh -lc`; a list is an argv, each element shell-quoted into a single command line so no argument is subject to word splitting, globbing, or metacharacter reinterpretation. The list form is not a shell-less `execve`: the generated command still runs inside `sh -lc`, so it protects arguments from shell interpretation rather than removing the shell. Use it only when an argument would otherwise be reinterpreted (spaces, quotes, `$`, globs). |
-| `startup_timeout` | string | Go duration bounding `setup` + `run`. Omit for the orchestrator default (30s). See [Startup timeout](#startup-timeout). |
-| `workspace` | string | Working directory for `setup` and `run`. Defaults to `/workspace`. Must be an absolute path with no `..` segments; the generated script `mkdir -p`s it and `cd`s into it. Services, `fuse environment exec`, and `fuse environment shell` do **not** inherit it. See [Workspace](#workspace). |
+| `run` | string or list of strings | The main entrypoint, compiled into `startup_script` after `build`. A string is interpreted by `sh -lc`; a list is an argv, each element shell-quoted into a single command line so no argument is subject to word splitting, globbing, or metacharacter reinterpretation. The list form is not a shell-less `execve`: the generated command still runs inside `sh -lc`, so it protects arguments from shell interpretation rather than removing the shell. Use it only when an argument would otherwise be reinterpreted (spaces, quotes, `$`, globs). |
+| `startup_timeout` | string | Go duration bounding `build` + `run`. Omit for the orchestrator default (30s). See [Startup timeout](#startup-timeout). |
+| `workspace` | string | Working directory for the `build` steps and `run`. Defaults to `/workspace`. Must be an absolute path with no `..` segments; the generated script `mkdir -p`s it and `cd`s into it. Services, `fuse environment exec`, and `fuse environment shell` do **not** inherit it. See [Workspace](#workspace). |
 | `expose` | list of `{port, as}` | Guest ports published externally. Each `port` is between 1 and 65535 and may appear only once. `as` is an optional name, unique across the list, in DNS-label form (lowercase letters, digits and dashes, alphanumeric at both ends, 63 chars max). |
 | `healthcheck` | `{http \| exec, interval, timeout, retries, start_period}` | The environment-level readiness probe. Exactly one of `http` and `exec`. Omit the whole block for no probe. See [Healthcheck](#healthcheck). |
 | `healthcheck.http` | `{port, path}` | An HTTP GET inside the guest; a 2xx or 3xx response passes. `port` is between 1 and 65535 and needs no matching `expose` entry, because the probe runs in-guest. `path` must start with `/` and defaults to `/`. |
@@ -221,6 +224,61 @@ you can stop reading at [The setup layer cache](#the-setup-layer-cache).
 | `healthcheck.retries` | int | Consecutive failures that flip the verdict to `failing`. Omit for the guest agent's default (`3`). A single failed attempt is never a verdict. |
 | `healthcheck.start_period` | string | Go duration measured from the first attempt, during which failures are not counted. It ends for good once the probe passes once. |
 | `secrets` | list of strings | Secret *names* this environment requires. An empty name is rejected: nothing you could pass to `--secret` would satisfy it. Values are supplied out-of-band via `--secret key=value` or `--secrets-file`, never written into the Fusefile itself. |
+
+## Build and run
+
+`build` and `run` are two phases of one boot. Every `build` step runs to
+completion first, in the `workspace`, and only then does `run` start. Both
+compile into the single `startup_script` the orchestrator executes during
+create.
+
+They are emitted as two distinguishable halves rather than one flat
+concatenation. The script reaches the guest as a single `sh -lc` with both
+output streams discarded, so its exit status is the only thing that comes back,
+and a build failure has to be told apart from a task failure:
+
+```sh
+set -eu
+if (set -o pipefail) 2>/dev/null; then set -o pipefail; fi
+mkdir -p '/workspace'
+cd '/workspace'
+# fuse: build phase (a failure here exits 90)
+trap '[ $? -eq 0 ] || exit 90' EXIT
+npm ci
+trap - EXIT
+# fuse: run phase
+./start.sh
+```
+
+A failing build step exits **90**, whatever status the step itself returned. The
+trap is cleared before `run`, so a failing `run` still reports its own status
+unchanged. A Fusefile with no build steps has only one phase, so it carries no
+markers and compiles to exactly the script it always did.
+
+Nothing here makes `build` cacheable on its own: the steps rerun on every boot
+unless you opt into [the layer cache](#the-setup-layer-cache) or bake them into
+an artifact with [`fuse build`](/reference/cli/build).
+
+### `setup` is the old name for `build`
+
+`setup:` is a deprecated alias, kept accepted so every Fusefile written before
+the rename keeps working. It takes the same entries, derives the same layer
+keys, and compiles to the same bytes:
+
+```yaml
+build:
+  - npm ci
+```
+
+```yaml
+# the same file, in the old spelling
+setup:
+  - npm ci
+```
+
+Setting both is an error rather than a merge. They are one field under two
+names, so concatenating them would run steps in an order nobody wrote, and
+picking a winner would silently drop half the file.
 
 ## Size units
 
@@ -378,12 +436,12 @@ is a host-local rootfs name.
 
 To get a custom base, either bake a rootfs on the host (`fc-bake-rootfs.sh`, or
 `qemu-bake-cuda-rootfs.sh` for GPU hosts) or run
-[`fuse build`](/reference/cli/build), which runs your `setup` phase once and
+[`fuse build`](/reference/cli/build), which runs your `build` phase once and
 snapshots the result into a bootable artifact.
 
 ## Workspace
 
-`workspace` is the directory `setup` and `run` execute in. It defaults to
+`workspace` is the directory the `build` steps and `run` execute in. It defaults to
 `/workspace`, and it must be an absolute path with no `..` segments. The
 compiled startup script creates it and moves into it before anything else runs:
 
@@ -394,17 +452,17 @@ cd '/srv/app'
 
 The path is shell-quoted, so a space or a quote in it is safe. A relative
 `files[].path` resolves against the workspace, and so does a relative
-`setup[].workdir`.
+`build[].workdir`.
 
 ### Scoping one step to a directory
 
-A setup step written as a mapping can set `workdir`, which runs that step
+A build step written as a mapping can set `workdir`, which runs that step
 somewhere else without disturbing the others:
 
 ```yaml
 workspace: /srv/app
 
-setup:
+build:
   - npm ci # runs in /srv/app
   - workdir: web # runs in /srv/app/web
     run: npm run build
@@ -415,7 +473,7 @@ run: node server.js
 The step compiles to `(cd 'web'; npm run build)`. The subshell is what keeps
 the directory scoped, so the next step still starts in the workspace.
 
-Only the **directory** is scoped. All setup steps share a single shell, so
+Only the **directory** is scoped. All build steps share a single shell, so
 `set -eu`, exported variables, and any shell options a step sets still carry
 across into the steps after it. If you need a variable to stay local to one
 step, scope it yourself.
@@ -437,7 +495,7 @@ workspace.
 
 ## Files
 
-`files` writes files into the guest before `setup` runs, so setup and run can
+`files` writes files into the guest before the `build` steps run, so build and run can
 read config, scripts, and small source trees that live next to the Fusefile
 rather than being fetched at boot.
 
@@ -465,17 +523,17 @@ in a file is expanded by the shell.
 The startup script reaches the guest as a single shell argument, which Linux
 caps at 128 KiB, so the combined size of `files` is capped at **64 KiB**.
 Exceeding it is a compile error at `fuse up`, not a boot failure. Model weights,
-datasets, and container layers do not belong here. Fetch those from `setup` (or
+datasets, and container layers do not belong here. Fetch those from a build step (or
 bake them in with `fuse build`), where they stream directly into the guest.
 :::
 
 Files are rewritten on every boot, including a `fuse up --from-build` boot that
-skips `setup`, since they are authoring inputs that may have changed since the
+skips the build steps, since they are authoring inputs that may have changed since the
 artifact was baked.
 
 ## Startup timeout
 
-`setup` and `run` compile into one `startup_script` that the orchestrator runs
+`build` and `run` compile into one `startup_script` that the orchestrator runs
 **synchronously inside the create request**. `startup_timeout` bounds it:
 
 ```yaml
@@ -490,18 +548,18 @@ setting (`-max-startup-script-timeout`, 55s by default, which must stay under
 the server's `-write-timeout`). Asking for more than the ceiling is refused with
 a 400 naming the maximum, rather than being silently clamped to it.
 
-So this field is headroom for a setup phase that is a little slow, not a budget
-for one that is genuinely long. A setup that installs packages or pulls a model
+So this field is headroom for a build phase that is a little slow, not a budget
+for one that is genuinely long. A build that installs packages or pulls a model
 will not fit under any allowed value. Move that work into an image instead:
 
 ```bash
-fuse build                    # runs setup once, on the 600s exec path
-fuse up --from-build <id>     # boots the result, skipping setup entirely
+fuse build                    # runs the build steps once, on the 600s exec path
+fuse up --from-build <id>     # boots the result, skipping them entirely
 ```
 
 ## The setup layer cache
 
-`setup` steps compile into one startup script that re-runs in full on every
+`build` steps compile into one startup script that re-runs in full on every
 `fuse up`. `cache: {enabled: true}` opts the Fusefile into content-addressed
 layers, so a step whose inputs have not changed can be skipped instead of rerun.
 Caching is opt-in: a layer is a rootfs captured mid-provisioning, so it is a
@@ -516,7 +574,7 @@ layer_key(i) = sha256(
     parent_key(i) + "\n" +     // layer_key(i-1); the base key for i == 0
     step_script(i) + "\n" +    // the step's `run` string, byte for byte
     inputs_digest(i) + "\n" +
-    workspace)                 // setup runs after `cd <workspace>`
+    workspace)                 // the steps run after `cd <workspace>`
 
 base_key      = "image:" + sha256(<base image reference> + the `files` block)
 inputs_digest = sha256 over the sorted list of
@@ -545,7 +603,7 @@ that actually built it, and lookups filter on it separately. See
 [The layer cache](/docs/concepts/layer-cache).
 
 A step that reads `/fuse/secrets.json`, or has effects outside the rootfs, must
-set `cache: false`. Secrets are written to disk before `setup` runs, so a layer
+set `cache: false`. Secrets are written to disk before the build steps run, so a layer
 captured after such a step would bake secret material into a rootfs keyed on
 content that excludes those secrets, and a later `up` with rotated values would
 get a hit. Declaring `inputs` on an uncacheable step is an error.
@@ -553,7 +611,7 @@ get a hit. Declaring `inputs` on an uncacheable step is an error.
 One hard limit: a GPU environment gets no caching at all, because GPU
 environments run on the qemu backend, whose snapshot endpoints hard-501 since a
 vfio device cannot be checkpointed. That is worth knowing early, as those are
-often the hosts with the most expensive `setup:` phases.
+often the hosts with the most expensive `build:` phases.
 
 Layers are stored on the host that built them, but they are no longer confined
 to it: a host that needs a layer it does not have fetches it directly from a host
@@ -568,12 +626,12 @@ fuse build --plan
 ```
 
 Both print the same plan: there is one key derivation, shared by the two commands
-that run the setup phase. `--no-cache` on either ignores the `cache` block for
+that run the build phase. `--no-cache` on either ignores the `cache` block for
 one run.
 
 [`fuse build`](/reference/cli/build) is the more useful of the two, since it is
-the command that runs `setup:` on its own and captures the result. On a
-[`fuse up --from-build`](/reference/cli/up) boot, `setup:` does not run at all,
+the command that runs `build:` on its own and captures the result. On a
+[`fuse up --from-build`](/reference/cli/up) boot, `build:` does not run at all,
 so there is no layer plan for it and `--plan` and `--no-cache` are rejected
 there rather than silently ignored.
 
