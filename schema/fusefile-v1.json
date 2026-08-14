@@ -25,6 +25,11 @@
       "description": "Files materialized in the guest before the build steps run. Total content is capped at 64KiB.",
       "items": { "$ref": "#/$defs/file" }
     },
+    "copy": {
+      "type": "array",
+      "description": "Local files and directories shipped into the guest before the build steps run. Uploaded alongside the create request rather than embedded in the startup script, so the combined size is capped at 512KiB. Permissions are not preserved: chmod in build.",
+      "items": { "$ref": "#/$defs/copyEntry" }
+    },
     "build": {
       "type": "array",
       "description": "Steps that prepare the environment. They run to completion, in the workspace, before run.",
@@ -188,6 +193,24 @@
           "type": "string",
           "description": "Octal permission string, e.g. \"0755\".",
           "pattern": "^0?[0-7]{3}$"
+        }
+      }
+    },
+    "copyEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["from", "to"],
+      "properties": {
+        "from": {
+          "type": "string",
+          "minLength": 1,
+          "description": "A file or directory on the authoring machine, relative to the Fusefile. A directory is walked into one upload per regular file; a symlink is an error."
+        },
+        "to": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Where it lands in the guest. A relative path resolves against the workspace. No '..' segments, and nothing under /fuse, which belongs to the guest agent.",
+          "not": { "pattern": "(^|/)\\.\\.(/|$)" }
         }
       }
     },
