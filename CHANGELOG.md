@@ -1,5 +1,28 @@
 # Changelog
 
+## [0.19.0](https://github.com/folsomintel/fuse/compare/v0.18.0...v0.19.0) (2026-08-14)
+
+
+### Features
+
+* **api:** expose layer keys, arch filters and a resolve endpoint ([6de04bf](https://github.com/folsomintel/fuse/commit/6de04bf9db2b0e5567b3f3a87aacd80be647a6de))
+* **cli:** build and boot from the setup layer cache ([ac05d40](https://github.com/folsomintel/fuse/commit/ac05d408a4798a0068e79d65cd38d6afef1245b9))
+* content-addressed build layers with peer-to-peer artifact transfer ([d438ac8](https://github.com/folsomintel/fuse/commit/d438ac808a9111f075cd63a48feb2807aba001e4))
+* **fusefile:** render setup steps as ranges, not only as one blob ([edc6a83](https://github.com/folsomintel/fuse/commit/edc6a833e721ca397b97c7a8c3275f842f4ca39e))
+* **fusefile:** take arch out of the layer key preimage ([4112653](https://github.com/folsomintel/fuse/commit/4112653d3682964b2395c0225085d208c696243b))
+* **host-agent:** hash artifacts and serve them to peer agents ([0c011bb](https://github.com/folsomintel/fuse/commit/0c011bb7826718b5c22a9aa1fa872335a94e9fc0))
+* **hostwire:** mint artifact grants and verify streamed transfers ([84089e7](https://github.com/folsomintel/fuse/commit/84089e761d73e7c39c90be8e99e2e564831b4a5e))
+* **orchestrator:** persist and look up build layers by cache key ([8733afb](https://github.com/folsomintel/fuse/commit/8733afb19c1a97e22fa8fc3cab57b6599c3c29f9))
+* **orchestrator:** prefer hosts holding an artifact and pull when none can ([d64b77f](https://github.com/folsomintel/fuse/commit/d64b77f1444f23beb10028a738c56bb38f917a01))
+* **sdks:** add the layer resolve and label operations ([939c938](https://github.com/folsomintel/fuse/commit/939c938c99d41c3690a5c19b773e30fceaa34497))
+* **sdks:** mirror layer key, arch and digest across all three sdks ([3312bd3](https://github.com/folsomintel/fuse/commit/3312bd3188fa8cf5f5a0ed8b0fb34bce0706e2b2))
+
+
+### Bug Fixes
+
+* **host-agent:** keep request data out of artifact paths and headers ([a0b736e](https://github.com/folsomintel/fuse/commit/a0b736e505963ae41c7061f49fa527beb189749a))
+* **orchestrator:** file layer artifacts under the caller's scope ([4d5bfe6](https://github.com/folsomintel/fuse/commit/4d5bfe6492f8a98367c460f600976c36d03ef794))
+
 ## [0.18.0](https://github.com/folsomintel/fuse/compare/v0.17.0...v0.18.0) (2026-08-10)
 
 
