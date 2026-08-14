@@ -242,6 +242,22 @@ type SnapshotDeleter interface {
 	DeleteCheckpoint(ctx context.Context, checkpointID string) error
 }
 
+// SnapshotDigester is an optional companion to SnapshotCapable for backends
+// that hash the artifact while they write it. It exists as a separate
+// interface rather than a wider Checkpoint signature because the digest is
+// only ever available at creation time: the host agent computes it inline
+// over the rootfs it just copied, and nothing recomputes it afterwards, so
+// ListCheckpoints cannot supply it and changing Checkpoint's signature would
+// churn every backend and caller for a value most of them cannot produce.
+//
+// An environment that does not implement this (the in-memory stub, qemu)
+// simply yields no digest, which is not an error: the digest is an integrity
+// check on a later transfer of those bytes, never an identity a lookup
+// depends on.
+type SnapshotDigester interface {
+	CheckpointWithDigest(ctx context.Context, comment string) (Checkpoint, error)
+}
+
 // CapacityProber is implemented by providers that can report the real
 // hardware capacity of the host they front (CPU count, total RAM, free
 // disk, GPU inventory) instead of trusting operator-declared numbers. The
@@ -344,6 +360,13 @@ type Checkpoint struct {
 	Comment   string
 	SizeBytes int64
 	CreatedAt time.Time
+
+	// Digest is the hex sha256 the host agent computed over the artifact as it
+	// wrote it, or "" from an agent (or a backend) that does not hash. It
+	// verifies a later transfer of these exact bytes and nothing else: two
+	// builds of the same recipe produce different rootfs bytes, so it is never
+	// an identity two artifacts can share and never a cache key.
+	Digest string
 }
 
 // BootResult is returned after provisioning or restoring an environment.
