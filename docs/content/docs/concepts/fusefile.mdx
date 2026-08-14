@@ -159,6 +159,19 @@ expose:
   - port: 8080
     as: http
 
+# environment-level readiness probe: one verdict for whether the whole sandbox
+# is doing its job, reported back to the control plane. exactly one of http and
+# exec. see Healthcheck below.
+healthcheck:
+  http:
+    port: 8080
+    path: /healthz
+  # exec: ["/app/ready", "--check"]
+  interval: 5s      # how often to re-check
+  timeout: 2s       # bound on one attempt; must not exceed interval
+  retries: 12       # consecutive failures that flip the verdict to failing
+  start_period: 10s # grace window before failures are counted
+
 # secret names this environment requires. values are supplied out-of-band
 # (cli flag / env / secret store), never written in the Fusefile.
 secrets:
@@ -200,6 +213,13 @@ you can stop reading at [The setup layer cache](#the-setup-layer-cache).
 | `startup_timeout` | string | Go duration bounding `setup` + `run`. Omit for the orchestrator default (30s). See [Startup timeout](#startup-timeout). |
 | `workspace` | string | Working directory for `setup` and `run`. Defaults to `/workspace`. Must be an absolute path with no `..` segments; the generated script `mkdir -p`s it and `cd`s into it. Services, `fuse environment exec`, and `fuse environment shell` do **not** inherit it. See [Workspace](#workspace). |
 | `expose` | list of `{port, as}` | Guest ports published externally. Each `port` is between 1 and 65535 and may appear only once. `as` is an optional name, unique across the list, in DNS-label form (lowercase letters, digits and dashes, alphanumeric at both ends, 63 chars max). |
+| `healthcheck` | `{http \| exec, interval, timeout, retries, start_period}` | The environment-level readiness probe. Exactly one of `http` and `exec`. Omit the whole block for no probe. See [Healthcheck](#healthcheck). |
+| `healthcheck.http` | `{port, path}` | An HTTP GET inside the guest; a 2xx or 3xx response passes. `port` is between 1 and 65535 and needs no matching `expose` entry, because the probe runs in-guest. `path` must start with `/` and defaults to `/`. |
+| `healthcheck.exec` | list of strings | An argv run inside the guest; exit status 0 passes. An argv rather than a shell string, so no element can be reinterpreted as a pipeline, a redirect, or a glob. |
+| `healthcheck.interval` | string | Go duration between attempts. Omit for the guest agent's default (`10s`). |
+| `healthcheck.timeout` | string | Go duration bounding one attempt. Omit for the guest agent's default (`2s`). Attempts run one at a time, so a value above `interval` is rejected rather than silently stretching the interval. |
+| `healthcheck.retries` | int | Consecutive failures that flip the verdict to `failing`. Omit for the guest agent's default (`3`). A single failed attempt is never a verdict. |
+| `healthcheck.start_period` | string | Go duration measured from the first attempt, during which failures are not counted. It ends for good once the probe passes once. |
 | `secrets` | list of strings | Secret *names* this environment requires. An empty name is rejected: nothing you could pass to `--secret` would satisfy it. Values are supplied out-of-band via `--secret key=value` or `--secrets-file`, never written into the Fusefile itself. |
 
 ## Size units
@@ -258,6 +278,91 @@ down once its window elapses. If that is your workload, do not set `idle_timeout
 Detection runs on the reconcile loop (30s ticks) and requires two consecutive
 observations, so real teardown lands roughly one to two ticks after the window
 elapses. That is why the minimum accepted value is `1m`.
+
+## Healthcheck
+
+Without a `healthcheck:` block, an environment reaching `running` means one
+thing: a process was started on the host and the startup script returned.
+Nothing dialled your app. A guest whose workload panicked stays `running` until
+it trips `max_runtime`, because the only liveness signal the control plane has
+is that the VM still exists.
+
+`healthcheck:` is the block that closes that gap. It declares one probe, whose
+one verdict answers "is this sandbox doing its job".
+
+```yaml
+healthcheck:
+  http:
+    port: 8080
+    path: /healthz
+  interval: 5s
+  timeout: 2s
+  retries: 12
+  start_period: 10s
+```
+
+Exactly one of `http` and `exec` is set. Two probes would produce two verdicts,
+and the point of the block is that there is one:
+
+```yaml
+healthcheck:
+  exec: ["/app/ready", "--check"]
+```
+
+The probe runs **inside the guest**, in the guest agent. An `http` probe dials
+`127.0.0.1:<port>` there, so the port needs no `expose` entry: the question is
+whether the app is serving, not whether anything outside can reach it. An `exec`
+probe runs the argv directly with no shell.
+
+### How a verdict is reached
+
+The verdict is one of three values:
+
+| Verdict | Meaning |
+| --- | --- |
+| `starting` | The probe has not passed yet and is still inside `start_period`, so failures are not being counted. |
+| `passing` | The most recent attempt succeeded. |
+| `failing` | The probe failed `retries` times in a row after `start_period` ended. |
+
+A single failed attempt is never a verdict, which is what `retries` is for. A
+success resets the failure count and clears the last error, so a `passing`
+environment never carries stale detail from before it recovered.
+
+`start_period` is a grace window on failures only, measured from the first
+attempt. It ends for good on the first success: an app that came up and then
+fell over is `failing`, not still `starting`.
+
+Every timing you omit is filled in by the guest agent, not by the Fusefile
+compiler or the orchestrator, so there is exactly one place each default lives.
+`fuse compile` prints omitted ones as `(guest default)` rather than as `0`.
+
+### What it does and does not do
+
+The verdict is **reported, not acted on**. It surfaces on the environment
+(`fuse environment get`, the `health` field on every SDK's environment type)
+and it is what [`fuse up --wait-healthy`](/reference/cli/up#waiting-for-healthy)
+waits for. That is all it does:
+
+- It is not a lifecycle state. `state` stays `running` whatever the probe says,
+  because `state`'s vocabulary is a closed set every SDK reasons about and an
+  unhealthy environment is still a running one.
+- **Nothing is destroyed for a failing probe.** The only destructive predicates
+  in [reconciliation](/docs/concepts/reconcile) remain the age and idle
+  ceilings. Report first, act later.
+- The orchestrator reads the verdict back on its reconcile tick (30s by
+  default), so what you read lags the guest by up to a tick.
+
+### Not the same as `services.*.healthcheck`
+
+The two blocks share a name and answer different questions.
+
+`services.<name>.healthcheck` is compose-native. It governs one container, is
+evaluated by the guest's `docker compose`, and a container it marks unhealthy is
+unhealthy *inside the guest*: nothing about it reaches the orchestrator.
+
+The top-level `healthcheck:` is about the environment as a whole, is evaluated
+by the guest agent, and its verdict travels back to the control plane. Both can
+be set on the same Fusefile; they do not interact.
 
 ## Base images are not OCI images
 

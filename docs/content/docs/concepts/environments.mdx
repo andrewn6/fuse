@@ -36,6 +36,22 @@ on the environment.
 
 Draining does not auto-destroy. A subsequent explicit destroy call removes the VM.
 
+## Health is not a state
+
+`running` means the VM is up and the guest agent is reachable. It does not mean
+your workload is serving: nothing dials it.
+
+An environment created with a [`healthcheck`](/docs/concepts/fusefile#healthcheck)
+carries a separate `health` field, whose `state` is `starting`, `passing`, or
+`failing`. It is deliberately not folded into the lifecycle vocabulary above: that
+set is closed and every SDK reasons about it, and an unhealthy environment is
+still a running one.
+
+Nothing is destroyed for a failing probe. The field reports, and
+[`fuse up --wait-healthy`](/reference/cli/up#waiting-for-healthy) is what turns
+it into a gate. An environment that declared no healthcheck never carries the
+field at all.
+
 ## Creating one
 
 Two paths: compile a [Fusefile](/docs/concepts/fusefile) with `fuse up`, or
