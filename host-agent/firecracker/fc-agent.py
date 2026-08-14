@@ -1774,7 +1774,20 @@ class Handler(BaseHTTPRequestHandler):
                     if action == "snapshot" and method == "POST":
                         body = self._read_json()
                         rec = snapshot_create(vm_id, body.get("comment", ""))
-                        return self._json(200, {"snapshot_id": rec["snapshot_id"]})
+                        # the digest goes back on the response because this is
+                        # the only moment it is available to the caller: it is
+                        # computed while the artifact is written and nothing
+                        # upstream recomputes it. returning only the id meant the
+                        # control plane stored an empty digest for every
+                        # artifact, so nothing a peer later pulled could be
+                        # verified against anything.
+                        return self._json(
+                            200,
+                            {
+                                "snapshot_id": rec["snapshot_id"],
+                                "digest": rec.get("digest", ""),
+                            },
+                        )
                     if action == "snapshots" and method == "GET":
                         return self._json(200, {"snapshots": snapshot_list(vm_id)})
                     if action == "restore" and method == "POST":
