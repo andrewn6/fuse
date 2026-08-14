@@ -115,6 +115,13 @@ placement:
 cache:
   enabled: true
 
+# environment variables for every build step and for run. same value-or-secret
+# grammar as services.<name>.env. services do not inherit these.
+env:
+  NODE_ENV: { value: production }
+  PORT: { value: "8080" }
+  DATABASE_URL: { secret: db_url } # requires db_url, listing it below is optional
+
 # work that prepares the environment. runs to completion before run, and
 # compiles into startup_script ahead of it. `setup:` is the old name for this
 # block and still works; setting both is an error.
@@ -214,6 +221,8 @@ you can stop reading at [The setup layer cache](#the-setup-layer-cache).
 | `placement.host` | string | Pins the environment to an exact host id. A pin is not an override: the host must still be active, run the right backend, and fit the request. An unknown host id fails fast with a 404. |
 | `placement.labels` | map | Label selectors matched against the labels an operator declared with `fuse host register --label key=value`. Every pair must match (AND). A selector that matches no host is rejected immediately. |
 | `cache.enabled` | bool | Opt in to the build layer cache. Off by default. |
+| `env` | map | Environment variables set for every `build` step and for `run`. Services do **not** inherit them, and neither do `fuse environment exec` and `fuse environment shell`. See [Environment variables](#environment-variables). |
+| `env.*` | literal or secret ref | Exactly one of `value` or `secret` must be set per entry, the same grammar as `services.*.env.*`. The name must be a shell identifier (`[A-Za-z_][A-Za-z0-9_]*`); an empty or malformed name is rejected. `{ secret: name }` requires that secret, so listing it under `secrets` is optional. |
 | `build` | list of strings or steps | Steps that prepare the environment. They run once at boot, to completion, before `run`, and compile into `startup_script` ahead of it. Each entry is either a bare string or a `{run, inputs, cache, workdir}` mapping. See [Build and run](#build-and-run). |
 | `build[].run` | string | The step's shell command. Required in the mapping form. |
 | `build[].inputs` | list of strings | Files (or directories, or globs) whose contents are hashed into the step's cache key. Relative to the Fusefile's directory; absolute and `..`-traversing paths are rejected. |
@@ -655,6 +664,59 @@ To see what all of this leaves, run
 [`fuse up --show-copy`](/reference/cli/up#seeing-what-copy-ships), which prints
 each entry's file count and size, and how much was dropped by your patterns
 versus by the defaults, before anything is created.
+## Environment variables
+
+`env` sets variables for every `setup` step and for `run`. It takes the same
+value-or-secret entries as `services.*.env`, so there is one env shape in the
+file:
+
+```yaml
+env:
+  NODE_ENV: { value: production }
+  DATABASE_URL: { secret: db_url }
+
+setup:
+  - npm ci
+run: node server.js
+```
+
+A name must be a shell identifier: a letter or underscore followed by letters,
+digits and underscores. `NODE-ENV` and `2FAST` are rejected at compile time.
+
+Referencing a secret **requires** it, the same way a service's env ref does, so
+`db_url` above does not also have to appear under `secrets`. A missing value
+fails `fuse up` before anything is created.
+
+### Values are never written into the startup script
+
+The compiled startup script reaches the guest as a single `sh -lc` argument,
+which means its text is visible in the host's process table for as long as the
+boot takes. So a secret is not interpolated into it. The compiled manifest
+carries the `env` block instead, the orchestrator resolves each reference and
+writes the result to `/fuse/env` in the guest, and the script sources that path:
+
+```sh
+set -a
+. /fuse/env
+set +a
+```
+
+Only the path is ever in the script. `/fuse` is mounted on tmpfs in the guest,
+so the resolved values never reach persistent storage either. `set -a` is what
+exports them, so setup, `run`, and anything they spawn all inherit them.
+
+### What does not see them
+
+- **Services.** A service gets its environment from its own `services.*.env`
+  block. Inheriting the machine-wide one would push values into a container
+  that never asked for them, so it is deliberate rather than unimplemented.
+- **`fuse environment exec` and `fuse environment shell`.** Both reach the
+  guest over SSH without sourcing anything, so a variable set here is scoped to
+  the boot-time script. Source `/fuse/env` yourself if you need it in a shell.
+- **`fuse build`.** The setup phase runs there through the exec path, and layer
+  keys are derived from the setup fragments alone, so build scripts do not
+  source the env file. A step that needs a value during a bake should read it
+  from `/fuse/secrets.json` with `cache: false`.
 
 ## Startup timeout
 
