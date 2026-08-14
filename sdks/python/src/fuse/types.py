@@ -14,6 +14,14 @@ STATE_DESTROYED = "destroyed"
 STATE_FAILED = "failed"
 
 
+# verdicts carried in Health.state. separate from the lifecycle states above on
+# purpose: a failing probe reports, it does not move the environment anywhere
+# new.
+HEALTH_STARTING = "starting"
+HEALTH_PASSING = "passing"
+HEALTH_FAILING = "failing"
+
+
 def is_terminal_state(state: str) -> bool:
     # reports whether state is a terminal lifecycle state.
     return state in (STATE_DESTROYED, STATE_FAILED)
@@ -65,6 +73,59 @@ class Endpoint(_Model):
     port: int = 0
 
 
+class HealthcheckHttp(_Model):
+    # an http get against a port inside the guest. the probe runs in-guest, so
+    # the port needs no matching expose entry.
+    port: int
+    # request path, which must start with a slash. none means "/".
+    path: Optional[str] = None
+
+
+class HealthcheckSpec(_Model):
+    # the environment-level readiness probe (the fusefile's `healthcheck:`
+    # block). exactly one of http and exec must be set; the server rejects a
+    # request that sets both or neither.
+    #
+    # this is not the per-service compose healthcheck that can appear inside a
+    # manifest: that one governs a single container and never reaches the
+    # control plane. this one is evaluated by the guest agent over the whole
+    # environment and its verdict comes back on EnvironmentInfo.health.
+    #
+    # every duration is in seconds, and none or 0 means "omitted, use the guest
+    # agent's default". the server substitutes no defaults of its own, because
+    # the probe executes in the guest.
+    http: Optional[HealthcheckHttp] = None
+    # an argv run inside the guest. exit status 0 passes.
+    exec: Optional[list[str]] = None
+    # seconds between attempts. none or 0 for the guest agent default (10s).
+    interval_seconds: Optional[int] = None
+    # bound on one attempt, in seconds. none or 0 for the guest agent default
+    # (2s). attempts run one at a time, so a value above interval_seconds is
+    # rejected rather than silently stretching the interval.
+    timeout_seconds: Optional[int] = None
+    # consecutive failures that flip the verdict to failing. none or 0 for the
+    # guest agent default (3).
+    retries: Optional[int] = None
+    # grace window from the first attempt during which failures are not
+    # counted. it ends for good once the probe passes once.
+    start_period_seconds: Optional[int] = None
+
+
+class Health(_Model):
+    # the last verdict of an environment's healthcheck.
+    #
+    # deliberately not folded into EnvironmentInfo.state: that vocabulary is a
+    # closed set clients reason about, and an unhealthy environment is still a
+    # running one. nothing tears an environment down for a failing probe.
+    state: str = ""
+    # when the probe entered this state.
+    since: Optional[datetime] = None
+    # consecutive failed attempts. zero while passing.
+    failures: int = 0
+    # the last attempt's failure detail. empty while passing.
+    message: str = ""
+
+
 class CreateRequest(_Model):
     # body for client.environments.create.
     task_id: str
@@ -75,6 +136,11 @@ class CreateRequest(_Model):
     gateway_url: Optional[str] = None
     gateway_token: Optional[str] = None
     expose: Optional[list[ExposeSpec]] = None
+    # environment-level readiness probe. none for an environment with no probe,
+    # in which case EnvironmentInfo.health is never populated. it is not
+    # evaluated inside create: the call returns as soon as the vm is up, and
+    # the verdict arrives on later reads.
+    healthcheck: Optional[HealthcheckSpec] = None
 
 
 class EnvironmentInfo(_Model):
@@ -89,6 +155,11 @@ class EnvironmentInfo(_Model):
     updated_at: Optional[datetime] = None
     error: str = ""
     endpoints: list[Endpoint] = Field(default_factory=list)
+    # last verdict of the environment-level healthcheck. none when the
+    # environment declared no healthcheck, and none until the first verdict has
+    # been read back from the guest. the server refreshes it on its reconcile
+    # tick (30s by default), so it lags the guest by up to a tick.
+    health: Optional[Health] = None
 
 
 class ForkOptions(_Model):

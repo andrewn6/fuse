@@ -16,6 +16,9 @@ from .errors import (
     is_unavailable,
 )
 from .types import (
+    HEALTH_FAILING,
+    HEALTH_PASSING,
+    HEALTH_STARTING,
     STATE_DESTROYED,
     STATE_DESTROYING,
     STATE_DRAINING,
@@ -34,6 +37,9 @@ from .types import (
     ExposeSpec,
     ForkOptions,
     GPUDevice,
+    Health,
+    HealthcheckHttp,
+    HealthcheckSpec,
     Host,
     HostCapacity,
     HostPage,
@@ -68,6 +74,9 @@ __all__ = [
     "Spec",
     "ExposeSpec",
     "Endpoint",
+    "HealthcheckSpec",
+    "HealthcheckHttp",
+    "Health",
     "CreateRequest",
     "EnvironmentInfo",
     "EnvironmentPage",
@@ -94,4 +103,7 @@ __all__ = [
     "STATE_DESTROYING",
     "STATE_DESTROYED",
     "STATE_FAILED",
+    "HEALTH_STARTING",
+    "HEALTH_PASSING",
+    "HEALTH_FAILING",
 ]

@@ -46,6 +46,64 @@ type Endpoint struct {
 	Port int    `json:"port"`
 }
 
+// HealthcheckSpec is the environment-level readiness probe (the Fusefile's
+// `healthcheck:` block). Exactly one of HTTP and Exec must be set; the server
+// rejects a request that sets both or neither.
+//
+// It is not the per-service compose healthcheck that can appear inside a
+// manifest: that one governs a single container and never reaches the control
+// plane. This one is evaluated by the guest agent over the environment as a
+// whole and its verdict comes back on EnvironmentInfo.Health.
+//
+// Every duration is in seconds, and zero means "omitted, use the guest agent's
+// default". The server substitutes no defaults of its own, because the probe
+// executes in the guest.
+type HealthcheckSpec struct {
+	HTTP *HealthcheckHTTP `json:"http,omitempty"`
+	Exec []string         `json:"exec,omitempty"`
+
+	IntervalSeconds    int64 `json:"interval_seconds,omitempty"`
+	TimeoutSeconds     int64 `json:"timeout_seconds,omitempty"`
+	Retries            int   `json:"retries,omitempty"`
+	StartPeriodSeconds int64 `json:"start_period_seconds,omitempty"`
+}
+
+// HealthcheckHTTP is an HTTP GET against a port inside the guest. The probe
+// runs in-guest, so the port needs no matching ExposeSpec.
+type HealthcheckHTTP struct {
+	Port int    `json:"port"`
+	Path string `json:"path,omitempty"`
+}
+
+// Health is the last verdict of an environment's healthcheck. State is one of
+// the Health* constants below.
+//
+// It is deliberately not folded into EnvironmentInfo.State: that vocabulary is
+// a closed set IsSettledState reasons about, and an unhealthy environment is
+// still a running one. Nothing tears an environment down for a failing probe.
+type Health struct {
+	State string `json:"state"`
+	// Since is when the probe entered State.
+	Since time.Time `json:"since,omitempty"`
+	// Failures is the count of consecutive failed attempts, zero while
+	// passing.
+	Failures int `json:"failures,omitempty"`
+	// Message is the last attempt's failure detail, empty while passing.
+	Message string `json:"message,omitempty"`
+}
+
+// Verdicts carried in Health.State.
+const (
+	// HealthStarting means the probe has not passed yet and is still inside
+	// its start period, so failures are not being counted.
+	HealthStarting = "starting"
+	// HealthPassing means the most recent attempt succeeded.
+	HealthPassing = "passing"
+	// HealthFailing means the probe failed its configured retries in a row
+	// after the start period ended.
+	HealthFailing = "failing"
+)
+
 // CreateRequest is the body for client.Create.
 type CreateRequest struct {
 	TaskID         string            `json:"task_id"`
@@ -56,6 +114,12 @@ type CreateRequest struct {
 	GatewayURL     string            `json:"gateway_url,omitempty"`
 	GatewayToken   string            `json:"gateway_token,omitempty"`
 	Expose         []ExposeSpec      `json:"expose,omitempty"`
+
+	// Healthcheck is the environment-level readiness probe. Omit it for an
+	// environment with no probe, in which case EnvironmentInfo.Health is
+	// never populated. It is not evaluated inside Create: the call returns as
+	// soon as the VM is up, and the verdict arrives on later reads.
+	Healthcheck *HealthcheckSpec `json:"healthcheck,omitempty"`
 
 	// StartupScriptTimeoutSeconds bounds StartupScript. Zero uses the
 	// orchestrator's default. A value above the orchestrator's configured
@@ -81,6 +145,12 @@ type EnvironmentInfo struct {
 	UpdatedAt time.Time  `json:"updated_at"`
 	Error     string     `json:"error,omitempty"`
 	Endpoints []Endpoint `json:"endpoints,omitempty"`
+	// Health is the environment-level healthcheck's last verdict. Nil when
+	// the environment declared no healthcheck, and nil until the first
+	// verdict has been read back from the guest. The server refreshes it on
+	// its reconcile tick (30s by default), so it lags the guest by up to a
+	// tick.
+	Health *Health `json:"health,omitempty"`
 }
 
 type environmentList struct {

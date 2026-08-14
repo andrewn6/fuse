@@ -22,6 +22,9 @@ export type {
   Endpoint,
   CreateRequest,
   EnvironmentInfo,
+  HealthcheckSpec,
+  HealthcheckHttp,
+  Health,
   ForkOptions,
   ExecRequest,
   ExecResult,
@@ -37,7 +40,7 @@ export type {
   APIKey,
   CreatedAPIKey,
 } from "./types.js";
-export { State, isTerminalState } from "./types.js";
+export { State, isTerminalState, HealthState } from "./types.js";
 
 // Errors and code helpers.
 export {
