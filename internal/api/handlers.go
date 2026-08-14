@@ -532,6 +532,11 @@ func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 		Metadata:       req.Metadata,
 		Exports:        exports,
 		LayerKey:       req.LayerKey,
+		// Security boundary: a layer is filed under the scope the caller
+		// authenticated as, never one it can name. It is read back the same way
+		// by resolveSnapshot, which is what makes a write and a later lookup
+		// meet at all. See callerTenantID.
+		TenantID: callerTenantID(r.Context()),
 	})
 	if err != nil {
 		writeFleetError(w, err)

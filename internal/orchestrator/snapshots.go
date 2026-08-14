@@ -31,6 +31,25 @@ type SnapshotOptions struct {
 	// Exports records optional object-storage export intents/status.
 	Exports []SnapshotExportRecord
 
+	// TenantID is the scope a layer artifact is filed under, and it is only
+	// consulted when LayerKey is set.
+	//
+	// It exists because the two halves of the cache have to agree on a scope,
+	// and the default one cannot. An ordinary snapshot is filed under
+	// snapshotTenantID, which is the task id, and `fuse build` derives a task
+	// id that is unique per build on purpose. A layer filed under that is
+	// filed under a name no later build can ever ask for, so the cache could
+	// never hit.
+	//
+	// This is a security boundary. The API layer derives it from how the
+	// caller authenticated and never from a query param or a request body,
+	// because a caller that could name its own scope could read another
+	// tenant's cache. See callerTenantID.
+	//
+	// It is deliberately ignored for non-layer snapshots, so nothing about
+	// existing snapshot tenancy or quota accounting moves.
+	TenantID string
+
 	// LayerKey is set by `fuse build` when this snapshot is a cacheable setup
 	// layer, and is empty for every ordinary snapshot. It is what makes an
 	// artifact findable by recipe rather than by id: without it a build
@@ -135,7 +154,16 @@ func (fm *FleetManager) CreateSnapshot(ctx context.Context, vmID string, opts Sn
 		retentionUntil = &t
 	}
 
+	// a layer is filed under the caller's authenticated scope; everything else
+	// keeps the task-derived scope it has always had. gating on LayerKey rather
+	// than on TenantID being non-empty is deliberate: a master-token caller
+	// authenticates as the empty scope, and treating empty as "unset" would
+	// send exactly that caller, the default one, back to a per-build task id
+	// that no later build can name.
 	tenantID := snapshotTenantID(taskID, vmID)
+	if opts.LayerKey != "" {
+		tenantID = opts.TenantID
+	}
 	if err := fm.enforceSnapshotQuota(ctx, tenantID); err != nil {
 		return SnapshotRecord{}, err
 	}
