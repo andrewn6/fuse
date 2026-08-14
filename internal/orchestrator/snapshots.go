@@ -30,6 +30,13 @@ type SnapshotOptions struct {
 
 	// Exports records optional object-storage export intents/status.
 	Exports []SnapshotExportRecord
+
+	// LayerKey is set by `fuse build` when this snapshot is a cacheable setup
+	// layer, and is empty for every ordinary snapshot. It is what makes an
+	// artifact findable by recipe rather than by id: without it a build
+	// artifact can only be named, and a name is not something a later build
+	// can derive from the Fusefile it is holding.
+	LayerKey string
 }
 
 // SnapshotFilter narrows ListSnapshotsFiltered results on exact-match
@@ -47,6 +54,20 @@ type SnapshotFilter struct {
 	// Mode narrows to one creation mode, e.g. SnapshotModeBuild to list only
 	// build artifacts.
 	Mode SnapshotMode
+
+	// LayerKey narrows to artifacts materializing one setup step. Unlike Name
+	// below, this is a real indexed column rather than a key read out of the
+	// metadata blob: it is an equality lookup performed on every build, so it
+	// cannot afford to be a JSON probe over every row. Note that listing is
+	// not the hot path for it either; see StateStore.FindSnapshotByLayerKey.
+	LayerKey string
+
+	// Arch narrows to artifacts built on one architecture. It is a separate
+	// field from LayerKey rather than folded into it because the key is
+	// derived client-side before any host is scheduled, so arch is only known
+	// after the build lands somewhere. It constrains what may be served, not
+	// what the recipe is.
+	Arch string
 
 	// Name matches the "name" key inside the snapshot's metadata blob. It is
 	// how a build artifact is found by something other than its random id.
@@ -81,6 +102,19 @@ func (fm *FleetManager) CreateSnapshot(ctx context.Context, vmID string, opts Sn
 	taskID := v.taskID
 	hostID := v.hostID
 	gpus := v.spec.GPUs
+	// The arch stamped on an artifact is the arch of the host that actually
+	// built it, read here from the fleet's own host registry. It is never
+	// taken from the caller: a client derives its layer keys before any host
+	// is scheduled, so a client-supplied arch is a guess, and a wrong guess
+	// labels an artifact with an arch it was not built on, which later hands
+	// someone a rootfs they cannot boot. Normalized exactly as the scheduler
+	// normalizes it, so a stored value and a lookup value cannot disagree
+	// over "x86_64" versus "amd64". Single-provider mode has no host records
+	// at all, so arch stays empty there rather than being invented.
+	arch := ""
+	if h, ok := fm.hosts[hostID]; ok {
+		arch = hostArch(h)
+	}
 	fm.mu.RUnlock()
 
 	if state != VMStateRunning {
@@ -126,7 +160,7 @@ func (fm *FleetManager) CreateSnapshot(ctx context.Context, vmID string, opts Sn
 		}
 		return SnapshotRecord{}, fmt.Errorf("%w: provider does not support snapshots for vm %s", ErrSnapshotUnsupported, vmID)
 	}
-	snapshotID, err := sc.Checkpoint(ctx, opts.Comment)
+	snapshotID, digest, err := checkpointWithDigest(ctx, sc, opts.Comment)
 	if err != nil {
 		return SnapshotRecord{}, fmt.Errorf("checkpoint %s: %w", vmID, err)
 	}
@@ -144,6 +178,9 @@ func (fm *FleetManager) CreateSnapshot(ctx context.Context, vmID string, opts Sn
 		TenantID:         tenantID,
 		ParentSnapshotID: parentSnapshotID,
 		Mode:             mode,
+		LayerKey:         opts.LayerKey,
+		Arch:             arch,
+		Digest:           digest,
 		State:            SnapshotStateCreating,
 		SizeBytes:        checkpoint.SizeBytes,
 		RetentionUntil:   retentionUntil,
@@ -231,6 +268,15 @@ func (fm *FleetManager) ListSnapshotsFiltered(ctx context.Context, filter Snapsh
 			continue
 		}
 		if filter.Mode != "" && s.Mode != filter.Mode {
+			continue
+		}
+		// empty means "do not filter", never "match snapshots whose layer key
+		// or arch is empty": every non-layer snapshot in the fleet has both
+		// unset, so treating empty as a value would match all of them.
+		if filter.LayerKey != "" && s.LayerKey != filter.LayerKey {
+			continue
+		}
+		if filter.Arch != "" && s.Arch != filter.Arch {
 			continue
 		}
 		if filter.Name != "" && snapshotMetadataString(s.Metadata, "name") != filter.Name {
@@ -642,6 +688,63 @@ func (fm *FleetManager) upsertSnapshotRecord(ctx context.Context, record Snapsho
 		record.UpdatedAt = time.Now()
 	}
 	return fm.store.UpsertSnapshot(ctx, record)
+}
+
+// checkpointWithDigest takes the checkpoint and returns the artifact digest
+// alongside its id. The digest is best-effort by construction: it comes from
+// the host agent's snapshot-create response, and an agent build that predates
+// artifact hashing simply does not send one. That must not fail the snapshot:
+// an operator running an older agent still gets a working artifact, it just
+// carries no integrity value for a later transfer to check itself against.
+// Backends that cannot hash at all (the in-memory stub, qemu) do not implement
+// SnapshotDigester and land on the same empty digest.
+func checkpointWithDigest(ctx context.Context, sc SnapshotCapable, comment string) (string, string, error) {
+	if d, ok := sc.(SnapshotDigester); ok {
+		cp, err := d.CheckpointWithDigest(ctx, comment)
+		if err != nil {
+			return "", "", err
+		}
+		return cp.ID, cp.Digest, nil
+	}
+	id, err := sc.Checkpoint(ctx, comment)
+	if err != nil {
+		return "", "", err
+	}
+	return id, "", nil
+}
+
+// ResolveLayer returns the newest ready artifact materializing layerKey for
+// (tenantID, arch), or ok=false when the cache is cold for that key.
+//
+// A miss is an ordinary outcome, not a failure: the first build of any recipe
+// misses every key in its chain, and a caller walks its chain deepest-first
+// probing one key at a time, so misses are the common case rather than the
+// exceptional one.
+//
+// tenantID is a security boundary. An artifact carries whatever the build
+// baked into it, so it is only ever served back to the tenant that built it;
+// the store enforces that and a caller cannot widen it.
+//
+// This does not go through ListSnapshotsFiltered because that loads every
+// snapshot in the fleet and filters in Go, and this runs once per chain key on
+// every build.
+func (fm *FleetManager) ResolveLayer(ctx context.Context, tenantID, layerKey, arch string) (SnapshotRecord, bool, error) {
+	if fm.store == nil {
+		return SnapshotRecord{}, false, nil
+	}
+	record, ok, err := fm.store.FindSnapshotByLayerKey(ctx, tenantID, layerKey, arch)
+	if err != nil {
+		return SnapshotRecord{}, false, fmt.Errorf("resolve layer %s: %w", layerKey, err)
+	}
+	if ok {
+		// A hit is a use, and this is the only place the system ever learns of
+		// one. A caller resolves here and creates in a separate request, so
+		// between the two the artifact has no referencing environment at all;
+		// without this the collector would see the hottest layer in the cache as
+		// the most obviously unused thing in it. See artifactUseGrace.
+		fm.touchArtifact(record.SnapshotID)
+	}
+	return record, ok, nil
 }
 
 func lookupCheckpoint(ctx context.Context, env Environment, snapshotID string) (Checkpoint, bool) {

@@ -363,8 +363,9 @@ func (s *PostgresStateStore) UpsertSnapshot(ctx context.Context, snapshot Snapsh
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO orchestrator_snapshots (
 			snapshot_id, vm_id, task_id, host_id, tenant_id, parent_snapshot_id, mode, state, size_bytes,
-			retention_until, metadata_json, exports_json, last_error, created_at, updated_at
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+			retention_until, metadata_json, exports_json, last_error, created_at, updated_at,
+			layer_key, arch, digest
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 		ON CONFLICT (snapshot_id) DO UPDATE SET
 			vm_id=EXCLUDED.vm_id,
 			task_id=EXCLUDED.task_id,
@@ -379,7 +380,10 @@ func (s *PostgresStateStore) UpsertSnapshot(ctx context.Context, snapshot Snapsh
 			exports_json=EXCLUDED.exports_json,
 			last_error=EXCLUDED.last_error,
 			created_at=EXCLUDED.created_at,
-			updated_at=EXCLUDED.updated_at
+			updated_at=EXCLUDED.updated_at,
+			layer_key=EXCLUDED.layer_key,
+			arch=EXCLUDED.arch,
+			digest=EXCLUDED.digest
 	`,
 		snapshot.SnapshotID,
 		snapshot.VMID,
@@ -396,6 +400,9 @@ func (s *PostgresStateStore) UpsertSnapshot(ctx context.Context, snapshot Snapsh
 		snapshot.LastError,
 		snapshot.CreatedAt.UTC(),
 		snapshot.UpdatedAt.UTC(),
+		snapshot.LayerKey,
+		snapshot.Arch,
+		snapshot.Digest,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert snapshot %s: %w", snapshot.SnapshotID, err)
@@ -406,7 +413,8 @@ func (s *PostgresStateStore) UpsertSnapshot(ctx context.Context, snapshot Snapsh
 func (s *PostgresStateStore) GetSnapshot(ctx context.Context, snapshotID string) (SnapshotRecord, error) {
 	row := s.db.QueryRowContext(ctx, `
 		SELECT snapshot_id, vm_id, task_id, host_id, tenant_id, parent_snapshot_id, mode, state, size_bytes,
-		       retention_until, metadata_json, exports_json, last_error, created_at, updated_at
+		       retention_until, metadata_json, exports_json, last_error, created_at, updated_at,
+		       layer_key, arch, digest
 		FROM orchestrator_snapshots
 		WHERE snapshot_id=$1
 	`, snapshotID)
@@ -424,7 +432,8 @@ func (s *PostgresStateStore) GetSnapshot(ctx context.Context, snapshotID string)
 func (s *PostgresStateStore) ListSnapshots(ctx context.Context) ([]SnapshotRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT snapshot_id, vm_id, task_id, host_id, tenant_id, parent_snapshot_id, mode, state, size_bytes,
-		       retention_until, metadata_json, exports_json, last_error, created_at, updated_at
+		       retention_until, metadata_json, exports_json, last_error, created_at, updated_at,
+		       layer_key, arch, digest
 		FROM orchestrator_snapshots
 	`)
 	if err != nil {
@@ -456,7 +465,8 @@ func (s *PostgresStateStore) DeleteSnapshot(ctx context.Context, snapshotID stri
 func (s *PostgresStateStore) ListSnapshotsByVM(ctx context.Context, vmID string) ([]SnapshotRecord, error) {
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT snapshot_id, vm_id, task_id, host_id, tenant_id, parent_snapshot_id, mode, state, size_bytes,
-		       retention_until, metadata_json, exports_json, last_error, created_at, updated_at
+		       retention_until, metadata_json, exports_json, last_error, created_at, updated_at,
+		       layer_key, arch, digest
 		FROM orchestrator_snapshots
 		WHERE vm_id=$1
 	`, vmID)
@@ -477,6 +487,96 @@ func (s *PostgresStateStore) ListSnapshotsByVM(ctx context.Context, vmID string)
 		return nil, fmt.Errorf("iterate snapshots for vm %s: %w", vmID, err)
 	}
 	return out, nil
+}
+
+// ListSnapshotsByDigest serves the artifact index off
+// orchestrator_snapshots_digest_idx. The `digest <> ”` predicate matches the
+// index's partial predicate, so this stays an index probe rather than degrading
+// into a scan as snapshots accumulate; it is also a correctness guard, since
+// every snapshot written by an agent that does not hash carries an empty digest
+// and must not read as "this host holds artifact ”".
+//
+// Ordering by snapshot_id (not created_at) is deliberate: the caller uses this
+// to choose a peer to pull from, and a stable order means a retry asks the same
+// host again instead of spreading half-finished transfers over the fleet.
+func (s *PostgresStateStore) ListSnapshotsByDigest(ctx context.Context, tenantID, digest string) ([]SnapshotRecord, error) {
+	if digest == "" {
+		return nil, nil
+	}
+
+	rows, err := s.db.QueryContext(ctx, `
+		SELECT snapshot_id, vm_id, task_id, host_id, tenant_id, parent_snapshot_id, mode, state, size_bytes,
+		       retention_until, metadata_json, exports_json, last_error, created_at, updated_at,
+		       layer_key, arch, digest
+		FROM orchestrator_snapshots
+		WHERE tenant_id=$1
+		  AND digest=$2
+		  AND digest <> ''
+		  AND state=$3
+		ORDER BY snapshot_id
+	`, tenantID, digest, string(SnapshotStateReady))
+	if err != nil {
+		return nil, fmt.Errorf("list snapshots by digest: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	var out []SnapshotRecord
+	for rows.Next() {
+		record, err := scanSnapshotRow(rows.Scan)
+		if err != nil {
+			return nil, fmt.Errorf("scan snapshot row: %w", err)
+		}
+		out = append(out, record)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate snapshots by digest: %w", err)
+	}
+	return out, nil
+}
+
+// FindSnapshotByLayerKey serves the layer cache lookup off
+// orchestrator_snapshots_layer_key_idx. The `layer_key <> ”` predicate is not
+// redundant with the equality above it: it is what makes the query match the
+// index's partial predicate, so this stays a single index probe instead of
+// degrading into a scan as build artifacts accumulate.
+//
+// The layer key is not unique by design (two concurrent builds of the same
+// recipe both insert), so duplicates are resolved here rather than rejected at
+// write time: newest ready artifact wins, with snapshot_id as the tiebreak so
+// this agrees exactly with MemoryStateStore and with sortSnapshotRecords.
+//
+// tenant_id is a security boundary, not a filter for convenience. Another
+// tenant's artifact carries whatever their build baked in, so a cross-tenant
+// row has to read as a miss.
+func (s *PostgresStateStore) FindSnapshotByLayerKey(ctx context.Context, tenantID, layerKey, arch string) (SnapshotRecord, bool, error) {
+	// an empty layer key is not a key, it is every non-layer snapshot in the
+	// table. never let it reach the query.
+	if layerKey == "" {
+		return SnapshotRecord{}, false, nil
+	}
+
+	row := s.db.QueryRowContext(ctx, `
+		SELECT snapshot_id, vm_id, task_id, host_id, tenant_id, parent_snapshot_id, mode, state, size_bytes,
+		       retention_until, metadata_json, exports_json, last_error, created_at, updated_at,
+		       layer_key, arch, digest
+		FROM orchestrator_snapshots
+		WHERE tenant_id=$1
+		  AND layer_key=$2
+		  AND layer_key <> ''
+		  AND arch=$3
+		  AND state=$4
+		ORDER BY created_at DESC, snapshot_id DESC
+		LIMIT 1
+	`, tenantID, layerKey, arch, string(SnapshotStateReady))
+
+	record, err := scanSnapshotRow(row.Scan)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return SnapshotRecord{}, false, nil
+		}
+		return SnapshotRecord{}, false, fmt.Errorf("find snapshot by layer key %s: %w", layerKey, err)
+	}
+	return record, true, nil
 }
 
 // SnapshotQuotaUsage aggregates count and size for tenantID directly in
@@ -522,6 +622,9 @@ func scanSnapshotRow(scan func(dest ...any) error) (SnapshotRecord, error) {
 		&record.LastError,
 		&record.CreatedAt,
 		&record.UpdatedAt,
+		&record.LayerKey,
+		&record.Arch,
+		&record.Digest,
 	); err != nil {
 		return SnapshotRecord{}, err
 	}
