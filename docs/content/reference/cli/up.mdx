@@ -98,8 +98,21 @@ runs the setup phase in full, exactly as it always has.
 A hit never costs you a working `up`. If the artifact lives on a host that cannot
 take the workload, the orchestrator places the environment elsewhere and moves
 the artifact to it; if the cache cannot be consulted at all, the boot goes cold.
-The `files:` block is rewritten either way, since those are authoring inputs that
-may have changed since the artifact was baked.
+The `files:` and `copy:` blocks are re-sent either way, since those are authoring
+inputs that may have changed since the artifact was baked.
+
+## Copying local files in
+
+A Fusefile's [`copy:` block](/docs/concepts/fusefile#copy) is expanded here, on
+your machine, before anything is posted: `up` resolves each `from` **relative to
+the Fusefile** rather than to your working directory, walks a directory source
+into one entry per regular file, and sends the result alongside the manifest so
+the files exist in the guest before `setup:` and `run:` execute.
+
+Everything that can go wrong with a source therefore fails locally, naming the
+entry: a path that does not exist, a symlink (never followed), or a block over
+the 512 KiB total. `--dry-run` runs the same walk, so it catches all three
+without contacting the orchestrator.
 
 ## Path resolution
 
