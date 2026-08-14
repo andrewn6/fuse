@@ -39,9 +39,10 @@ func newBuildCmd() *cobra.Command {
 			"it, snapshots the resulting disk, and destroys the environment. it prints\n" +
 			"the snapshot id, which `fuse up --from-build <id>` boots directly so the\n" +
 			"setup work does not rerun on every boot.\n\n" +
-			"the artifact is host-local: there is no object storage, so it can only be\n" +
-			"booted on the host that produced it. firecracker hosts only, since qemu\n" +
-			"hosts cannot snapshot.",
+			"the artifact is stored on the host that produced it. there is no object\n" +
+			"storage, but it is not stuck there either: a host that needs it fetches\n" +
+			"it from a host that has it. firecracker hosts only, since qemu hosts\n" +
+			"cannot snapshot.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			path, err := findFusefilePath(file, args)

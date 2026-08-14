@@ -1,0 +1,153 @@
+---
+title: "The layer cache"
+sidebar:
+  icon: database
+description: How setup layers are identified, moved between hosts, and collected
+---
+
+A `setup:` phase that installs a toolchain or pulls model weights is the
+expensive part of bringing an environment up, and it produces the same rootfs
+every time until something about the recipe changes. The layer cache captures
+that result so the next build starts from it.
+
+This page is about what a layer *is* once it exists. For how its key is derived,
+see [the setup layer cache](/docs/concepts/fusefile#the-setup-layer-cache).
+
+## Two identities, doing different jobs
+
+A layer artifact carries two hashes, and conflating them is the main way to
+misunderstand this system.
+
+The **layer key** answers *"have I built this recipe?"*. It is the cache key. It
+hashes the recipe, not the bytes: `apt-get install curl` resolves to a different
+package next month and the key does not change, exactly as a Dockerfile cache key
+behaves. That is a known and accepted limitation, not a bug.
+
+The **digest** is the sha256 of the artifact's rootfs, and answers *"did I
+receive these bytes intact?"*. It is the artifact's identity on the wire.
+
+:::warning[A digest is not a cross-build identity]
+Two builds of the same recipe produce **different** rootfs bytes: timestamps,
+inode ordering, and package caches all differ. So a digest can never be used as a
+cache key, and two artifacts having different digests says nothing about whether
+they came from the same recipe. Only the layer key answers that.
+:::
+
+This also means the cache does no deduplication, and is not designed to. Two
+artifacts differing by a single `pip install` share zero content at the block
+level, where an OCI image would share every base layer. The wins here are cache
+hits, cross-host reuse, and integrity, not disk savings.
+
+## Architecture is a serving constraint
+
+An ext4 rootfs is not portable across CPU architectures, so an artifact built on
+arm64 must never be served to an amd64 boot.
+
+Architecture is deliberately *not* part of the layer key. The key is derived
+before the build has been scheduled onto any host, so the only architecture
+available at that moment is the client's, which says nothing about the fleet's.
+An operator on an arm64 laptop building against amd64 hosts would label the
+artifact arm64, and a later arm64 lookup would hit that key and be handed a rootfs
+it cannot boot. A key that lies is worse than a key that misses.
+
+Instead it is recorded on the artifact by the host that actually built it, and
+every lookup filters on it. The CLI determines the target architecture from the
+fleet: a host scoped with `fuse host <id>` answers directly, and a
+single-architecture fleet answers unambiguously. A **mixed-architecture fleet has
+no safe answer**, so the build runs cold rather than filing a layer under a coin
+flip.
+
+## Distribution is peer to peer, with no bucket
+
+Fuse has no object storage. There is no S3, no GCS, and no bucket of any kind,
+and the layer cache does not add one.
+
+When a workload needs a layer that lives on another host, the orchestrator tells
+the receiving host to fetch it **directly from the host that has it**:
+
+```
+orchestrator (index: digest -> hosts that hold it)
+     |  1. "host B, fetch digest X from host A"
+     v
+  host B agent  ---- 2. GET /v1/artifacts/X (streamed, verified) ---->  host A agent
+```
+
+The orchestrator is the index and the coordinator, and never the data path.
+Artifacts run from a few hundred megabytes to tens of gigabytes, and the control
+plane is a single process with a single replica: relaying blobs through it would
+make one copy loop the bandwidth ceiling for the whole fleet, inside the same
+process that has to answer health checks.
+
+Once a layer is local, every subsequent clone on that host is a
+`cp --reflink=auto` and effectively free, so the network cost is paid once per
+host per artifact.
+
+The index is derived from snapshot records rather than stored separately. A
+snapshot row already says "host H holds artifact A", and a second copy of that
+fact could only ever disagree with the first. It also makes recovery a
+non-question: there is nothing to rehydrate, because the query is the index.
+
+### Verification is what makes this safe
+
+Without a trusted bucket in the middle, the peer is the only thing vouching for
+the bytes. So a receiving host streams to a temporary file outside its snapshot
+store, hashes as it goes, and commits only on a digest match. A mismatch, a short
+read, or a dead peer all leave nothing behind. A rootfs that is subtly not what
+its digest claims would be seeded into guests forever after, and no later step
+re-checks it.
+
+### A pulling host never gets the serving host's token
+
+Host-to-host transfer is a trust edge that does not otherwise exist: every agent
+normally trusts only the orchestrator's bearer token. Handing one host another
+host's agent token in order to read a single blob would trade a file read for
+full control of that host.
+
+Instead the orchestrator mints a short-lived grant scoped to one digest, signed
+with the **serving** host's own token. The serving host verifies it with its own
+key and never has to call the orchestrator; the pulling host presents the grant
+and never learns the token. Within its lifetime the grant is replayable by
+whoever holds it, which is acceptable because it only ever re-authorizes reading
+one blob the holder was already allowed to read.
+
+## A shared filesystem is a supported alternative
+
+If you already run NFS or Ceph, pointing every host's `SNAPSHOTS_DIR` at the same
+shared filesystem gives you cross-host reuse with no transfer at all: every host
+sees every artifact because they are all looking at the same directory.
+
+This is a legitimate deployment, not a workaround. Peer transfer exists so that
+cross-host reuse does not *require* shared storage, not because shared storage is
+the wrong answer where it already exists.
+
+## Collection
+
+An artifact with no referencing environment and no recent use becomes
+collectable, swept on the orchestrator's reconcile loop. A per-tenant ceiling
+(`--artifact-max-per-tenant`, off by default) evicts least recently used
+artifacts as a backstop, since a fleet building constantly keeps everything
+inside the idle window.
+
+Cache hits count as use. An artifact that every build hits but no environment
+holds open is the hottest thing in the cache, and a collector looking only at
+references would throw it away first.
+
+Nothing evicts an artifact a VM is currently seeded from, one that is mid
+transfer, or one resolved in the last few minutes. That last window matters: a
+client resolves a hit and then creates from it in a separate request, and in
+between the artifact has no referencing environment at all. A cache that evicts
+the artifact you just resolved is worse than no cache, because it only fails
+under load.
+
+## Limits worth knowing
+
+- **Firecracker only.** All three qemu snapshot endpoints hard-501, because a
+  vfio device cannot be checkpointed. GPU environments cannot participate at all,
+  which also means the cache is absent from exactly the hosts with the most
+  expensive setup phases.
+- **The cache is scoped to the authenticated caller.** An API key gets its own
+  cache; callers using the master token share one. Nothing is ever served across
+  that boundary.
+- **The index is single-replica**, like the rest of the control plane. Losing it
+  loses the mapping, not the artifacts: they are still on disk and still bootable
+  by id, and a digest is recoverable by rehashing the file.

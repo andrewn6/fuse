@@ -403,14 +403,13 @@ invalidation directional:
 
 ```
 layer_key(i) = sha256(
-    "fusefile-layer/v1\n" +
+    "fusefile-layer/v2\n" +
     parent_key(i) + "\n" +     // layer_key(i-1); the base key for i == 0
     step_script(i) + "\n" +    // the step's `run` string, byte for byte
     inputs_digest(i) + "\n" +
-    workspace + "\n" +         // setup runs after `cd <workspace>`
-    arch)                      // an ext4 rootfs is not portable across arch
+    workspace)                 // setup runs after `cd <workspace>`
 
-base_key      = "image:" + sha256(<base image reference>)
+base_key      = "image:" + sha256(<base image reference> + the `files` block)
 inputs_digest = sha256 over the sorted list of
                 (relative path, mode & 0o111, sha256(content)); "" when unset
 ```
@@ -421,10 +420,20 @@ in terms of step *N*'s, so a step whose parent is unknown cannot be keyed at all
 and neither can anything after it.
 
 Deliberately **not** in the key: secret values, the task ID, `run:` (it is the
-entrypoint, not a layer), and every `resources` field other than the
-architecture, since none of them change the filesystem. There is no
-normalization either: a byte change in a step is a miss, because guessing at
-semantic equivalence is how a cache serves a stale rootfs.
+entrypoint, not a layer), and every `resources` field, since none of them change
+the filesystem. There is no normalization either: a byte change in a step is a
+miss, because guessing at semantic equivalence is how a cache serves a stale
+rootfs.
+
+The host architecture is not in the key either, but for a different reason than
+the rest. An ext4 rootfs genuinely is not portable across architectures, so
+architecture is a real constraint on *serving* a layer. It just is not knowable
+when the key is derived, because that happens before the build has been
+scheduled onto any host. Folding in a guess would label an artifact with an
+architecture it was not built on, and a later lookup would hit that key and be
+handed a rootfs it cannot boot. So it is recorded on the artifact by the host
+that actually built it, and lookups filter on it separately. See
+[The layer cache](/docs/concepts/layer-cache).
 
 A step that reads `/fuse/secrets.json`, or has effects outside the rootfs, must
 set `cache: false`. Secrets are written to disk before `setup` runs, so a layer
@@ -432,10 +441,15 @@ captured after such a step would bake secret material into a rootfs keyed on
 content that excludes those secrets, and a later `up` with rotated values would
 get a hit. Declaring `inputs` on an uncacheable step is an error.
 
-Two other limits: a GPU environment gets no caching at all (GPU environments run
-on the qemu backend, whose snapshot endpoints hard-501 because a vfio device
-cannot be checkpointed), and layers are host-local, so there is no cross-host
-sharing.
+One hard limit: a GPU environment gets no caching at all, because GPU
+environments run on the qemu backend, whose snapshot endpoints hard-501 since a
+vfio device cannot be checkpointed. That is worth knowing early, as those are
+often the hosts with the most expensive `setup:` phases.
+
+Layers are stored on the host that built them, but they are no longer confined
+to it: a host that needs a layer it does not have fetches it directly from a host
+that does. See [The layer cache](/docs/concepts/layer-cache) for how that works
+and what it means for a multi-host fleet.
 
 To see the derived keys without creating anything:
 
@@ -454,8 +468,11 @@ the command that runs `setup:` on its own and captures the result. On a
 so there is no layer plan for it and `--plan` and `--no-cache` are rejected
 there rather than silently ignored.
 
-Every step currently reports as a miss: key derivation and the plan land ahead of
-the layer store they will be looked up in.
+`--plan` always reports every cacheable step as a miss. It deliberately does not
+look anything up: resolving needs a target architecture, which needs the fleet,
+and a command whose whole purpose is "show me what would happen" should not
+require the orchestrator to be reachable. The real hit and miss breakdown is
+reported by the build itself.
 
 ## Advanced: GPU fields
 

@@ -51,6 +51,24 @@ The gateway carries a credential, so it is a flag rather than a Fusefile
 field. Setting it here is the only difference that remained between the
 Fusefile path and `fuse environment create`.
 
+## The layer cache
+
+`up` **consumes** the [layer cache](/docs/concepts/layer-cache) but never
+produces it. Populating it would mean snapshotting mid-boot, which means pausing
+an environment somebody asked to have running;
+[`fuse build`](/reference/cli/build) is the command that makes layers.
+
+With `cache: {enabled: true}` in the Fusefile, `up` resolves the chain deepest
+first and, on a hit, boots from that artifact and runs only the `setup:` steps it
+did not already cover, followed by `run:`. On a miss it boots the base image and
+runs the setup phase in full, exactly as it always has.
+
+A hit never costs you a working `up`. If the artifact lives on a host that cannot
+take the workload, the orchestrator places the environment elsewhere and moves
+the artifact to it; if the cache cannot be consulted at all, the boot goes cold.
+The `files:` block is rewritten either way, since those are authoring inputs that
+may have changed since the artifact was baked.
+
 ## Path resolution
 
 `-f/--file` wins if set, then a positional argument. With neither, `up` looks
