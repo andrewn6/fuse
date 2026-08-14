@@ -3,6 +3,7 @@ package fusefile
 import (
 	"encoding/json"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -596,21 +597,33 @@ func TestCompileServiceRestartValidValues(t *testing.T) {
 	}
 }
 
+// the phase markers the startup script wraps the build steps in, written out
+// literally rather than borrowed from the compiler: these bytes run in a guest
+// shell, so a test that reused the constants would agree with any typo in them.
+const (
+	buildOpen  = "# fuse: build phase (a failure here exits 90)\ntrap '[ $? -eq 0 ] || exit 90' EXIT\n"
+	buildClose = "trap - EXIT\n"
+	runMarker  = "# fuse: run phase\n"
+)
+
 func TestCompileStartupScript(t *testing.T) {
 	// the prelude enables strict mode, then creates and enters the workspace
-	// so setup/run execute where the Fusefile says they should.
+	// so build/run execute where the Fusefile says they should.
 	const prelude = "set -eu\nif (set -o pipefail) 2>/dev/null; then set -o pipefail; fi\n" +
 		"mkdir -p '/workspace'\ncd '/workspace'\n"
 	cases := []struct {
 		name      string
 		workspace string
-		setup     []Step
+		build     []Step
 		run       string
 		want      string
 	}{
-		{"setup and run", "", []Step{{Run: "a"}, {Run: "b"}}, "./c", prelude + "a\nb\n./c\n"},
+		{
+			"build and run", "", []Step{{Run: "a"}, {Run: "b"}}, "./c",
+			prelude + buildOpen + "a\nb\n" + buildClose + runMarker + "./c\n",
+		},
 		{"run only", "", nil, "./c", prelude + "./c\n"},
-		{"setup only", "", []Step{{Run: "a"}}, "", prelude + "a\n"},
+		{"build only", "", []Step{{Run: "a"}}, "", prelude + buildOpen + "a\n" + buildClose},
 		{"neither", "", nil, "", ""},
 		{
 			"custom workspace",
@@ -637,27 +650,27 @@ func TestCompileStartupScript(t *testing.T) {
 			"",
 			[]Step{{Run: "a"}, {Workdir: "web", Run: "b"}, {Run: "c"}},
 			"./d",
-			prelude + "a\n(cd 'web'; b)\nc\n./d\n",
+			prelude + buildOpen + "a\n(cd 'web'; b)\nc\n" + buildClose + runMarker + "./d\n",
 		},
 		{
 			"absolute per-step workdir",
 			"",
 			[]Step{{Workdir: "/opt/x", Run: "b"}},
 			"",
-			prelude + "(cd '/opt/x'; b)\n",
+			prelude + buildOpen + "(cd '/opt/x'; b)\n" + buildClose,
 		},
 		{
 			"per-step workdir with a quote is escaped",
 			"",
 			[]Step{{Workdir: "it's here", Run: "b"}},
 			"",
-			prelude + `(cd 'it'\''s here'; b)` + "\n",
+			prelude + buildOpen + `(cd 'it'\''s here'; b)` + "\n" + buildClose,
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := &Fusefile{Version: 1, Workspace: tc.workspace, Setup: tc.setup, Run: Command{Shell: tc.run}}
+			f := &Fusefile{Version: 1, Workspace: tc.workspace, Build: tc.build, Run: Command{Shell: tc.run}}
 			c, err := Compile(f)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -710,13 +723,13 @@ func TestCompileBuildAndRunScripts(t *testing.T) {
 	}
 }
 
-// the mapping form of a setup step must emit the same fragment the bare scalar
+// the mapping form of a build step must emit the same fragment the bare scalar
 // form does, in every generated script. layer keys are derived from that same
 // fragment, so a build that ran something else than the key covered would serve
 // a stale layer.
 func TestCompileMappingStepsEmitRunOnly(t *testing.T) {
 	cacheOff := false
-	f := &Fusefile{Version: 1, Setup: []Step{
+	f := &Fusefile{Version: 1, Build: []Step{
 		{Run: "apt-get update -qq"},
 		{Run: "npm ci", Inputs: []string{"package.json"}},
 		{Run: "./register.sh", Cache: &cacheOff},
@@ -728,12 +741,69 @@ func TestCompileMappingStepsEmitRunOnly(t *testing.T) {
 
 	const prelude = "set -eu\nif (set -o pipefail) 2>/dev/null; then set -o pipefail; fi\n" +
 		"mkdir -p '/workspace'\ncd '/workspace'\n"
-	want := prelude + "apt-get update -qq\nnpm ci\n./register.sh\n"
-	if c.BuildScript != want {
+	const steps = "apt-get update -qq\nnpm ci\n./register.sh\n"
+	if want := prelude + steps; c.BuildScript != want {
 		t.Errorf("build script = %q, want %q", c.BuildScript, want)
 	}
-	if c.StartupScript != want {
+	if want := prelude + buildOpen + steps + buildClose; c.StartupScript != want {
 		t.Errorf("startup script = %q, want %q", c.StartupScript, want)
+	}
+}
+
+// build and setup are one field under two names, so a Fusefile written either
+// way has to compile to the same bytes, keys included.
+func TestCompileBuildAndSetupAreInterchangeable(t *testing.T) {
+	steps := []Step{{Run: "apt-get update -qq"}, {Workdir: "web", Run: "npm ci"}}
+	build, err := Compile(&Fusefile{Version: 1, Build: steps, Run: Command{Shell: "./start.sh"}})
+	if err != nil {
+		t.Fatalf("build: unexpected error: %v", err)
+	}
+	setup, err := Compile(&Fusefile{Version: 1, Setup: steps, Run: Command{Shell: "./start.sh"}})
+	if err != nil {
+		t.Fatalf("setup: unexpected error: %v", err)
+	}
+	if !reflect.DeepEqual(build, setup) {
+		t.Errorf("build compiles to %+v, setup to %+v", build, setup)
+	}
+}
+
+// the startup script carries both phases, so the seam between them has to be
+// visible: a build failure is trapped into a fixed status, and the trap is
+// cleared before the run command so a run failure still reports its own.
+func TestCompileStartupScriptSeparatesThePhases(t *testing.T) {
+	c, err := Compile(&Fusefile{Version: 1,
+		Build: []Step{{Run: "npm ci"}},
+		Run:   Command{Shell: "./start.sh"},
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	script := c.StartupScript
+	openAt := strings.Index(script, buildOpen)
+	closeAt := strings.Index(script, buildClose)
+	stepAt := strings.Index(script, "npm ci")
+	runAt := strings.Index(script, "./start.sh")
+	if openAt < 0 || closeAt < 0 {
+		t.Fatalf("startup script carries no phase markers:\n%s", script)
+	}
+	if openAt >= stepAt || stepAt >= closeAt || closeAt >= runAt {
+		t.Errorf("phases are out of order in:\n%s", script)
+	}
+	if !strings.Contains(script, strconv.Itoa(BuildPhaseExitStatus)) {
+		t.Errorf("startup script does not name the build failure status:\n%s", script)
+	}
+}
+
+// a Fusefile with no build steps has only one phase, so it keeps compiling to
+// exactly the script it always did: no trap, no markers.
+func TestCompileStartupScriptRunOnlyCarriesNoMarkers(t *testing.T) {
+	c, err := Compile(&Fusefile{Version: 1, Run: Command{Shell: "./start.sh"}})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(c.StartupScript, "trap") || strings.Contains(c.StartupScript, "# fuse:") {
+		t.Errorf("run-only startup script carries phase markers:\n%s", c.StartupScript)
 	}
 }
 

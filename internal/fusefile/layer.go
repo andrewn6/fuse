@@ -49,9 +49,9 @@ type LayerOptions struct {
 	BaseKey string
 }
 
-// LayerKey is the derived cache identity of one setup step.
+// LayerKey is the derived cache identity of one build step.
 type LayerKey struct {
-	// Index is the step's position in Fusefile.Setup.
+	// Index is the step's position in the build phase (Fusefile.BuildSteps).
 	Index int
 	// Script is the shell fragment this step emits, hashed byte for byte.
 	Script string
@@ -70,7 +70,7 @@ type LayerKey struct {
 	Reason string
 }
 
-// LayerKeys derives the layer key of every setup step, in order.
+// LayerKeys derives the layer key of every build step, in order.
 //
 // The key is a chained hash, so it invalidates in exactly one direction: edit
 // step N and steps N..end all get new keys, while steps before N are
@@ -107,7 +107,8 @@ type LayerKey struct {
 // LayerKeys is pure apart from the digester it is handed, so it can be tested
 // without touching a disk.
 func LayerKeys(f *Fusefile, inputs InputDigester, opts LayerOptions) ([]LayerKey, error) {
-	if len(f.Setup) == 0 {
+	steps := f.BuildSteps()
+	if len(steps) == 0 {
 		return nil, nil
 	}
 
@@ -118,7 +119,7 @@ func LayerKeys(f *Fusefile, inputs InputDigester, opts LayerOptions) ([]LayerKey
 	workspace := workspaceOf(f)
 
 	scripts := setupScripts(f)
-	out := make([]LayerKey, len(f.Setup))
+	out := make([]LayerKey, len(steps))
 
 	// global, when set, applies to every step: nothing about this environment
 	// can be cached at all.
@@ -135,7 +136,7 @@ func LayerKeys(f *Fusefile, inputs InputDigester, opts LayerOptions) ([]LayerKey
 	chainBroken := false
 	parent := baseKey
 
-	for i, step := range f.Setup {
+	for i, step := range steps {
 		lk := LayerKey{Index: i, Script: scripts[i]}
 
 		switch {
@@ -149,7 +150,7 @@ func LayerKeys(f *Fusefile, inputs InputDigester, opts LayerOptions) ([]LayerKey
 		default:
 			digest, err := digestInputs(inputs, step.Inputs)
 			if err != nil {
-				return nil, fmt.Errorf("setup[%d].inputs: %w", i, err)
+				return nil, fmt.Errorf("%s[%d].inputs: %w", f.buildField(), i, err)
 			}
 			lk.InputsDigest = digest
 			lk.ParentKey = parent
