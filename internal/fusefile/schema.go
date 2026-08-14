@@ -20,6 +20,22 @@ type Fusefile struct {
 	Files     []File      `yaml:"files,omitempty"`
 	Copy      []CopyEntry `yaml:"copy,omitempty"`
 
+	// Env is set for every build step and for Run. it reuses the same
+	// value-or-secret grammar as services.<name>.env, so there is one env
+	// shape in the file. services do not inherit it: a service runs in its
+	// own container and takes its environment from its own env map.
+	//
+	// a value never reaches the generated script. the compiler carries the
+	// block in the manifest instead; the orchestrator resolves any secret
+	// reference and renders the result to a file under /fuse, and the script
+	// sources that path. the script is handed to the guest as a single
+	// `sh -lc` argument, so anything interpolated into its text is readable
+	// in the host's process table for the length of the boot.
+	//
+	// a key is written into that file unquoted, as a shell identifier, so
+	// validate holds it to ^[A-Za-z_][A-Za-z0-9_]*$.
+	Env map[string]EnvValue `yaml:"env,omitempty"`
+
 	// Build is the work that prepares the environment: it runs to completion
 	// before Run, in the same workspace, and a failure in it is reported as a
 	// build failure rather than as a failure of the task itself. It is the
