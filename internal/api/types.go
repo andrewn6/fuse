@@ -79,6 +79,20 @@ type CreateEnvironmentRequest struct {
 	GatewayToken   string            `json:"gateway_token,omitempty"`
 	Expose         []ExposeSpec      `json:"expose,omitempty"`
 
+	// Files are caller-supplied guest files written before StartupScript
+	// runs, keyed by absolute guest path with base64-encoded content (the
+	// same encoding as ManifestInline). It is what a Fusefile's `copy` block
+	// compiles to, and it rides this body rather than a post-boot route
+	// precisely so the files exist before `setup:` and `run:` do.
+	//
+	// Paths are validated here, not just client-side: a path must be
+	// absolute, must not traverse, and must not be under /fuse, which holds
+	// the guest agent's own manifest, secrets, and credentials. The total
+	// decoded size is capped at fusefile.MaxCopyBytes. Permissions are not
+	// carried: the upload wire is a path and a body, so an executable
+	// arrives without its bit and the caller chmods it in the script.
+	Files map[string]string `json:"files,omitempty"`
+
 	// StartupScriptTimeoutSeconds bounds StartupScript. Zero uses the
 	// orchestrator's default. A value above the orchestrator's configured
 	// maximum is rejected with 400 rather than clamped, so a caller is never

@@ -1,9 +1,11 @@
 package api
 
 import (
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"sort"
 	"strings"
 	"time"
@@ -287,6 +289,16 @@ func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	files, err := decodeCreateFiles(req.Files)
+	if err != nil {
+		status, code := http.StatusBadRequest, CodeInvalidArgument
+		if errors.Is(err, errCreateFilesTooLarge) {
+			status, code = http.StatusRequestEntityTooLarge, CodePayloadTooLarge
+		}
+		writeError(w, status, code, err.Error(), nil)
+		return
+	}
+
 	manifest, err := h.resolver().Resolve(req)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, CodeInvalidArgument, err.Error(), nil)
@@ -332,6 +344,7 @@ func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		GatewayURL:           req.GatewayURL,
 		GatewayToken:         req.GatewayToken,
 		Expose:               toOrchestratorExpose(req.Expose),
+		Files:                files,
 	})
 	if err != nil {
 		writeFleetErrorRedacted(w, err, req.Secrets)
@@ -339,6 +352,65 @@ func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusCreated, toAPIEnvironment(*info))
+}
+
+// errCreateFilesTooLarge marks the one decodeCreateFiles failure that is a
+// size problem rather than a shape problem, so createEnvironment can answer
+// 413 for it and 400 for everything else. A caller that overshot the cap needs
+// to know it sent something well-formed and simply too big.
+var errCreateFilesTooLarge = errors.New("files: too large")
+
+// decodeCreateFiles turns CreateEnvironmentRequest.Files (guest path ->
+// base64) into the byte map BootOptions carries, rejecting anything that
+// cannot safely be written into a guest.
+//
+// The Fusefile compiler applies the same rules client-side, but it runs on the
+// caller's machine and is trivially bypassed, and unlike a bad spec field a bad
+// path here would overwrite something: /fuse holds the guest agent's manifest,
+// its resolved secrets, and its TLS credentials. The profile merges its own
+// files last so it always wins a collision (see FusedAgentSpec); this check is
+// the half of that guarantee that fails loudly instead of silently.
+//
+// Paths are validated in sorted order so a request with several bad ones always
+// reports the same first offender.
+func decodeCreateFiles(files map[string]string) (map[string][]byte, error) {
+	if len(files) == 0 {
+		return nil, nil
+	}
+
+	paths := make([]string, 0, len(files))
+	for p := range files {
+		paths = append(paths, p)
+	}
+	sort.Strings(paths)
+
+	out := make(map[string][]byte, len(files))
+	var total int
+	for _, p := range paths {
+		switch {
+		case !path.IsAbs(p):
+			return nil, fmt.Errorf("files: %q must be an absolute guest path", p)
+		case strings.ContainsAny(p, "\x00\n"):
+			return nil, fmt.Errorf("files: %q must not contain newlines or NUL bytes", p)
+		case p != path.Clean(p):
+			return nil, fmt.Errorf("files: %q is not a clean path (want %q)", p, path.Clean(p))
+		case p == orchestrator.ReservedGuestDir || strings.HasPrefix(p, orchestrator.ReservedGuestDir+"/"):
+			return nil, fmt.Errorf("files: %q is under %s, which is reserved for the guest agent's own files",
+				p, orchestrator.ReservedGuestDir)
+		}
+
+		data, err := base64.StdEncoding.DecodeString(files[p])
+		if err != nil {
+			return nil, fmt.Errorf("files: %q content is not valid base64: %w", p, err)
+		}
+		total += len(data)
+		if total > fusefile.MaxCopyBytes {
+			return nil, fmt.Errorf("%w: files total more than the %d byte limit for one create request",
+				errCreateFilesTooLarge, fusefile.MaxCopyBytes)
+		}
+		out[p] = data
+	}
+	return out, nil
 }
 
 // validateGPUSpec enforces GPU request invariants at the API boundary so

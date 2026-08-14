@@ -55,6 +55,13 @@ export interface CreateRequest {
   manifest_inline?: string;
   secrets?: Record<string, string>;
   startup_script?: string;
+  /**
+   * Guest files written before the startup script runs, keyed by absolute
+   * guest path with base64-encoded content. What a Fusefile's `copy` block
+   * compiles to. Paths under /fuse are rejected, the total decoded size is
+   * capped at 512 KiB, and permissions are not carried.
+   */
+  files?: Record<string, string>;
   gateway_url?: string;
   gateway_token?: string;
   expose?: ExposeSpec[];

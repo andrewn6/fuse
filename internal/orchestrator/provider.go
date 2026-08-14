@@ -315,6 +315,14 @@ type BootOptions struct {
 	GatewayToken  string
 	Expose        []ExposeSpec
 
+	// Files are caller-supplied guest files (a Fusefile's `copy` block),
+	// keyed by absolute guest path. The agent profile merges them into
+	// AgentSpec.Files ahead of its own entries, so they are uploaded on the
+	// same pass as the manifest and credentials and therefore land before
+	// StartupScript runs, and so a caller can never displace a profile file.
+	// The API refuses a path under ReservedGuestDir before it reaches here.
+	Files map[string][]byte
+
 	// StartupScriptTimeout bounds StartupScript. Zero means
 	// DefaultStartupScriptTimeout. The script runs synchronously inside the
 	// create request, so this must stay comfortably under the orchestrator's
@@ -401,19 +409,31 @@ type bootInputs struct {
 	opts      BootOptions
 }
 
+// maxConcurrentUploads bounds how many guest uploads are in flight at once.
+//
+// Every upload is an SSH session on the host agent, and until a Fusefile could
+// carry a `copy` block the only caller was the agent profile with its three to
+// six files, so the fan-out was unbounded because it could not get large. A
+// copied source tree is hundreds of files, and opening hundreds of SSH sessions
+// at a host agent at once is how a copy turns into a boot timeout.
+const maxConcurrentUploads = 8
+
 // uploadFiles uploads every path->bytes entry of files into the env,
 // concurrently: each upload is an independent guest file with no shared
 // state, so there is no reason to pay their round trips one after another.
 // The generic boot path drives all guest uploads (manifest, secrets,
-// credentials) through this from AgentSpec.Files; the agent profile decides
-// which files exist and where they land.
+// credentials, and any caller files) through this from AgentSpec.Files; the
+// agent profile decides which files exist and where they land.
 func uploadFiles(ctx context.Context, env Environment, files map[string][]byte) error {
 	var wg sync.WaitGroup
 	errs := make(chan error, len(files))
+	sem := make(chan struct{}, maxConcurrentUploads)
 	for path, data := range files {
 		wg.Add(1)
+		sem <- struct{}{}
 		go func(path string, data []byte) {
 			defer wg.Done()
+			defer func() { <-sem }()
 			if err := env.Upload(ctx, data, path); err != nil {
 				errs <- fmt.Errorf("upload %s: %w", path, err)
 			}

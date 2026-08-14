@@ -20,6 +20,13 @@ import (
 // fused guest paths. These follow the fused `/fuse/` convention (see PRD-08):
 // the guest fc-agent mounts /fuse on tmpfs so secrets never reach persistent
 // storage. They are profile details, not core defaults.
+// ReservedGuestDir is the directory every path below lives under. It is
+// exported so the API can refuse a caller file that would land in it: /fuse is
+// where the guest agent keeps the manifest, the resolved secrets, and the TLS
+// credentials, and a caller writing there would either clobber them or race
+// them. The Fusefile compiler applies the same rule client-side.
+const ReservedGuestDir = "/fuse"
+
 const (
 	fuseManifestPath  = "/fuse/manifest.json"
 	fuseSecretsPath   = "/fuse/secrets.json"
@@ -85,9 +92,17 @@ func fusedCredentialFiles(creds *secrets.VMCredentials) map[string][]byte {
 // (manifest/secrets/TLS paths), sourcing them from its own path constants that
 // mirror the consts above.
 func FusedAgentSpec(manifest []byte, secretMap map[string]string, creds *secrets.VMCredentials, opts BootOptions) AgentSpec {
-	files := map[string][]byte{
-		fuseManifestPath: manifest,
+	// Caller files (BootOptions.Files, a Fusefile's `copy` block) go in
+	// first, so every profile entry below overwrites them rather than the
+	// other way round: a caller can never displace the manifest, the secrets
+	// json, or a credential file, whatever it asked for. The API rejects a
+	// caller path under ReservedGuestDir too, so this is a second line of
+	// defence and not the only one.
+	files := make(map[string][]byte)
+	for path, data := range opts.Files {
+		files[path] = data
 	}
+	files[fuseManifestPath] = manifest
 
 	// Default to an empty secret map so the guest always finds a valid
 	// /fuse/secrets.json (this is the empty-map default logic, centralized
