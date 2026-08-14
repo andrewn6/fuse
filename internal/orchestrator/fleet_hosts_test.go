@@ -354,3 +354,50 @@ func TestDeallocateOnHost_migInstanceReleasesAcrossProfiles(t *testing.T) {
 		t.Errorf("MIGProfiles[1g.10gb] = %d, want 1 (untouched by the 2g.20gb release)", h.Allocated.MIGProfiles["1g.10gb"])
 	}
 }
+
+// TestReconcileOrphan_destroysAndReclaimsHostAllocation checks #68's Part B:
+// destroying an orphan must not leave the host's allocation inflated. An
+// orphan is untracked, so it carries no Spec for deallocateOnHost to subtract;
+// its stale counter can only drain by re-deriving host allocation after the
+// destroy. We simulate a VM that was allocated on its host then lost its vm
+// record to a crash (leaving the host counter inflated) while its sandbox
+// lingers in the provider as an orphan, and assert the host allocation is
+// reclaimed to zero once reconcile destroys the orphan.
+func TestReconcileOrphan_destroysAndReclaimsHostAllocation(t *testing.T) {
+	stub := newStubProvider()
+	fm := NewFleetManager(FleetConfig{Provider: stub, Prefix: "gpu-"})
+	host := gpuFleetHost("h1", 2, "a100")
+	if err := fm.RegisterHost(context.Background(), host, stub); err != nil {
+		t.Fatal(err)
+	}
+
+	// Simulate a VM that was allocated on h1 then lost its vm record to a
+	// crash, leaving h1's counter inflated. The sandbox lingers in the
+	// provider as an untracked orphan.
+	fm.mu.Lock()
+	fm.allocateOnHost("h1", &vm{spec: Spec{
+		Name: "gpu-orphan", CPUs: 1, RamMB: 256, StorageGB: 10, GPUs: 1, GPUKind: "a100",
+	}})
+	stub.envs["gpu-orphan"] = &stubLoadEnv{name: "gpu-orphan", url: "http://gpu-orphan.test"}
+	fm.mu.Unlock()
+
+	if got := findHost(t, fm, "h1").Allocated.GPUs; got != 1 {
+		t.Fatalf("pre-reconcile allocated GPUs = %d, want 1 (fixture must inflate the host)", got)
+	}
+
+	fm.reconcile(context.Background())
+
+	h := findHost(t, fm, "h1")
+	if h.Allocated.GPUs != 0 {
+		t.Errorf("post-reconcile allocated GPUs = %d, want 0 (orphan destroy must reclaim host allocation)", h.Allocated.GPUs)
+	}
+	if h.Allocated.VMCount != 0 {
+		t.Errorf("post-reconcile VMCount = %d, want 0", h.Allocated.VMCount)
+	}
+	stub.mu.Lock()
+	orphanGone := len(stub.envs) == 0
+	stub.mu.Unlock()
+	if !orphanGone {
+		t.Errorf("orphan not destroyed: %d envs remain", len(stub.envs))
+	}
+}

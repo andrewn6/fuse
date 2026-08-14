@@ -1355,6 +1355,20 @@ func (fm *FleetManager) reconcile(ctx context.Context) {
 	// in the provider so they don't accumulate in memory or in the store.
 	fm.reapDestroyedVMs(providerVMs)
 
+	// Heal host allocation drift when an orphan is destroyed (#68). An orphan
+	// is untracked by definition, so it has no persisted Spec for
+	// deallocateOnHost to subtract; its allocation (if a crash that lost the
+	// vm record left a stale counter behind) is only correctable by re-deriving
+	// each host's Allocated from the live fleet. That is safe here only when no
+	// VM is mid-teardown, because recompute (like startup recovery) excludes
+	// Destroying VMs that may still hold a device not yet reaped by
+	// reapDestroyedVMs above.
+	if summary.OrphansDestroyed > 0 && !fm.hasTrackedDestroyingVM() {
+		for _, h := range fm.recomputeHostAllocations() {
+			fm.persistHostRecordBackground(fm.hostToRecord(h))
+		}
+	}
+
 	if fm.metrics != nil {
 		summary.Duration = time.Since(start)
 		fm.metrics.ReconcileCompleted(summary)
@@ -1424,6 +1438,35 @@ func (fm *FleetManager) reapDestroyedVMs(providerVMs map[string]bool) {
 	}
 }
 
+// reattachVMFromProvider re-establishes a recovered VM's live environment by
+// looking it up in its provider (single-provider or per-host) and restoring
+// env/url plus the decrypted auth token. It does not mutate state; callers
+// decide the target state based on whether the lookup succeeds. Shared by the
+// Running and Provisioning recovery branches so an interrupted provision is
+// re-attached rather than destroyed (#68).
+func (fm *FleetManager) reattachVMFromProvider(ctx context.Context, v *vm) error {
+	lookupProvider, providerErr := fm.providerForVM(v.hostID)
+	if providerErr != nil {
+		return providerErr
+	}
+	env, err := lookupProvider.Get(ctx, v.id)
+	if err != nil {
+		return err
+	}
+	v.env = env
+	v.url = env.URL()
+	if len(v.authTokenEncrypted) > 0 && len(fm.tokenEncryptionKey) == 32 {
+		if plain, decErr := secrets.DecryptToken(v.authTokenEncrypted, fm.tokenEncryptionKey); decErr == nil {
+			if ts, ok := env.(TokenSetter); ok {
+				ts.SetToken(plain)
+			}
+		} else {
+			fm.logger.Warn("recover: decrypt auth token failed", "vm", v.id, "err", decErr)
+		}
+	}
+	return nil
+}
+
 // recoverState rehydrates the fleet from the state store after a restart.
 //
 // Note what is deliberately absent: there is no artifact-index phase. The
@@ -1490,44 +1533,32 @@ func (fm *FleetManager) recoverState(ctx context.Context) error {
 		}
 
 		if recoveredVM.state == VMStateRunning {
-			lookupProvider, providerErr := fm.providerForVM(recoveredVM.hostID)
-			var env Environment
-			var getErr error
-			if providerErr != nil {
-				getErr = providerErr
-			} else {
-				env, getErr = lookupProvider.Get(ctx, recoveredVM.id)
-			}
-			if getErr != nil {
+			if err := fm.reattachVMFromProvider(ctx, recoveredVM); err != nil {
 				recoveredVM.state = VMStateDestroying
 				recoveredVM.taskID = ""
 				recoveredVM.err = "vm missing from provider during recovery"
 				recoveredVM.updatedAt = time.Now()
-			} else {
-				recoveredVM.env = env
-				recoveredVM.url = env.URL()
-				// Restore the per-VM auth token so env.Token() returns the
-				// active token for provider operations that authenticate
-				// against the guest URL (e.g. firecracker DNAT). Without
-				// this, env.Token() returns "" after recovery.
-				if len(recoveredVM.authTokenEncrypted) > 0 && len(fm.tokenEncryptionKey) == 32 {
-					if plain, decErr := secrets.DecryptToken(recoveredVM.authTokenEncrypted, fm.tokenEncryptionKey); decErr == nil {
-						if ts, ok := env.(TokenSetter); ok {
-							ts.SetToken(plain)
-						}
-					} else {
-						fm.logger.Warn("recover: decrypt auth token failed", "vm", recoveredVM.id, "err", decErr)
-					}
-				}
 			}
 		} else if recoveredVM.state == VMStateProvisioning {
-			// Provisioning was interrupted by a crash. The VM may or may not exist
-			// in the provider. Clean up by marking it as destroying and clearing
-			// the task ID so the task can be retried.
-			recoveredVM.state = VMStateDestroying
-			recoveredVM.taskID = ""
-			recoveredVM.err = "provisioning interrupted by orchestrator crash"
-			recoveredVM.updatedAt = time.Now()
+			// Provisioning was interrupted by a crash. The sandbox may
+			// already exist in the provider (a crash between Create and
+			// finalize leaves it live), so re-attach via provider.Get and
+			// promote the VM to Running instead of destroying it. This
+			// preserves the in-flight work — and the uploadfiles/retry that
+			// would otherwise 404 against a destroyed sandbox — and keeps
+			// its task assigned (the task-recovery pass below retains tasks
+			// whose VM recovered to Running). Only if the VM never materialised
+			// in the provider do we fall back to the pre-existing teardown so
+			// the half-built record is cleaned up and the task retried (#68).
+			if err := fm.reattachVMFromProvider(ctx, recoveredVM); err != nil {
+				recoveredVM.state = VMStateDestroying
+				recoveredVM.taskID = ""
+				recoveredVM.err = "provisioning interrupted by orchestrator crash"
+				recoveredVM.updatedAt = time.Now()
+			} else {
+				recoveredVM.state = VMStateRunning
+				recoveredVM.updatedAt = time.Now()
+			}
 		}
 
 		recovered[recoveredVM.id] = recoveredVM
@@ -1610,6 +1641,22 @@ func (fm *FleetManager) recoverState(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+// hasTrackedDestroyingVM reports whether any fleet-tracked VM is currently in
+// the Destroying state (i.e. being torn down but not yet reaped). Used to gate
+// in-cycle allocation recompute: a Destroying VM still present in the provider
+// still holds its host devices, so recompute (which excludes Destroying VMs)
+// must not run while one is in flight.
+func (fm *FleetManager) hasTrackedDestroyingVM() bool {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	for _, v := range fm.vms {
+		if v.state == VMStateDestroying {
+			return true
+		}
+	}
+	return false
 }
 
 // recomputeHostAllocations re-derives every host's Allocated capacity from
