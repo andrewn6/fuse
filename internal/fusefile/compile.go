@@ -51,6 +51,31 @@ type ExposeSpec struct {
 	As   string
 }
 
+// HealthcheckSpec is the compiled environment-level probe. It mirrors
+// internal/api.HealthcheckSpec field-for-field so the CLI can copy it onto the
+// wire without importing the api package, the same arrangement ResourceSpec
+// and ExposeSpec use.
+//
+// Durations are carried as seconds rather than as go duration strings because
+// the wire is language-neutral, and a zero means the author omitted the field
+// and the guest agent's default applies. That is the same convention
+// StartupTimeoutSeconds uses, so "unset" reads the same way everywhere.
+type HealthcheckSpec struct {
+	HTTP *HealthcheckHTTP
+	Exec []string
+
+	IntervalSeconds    int64
+	TimeoutSeconds     int64
+	Retries            int
+	StartPeriodSeconds int64
+}
+
+// HealthcheckHTTP is the compiled form of an in-guest HTTP probe.
+type HealthcheckHTTP struct {
+	Port int
+	Path string
+}
+
 // Compiled is the result of compiling a Fusefile: the resource spec, the
 // manifest json to upload to the guest, the startup script to run, the
 // secrets the environment needs at create time, and any ports to expose.
@@ -60,6 +85,11 @@ type Compiled struct {
 	StartupScript   string
 	RequiredSecrets []string
 	Expose          []ExposeSpec
+
+	// Healthcheck is the environment-level readiness probe, or nil when the
+	// author declared none. It does not travel in the manifest: the manifest
+	// describes services, and this probe is about the environment.
+	Healthcheck *HealthcheckSpec
 
 	// BuildScript is the setup phase alone, for `fuse build` to run through
 	// the exec path (600s) rather than the startup-script path (30s).
@@ -383,6 +413,9 @@ func Compile(f *Fusefile) (*Compiled, error) {
 		}
 	}
 
+	healthcheck, hcErrs := compileHealthcheck(f)
+	errs = append(errs, hcErrs...)
+
 	manifestJSON, requiredSecrets, err := compileManifest(f)
 	if err != nil {
 		errs = append(errs, err)
@@ -415,8 +448,70 @@ func Compile(f *Fusefile) (*Compiled, error) {
 		RunScript:             compileRunScript(f),
 		RequiredSecrets:       requiredSecrets,
 		Expose:                compileExpose(f),
+		Healthcheck:           healthcheck,
 		StartupTimeoutSeconds: startupTimeoutSeconds,
 	}, nil
+}
+
+// compileHealthcheck turns the authored healthcheck block into its wire form,
+// parsing the three go durations into seconds. It returns (nil, nil) when the
+// author declared no probe.
+//
+// Rounding is up, for the same reason startup_timeout rounds up: a sub-second
+// value floored to zero would read on the wire as "unset" and quietly restore
+// the guest agent's default instead of the value that was asked for.
+func compileHealthcheck(f *Fusefile) (*HealthcheckSpec, []error) {
+	hc := f.Healthcheck
+	if hc == nil {
+		return nil, nil
+	}
+
+	var errs []error
+	interval := healthDurationSeconds("healthcheck.interval", hc.Interval, &errs)
+	timeout := healthDurationSeconds("healthcheck.timeout", hc.Timeout, &errs)
+	startPeriod := healthDurationSeconds("healthcheck.start_period", hc.StartPeriod, &errs)
+
+	// attempts run one at a time, so a timeout longer than the interval does
+	// not overlap them, it stretches the interval. an author who wrote both
+	// numbers meant both, so the contradiction is reported rather than
+	// resolved. only checked when both were authored: a default filled in
+	// downstream is never in conflict with an explicit value here.
+	if interval > 0 && timeout > interval {
+		errs = append(errs, fmt.Errorf(
+			"healthcheck.timeout: must not exceed healthcheck.interval (%s > %s); attempts run one at a time",
+			hc.Timeout, hc.Interval))
+	}
+
+	spec := &HealthcheckSpec{
+		Exec:               append([]string(nil), hc.Exec...),
+		IntervalSeconds:    interval,
+		TimeoutSeconds:     timeout,
+		Retries:            hc.Retries,
+		StartPeriodSeconds: startPeriod,
+	}
+	if hc.HTTP != nil {
+		spec.HTTP = &HealthcheckHTTP{Port: hc.HTTP.Port, Path: hc.HTTP.Path}
+	}
+	return spec, errs
+}
+
+// healthDurationSeconds parses one healthcheck duration into whole seconds,
+// rounding up, and appends any problem to errs under the given field name. An
+// empty value is not an error: it means the field was omitted and yields zero.
+func healthDurationSeconds(field, value string, errs *[]error) int64 {
+	if value == "" {
+		return 0
+	}
+	d, err := time.ParseDuration(value)
+	switch {
+	case err != nil:
+		*errs = append(*errs, fmt.Errorf("%s: %w", field, err))
+	case d <= 0:
+		*errs = append(*errs, fmt.Errorf("%s: must be positive, got %q", field, value))
+	default:
+		return int64((d + time.Second - 1) / time.Second)
+	}
+	return 0
 }
 
 // compileLabels copies the placement label selectors so the compiled spec

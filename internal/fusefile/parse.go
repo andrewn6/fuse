@@ -213,6 +213,8 @@ func validate(f *Fusefile) error {
 		}
 	}
 
+	errs = append(errs, validateHealthProbe(f.Healthcheck)...)
+
 	// an empty secret name is a requirement no `--secret` flag can satisfy, and
 	// the server's ExtractRequiredSecrets skips empty refs, so the two sides
 	// would disagree about what the environment needs.
@@ -223,6 +225,55 @@ func validate(f *Fusefile) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// validateHealthProbe checks the structural rules of the environment-level
+// healthcheck block. The durations are not parsed here: they are parsed by the
+// compiler alongside every other go duration in the file, so `fuse validate`
+// reports a bad `interval` from the same place it reports a bad `max_runtime`.
+//
+// A nil probe is the common case (the block is optional) and yields nothing.
+func validateHealthProbe(hc *HealthProbe) []error {
+	if hc == nil {
+		return nil
+	}
+	var errs []error
+
+	// exactly one probe, mirroring the value/secret exclusivity on env
+	// entries: naming two would produce two verdicts for a block whose whole
+	// purpose is a single one.
+	switch {
+	case hc.HTTP != nil && len(hc.Exec) > 0:
+		errs = append(errs, fmt.Errorf("healthcheck: http and exec are mutually exclusive"))
+	case hc.HTTP == nil && len(hc.Exec) == 0:
+		errs = append(errs, fmt.Errorf("healthcheck: http or exec is required"))
+	}
+
+	if hc.HTTP != nil {
+		if hc.HTTP.Port < 1 || hc.HTTP.Port > 65535 {
+			errs = append(errs, fmt.Errorf("healthcheck.http.port: must be between 1 and 65535"))
+		}
+		// the guest agent builds the probe URL by concatenation, so a path
+		// without a leading slash would silently probe a different one.
+		if p := hc.HTTP.Path; p != "" && !strings.HasPrefix(p, "/") {
+			errs = append(errs, fmt.Errorf("healthcheck.http.path: must start with a slash, got %q", p))
+		}
+	}
+
+	for i, arg := range hc.Exec {
+		if strings.TrimSpace(arg) == "" {
+			errs = append(errs, fmt.Errorf("healthcheck.exec[%d]: must not be empty", i))
+		}
+	}
+
+	// zero keeps its meaning here the way it does for cpus: the field was
+	// omitted and the guest agent's default applies. only a negative count,
+	// which no default could stand in for, is rejected.
+	if hc.Retries < 0 {
+		errs = append(errs, fmt.Errorf("healthcheck.retries: must not be negative"))
+	}
+
+	return errs
 }
 
 // containsDotDot reports whether any segment of a slash-separated guest path

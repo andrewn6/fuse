@@ -61,6 +61,7 @@
       "description": "Secret names this environment requires. Values are supplied out of band, never written here.",
       "items": { "type": "string" }
     },
+    "healthcheck": { "$ref": "#/$defs/envHealthcheck" },
     "startup_timeout": {
       "allOf": [{ "$ref": "#/$defs/duration" }],
       "description": "Go duration bounding setup + run. Omit for the orchestrator default (30s)."
@@ -261,6 +262,56 @@
         "interval": { "$ref": "#/$defs/duration" },
         "timeout": { "$ref": "#/$defs/duration" },
         "retries": { "type": "integer" }
+      }
+    },
+    "envHealthcheck": {
+      "type": "object",
+      "description": "The environment-level readiness probe: one verdict for whether the whole sandbox is doing its job, reported back to the control plane. Not the same thing as services.*.healthcheck, which governs one container and never reaches the orchestrator.",
+      "additionalProperties": false,
+      "oneOf": [{ "required": ["http"] }, { "required": ["exec"] }],
+      "properties": {
+        "http": {
+          "type": "object",
+          "description": "An HTTP GET inside the guest. A 2xx or 3xx response passes.",
+          "additionalProperties": false,
+          "required": ["port"],
+          "properties": {
+            "port": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 65535,
+              "description": "The guest port to dial. It needs no expose entry: the probe runs inside the guest."
+            },
+            "path": {
+              "type": "string",
+              "description": "Request path, which must start with a slash. Defaults to /.",
+              "pattern": "^/"
+            }
+          }
+        },
+        "exec": {
+          "type": "array",
+          "description": "An argv run inside the guest. Exit status 0 passes.",
+          "items": { "type": "string", "minLength": 1 },
+          "minItems": 1
+        },
+        "interval": {
+          "allOf": [{ "$ref": "#/$defs/duration" }],
+          "description": "How long the guest agent waits between attempts. Omit for the guest agent default (10s)."
+        },
+        "timeout": {
+          "allOf": [{ "$ref": "#/$defs/duration" }],
+          "description": "Bound on one attempt. Must not exceed interval. Omit for the guest agent default (2s)."
+        },
+        "retries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Consecutive failures that flip the verdict to failing. Omit or 0 for the guest agent default (3)."
+        },
+        "start_period": {
+          "allOf": [{ "$ref": "#/$defs/duration" }],
+          "description": "Grace window from the first attempt during which failures are not counted. Ends for good once the probe passes once."
+        }
       }
     },
     "envValue": {
