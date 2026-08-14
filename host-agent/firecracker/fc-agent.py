@@ -205,18 +205,22 @@ def sudo(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
 # -- Firecracker HTTP client over unix socket ---------------------------------
 
 class UnixHTTPConnection(http.client.HTTPConnection):
-    def __init__(self, path: str):
-        super().__init__("localhost")
+    def __init__(self, path: str, timeout: float = 5.0):
+        super().__init__("localhost", timeout=timeout)
         self._p = path
 
     def connect(self):
         s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        s.settimeout(self.timeout)
         s.connect(self._p)
         self.sock = s
 
 
 def fc_api(sock_path: str, method: str, path: str, body: dict | None = None, timeout: float = 5.0) -> tuple[int, bytes]:
-    # Uses sudo-owned socket; simplest is curl to avoid permission issues.
+    # Speaks to the socket directly rather than shelling out to `sudo curl`:
+    # start_firecracker chmods it 0666 the moment it appears, so both the
+    # root service unit and the foreground dev path can open it, and no
+    # caller-supplied value ever lands one argv slot away from a command line.
     # method/path are always literals from call sites (see start_firecracker's
     # `steps`), never guest- or request-derived; validate anyway so this stays
     # true even if a future caller forwards something less trusted.
@@ -224,24 +228,19 @@ def fc_api(sock_path: str, method: str, path: str, body: dict | None = None, tim
         raise ValueError(f"invalid firecracker API method: {method!r}")
     if not re.fullmatch(r"/[A-Za-z0-9/_-]*", path):
         raise ValueError(f"invalid firecracker API path: {path!r}")
-    data = json.dumps(body) if body is not None else None
-    args = ["sudo", "-n", "curl", "-sS", "--unix-socket", sock_path,
-            "-X", method, f"http://localhost{path}",
-            "-H", "Content-Type: application/json",
-            "-w", "\n__HTTP_CODE__%{http_code}"]
-    if data is not None:
-        args += ["-d", data]
+    data = json.dumps(body).encode() if body is not None else None
+    conn = UnixHTTPConnection(sock_path, timeout=timeout)
     try:
-        cp = subprocess.run(args, capture_output=True, timeout=timeout)
-    except subprocess.TimeoutExpired:
+        conn.request(method, path, body=data,
+                     headers={"Content-Type": "application/json"})
+        resp = conn.getresponse()
+        return resp.status, resp.read()
+    except TimeoutError:
         return 599, b"timeout"
-    out = cp.stdout
-    marker = b"\n__HTTP_CODE__"
-    idx = out.rfind(marker)
-    if idx < 0:
-        return 599, out + cp.stderr
-    code = int(out[idx + len(marker):].strip() or b"0")
-    return code, out[:idx]
+    except (OSError, http.client.HTTPException) as e:
+        return 599, f"{type(e).__name__}: {e}".encode()
+    finally:
+        conn.close()
 
 
 # -- Networking ---------------------------------------------------------------
@@ -485,7 +484,9 @@ def start_firecracker(meta: dict) -> None:
     real_pid = max(pids) if pids else int(pid_out)
     meta["pid"] = real_pid
     meta["sock"] = str(sock)
-    # Make sock readable by our user so we could inspect; curl uses sudo anyway.
+    # firecracker runs under sudo, so the socket lands root-owned. fc_api talks
+    # to it directly from this process, so opening it up is load-bearing now,
+    # not just a convenience for poking at it by hand.
     sudo(["chmod", "666", str(sock)], check=False)
 
     # Configure boot, drive, net, machine-config, start.
