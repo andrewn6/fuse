@@ -12,13 +12,30 @@ import (
 
 // Fusefile is the v1 authoring contract.
 type Fusefile struct {
-	Version   int                `yaml:"version"`
-	Image     string             `yaml:"image,omitempty"`
-	Resources Resources          `yaml:"resources,omitempty"`
-	Placement Placement          `yaml:"placement,omitempty"`
-	Cache     Cache              `yaml:"cache,omitempty"`
-	Files     []File             `yaml:"files,omitempty"`
-	Setup     []Step             `yaml:"setup,omitempty"`
+	Version   int       `yaml:"version"`
+	Image     string    `yaml:"image,omitempty"`
+	Resources Resources `yaml:"resources,omitempty"`
+	Placement Placement `yaml:"placement,omitempty"`
+	Cache     Cache     `yaml:"cache,omitempty"`
+	Files     []File    `yaml:"files,omitempty"`
+
+	// Build is the work that prepares the environment: it runs to completion
+	// before Run, in the same workspace, and a failure in it is reported as a
+	// build failure rather than as a failure of the task itself. It is the
+	// first-class spelling of the phase.
+	Build []Step `yaml:"build,omitempty"`
+
+	// Setup is a deprecated alias for Build, kept accepted so every Fusefile
+	// written before the rename keeps compiling byte for byte. Setting both is
+	// a validation error rather than a concatenation: which half runs first
+	// would be a guess, and running steps in an order the author did not write
+	// is worse than making them pick a spelling.
+	//
+	// Nothing downstream reads either field directly. BuildSteps resolves the
+	// alias in one place so the compiler, the layer keys, and the CLI cannot
+	// disagree about which one won.
+	Setup []Step `yaml:"setup,omitempty"`
+
 	Services  map[string]Service `yaml:"services,omitempty"`
 	Run       Command            `yaml:"run,omitempty"`
 	Workspace string             `yaml:"workspace,omitempty"`
@@ -30,7 +47,7 @@ type Fusefile struct {
 	// sandbox has a single verdict.
 	Healthcheck *HealthProbe `yaml:"healthcheck,omitempty"`
 
-	// StartupTimeout bounds the generated startup script (setup + run) as a
+	// StartupTimeout bounds the generated startup script (build + run) as a
 	// go duration, e.g. "45s". Empty means the orchestrator's default. The
 	// orchestrator rejects a value above its configured ceiling rather than
 	// clamping it, so an author always knows what bound they got.
@@ -39,6 +56,32 @@ type Fusefile struct {
 	// bounded by the control plane's HTTP write timeout because create is
 	// synchronous. Bake long work into an image with `fuse build` instead.
 	StartupTimeout string `yaml:"startup_timeout,omitempty"`
+}
+
+// BuildSteps returns the effective build steps: Build when the author wrote
+// `build:`, and the deprecated `setup:` alias otherwise. Validate rejects
+// setting both, so at most one of the two is populated in a file that got as
+// far as being compiled.
+//
+// Every consumer of the phase goes through here (the generated scripts, the
+// layer keys, the CLI's step labels), so the alias is resolved exactly once and
+// nothing downstream has to know which key the author typed.
+func (f *Fusefile) BuildSteps() []Step {
+	if len(f.Build) > 0 {
+		return f.Build
+	}
+	return f.Setup
+}
+
+// buildField is the key the author actually wrote, so a message about a bad
+// step points at `build[2]` or `setup[2]` rather than at whichever spelling the
+// compiler happens to prefer. A file that sets neither reports "build", since
+// that is the spelling to teach.
+func (f *Fusefile) buildField() string {
+	if len(f.Build) == 0 && len(f.Setup) > 0 {
+		return "setup"
+	}
+	return "build"
 }
 
 // Command is the polymorphic `run` field. It accepts either a scalar shell
@@ -155,7 +198,8 @@ type Cache struct {
 	Enabled bool `yaml:"enabled,omitempty"`
 }
 
-// Step is one setup step. it accepts two yaml forms: a bare scalar
+// Step is one build step, under either spelling of the phase (`build:` or the
+// deprecated `setup:`). it accepts two yaml forms: a bare scalar
 // ("apt-get update -qq"), equivalent to {run: ...} and unchanged from v1's
 // list of strings; and a mapping ({run: npm ci, inputs: [package.json]}),
 // which adds inputs, cache, and workdir.
@@ -195,13 +239,13 @@ func (s *Step) UnmarshalYAML(node *yaml.Node) error {
 	}
 
 	if node.Kind != yaml.MappingNode {
-		return fmt.Errorf("setup step: must be a string or a mapping")
+		return fmt.Errorf("build step: must be a string or a mapping")
 	}
 
 	for i := 0; i+1 < len(node.Content); i += 2 {
 		key := node.Content[i].Value
 		if !stepFields[key] {
-			return fmt.Errorf("line %d: field %s not found in setup step", node.Content[i].Line, key)
+			return fmt.Errorf("line %d: field %s not found in build step", node.Content[i].Line, key)
 		}
 	}
 

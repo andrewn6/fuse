@@ -480,6 +480,114 @@ func TestParseAcceptsNestedInputPaths(t *testing.T) {
 	}
 }
 
+// `build:` is the first-class spelling of the phase and takes exactly the same
+// step forms `setup:` always did.
+func TestParseBuildSteps(t *testing.T) {
+	src := `version: 1
+build:
+  - apt-get update -qq
+  - run: npm ci
+    inputs:
+      - package.json
+  - workdir: web
+    run: npm run build
+run: ./start.sh
+`
+	f, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(f.Build) != 3 {
+		t.Fatalf("build: got %d steps, want 3", len(f.Build))
+	}
+	if f.Build[0].Run != "apt-get update -qq" {
+		t.Errorf("build[0].run: got %q", f.Build[0].Run)
+	}
+	if len(f.Build[1].Inputs) != 1 || f.Build[1].Inputs[0] != "package.json" {
+		t.Errorf("build[1].inputs: got %v", f.Build[1].Inputs)
+	}
+	if f.Build[2].Workdir != "web" {
+		t.Errorf("build[2].workdir: got %q", f.Build[2].Workdir)
+	}
+	if len(f.Setup) != 0 {
+		t.Errorf("setup: got %v, want empty", f.Setup)
+	}
+}
+
+// BuildSteps is the single place the alias is resolved, so both spellings have
+// to arrive at the same slice.
+func TestBuildStepsResolvesTheSetupAlias(t *testing.T) {
+	build, err := Parse([]byte("version: 1\nbuild:\n  - npm ci\n"))
+	if err != nil {
+		t.Fatalf("build: unexpected error: %v", err)
+	}
+	setup, err := Parse([]byte("version: 1\nsetup:\n  - npm ci\n"))
+	if err != nil {
+		t.Fatalf("setup: unexpected error: %v", err)
+	}
+	if !reflect.DeepEqual(build.BuildSteps(), setup.BuildSteps()) {
+		t.Errorf("BuildSteps: build %v, setup %v", build.BuildSteps(), setup.BuildSteps())
+	}
+	if steps := (&Fusefile{Version: 1}).BuildSteps(); len(steps) != 0 {
+		t.Errorf("BuildSteps of a file with neither key: got %v, want none", steps)
+	}
+}
+
+// the two keys are one field, so a file that sets both is rejected rather than
+// silently resolved in one direction.
+func TestParseRejectsBuildAndSetupTogether(t *testing.T) {
+	_, err := Parse([]byte("version: 1\nbuild:\n  - npm ci\nsetup:\n  - npm test\n"))
+	if err == nil {
+		t.Fatalf("expected an error for a file setting both build and setup")
+	}
+	if !strings.Contains(err.Error(), "setup is a deprecated alias for build") {
+		t.Errorf("error %q does not explain the conflict", err.Error())
+	}
+}
+
+// a step error names the key the author wrote, so the index points into a list
+// they can actually see in their file.
+func TestParseStepErrorsNameTheAuthoredKey(t *testing.T) {
+	cases := []struct {
+		name        string
+		src         string
+		wantContain string
+	}{
+		{
+			name:        "build",
+			src:         "version: 1\nbuild:\n  - run: \"\"\n",
+			wantContain: "build[0].run: is required",
+		},
+		{
+			name:        "setup",
+			src:         "version: 1\nsetup:\n  - run: \"\"\n",
+			wantContain: "setup[0].run: is required",
+		},
+		{
+			name:        "build workdir",
+			src:         "version: 1\nbuild:\n  - run: x\n    workdir: ../etc\n",
+			wantContain: `build[0].workdir: must not contain ".." segments`,
+		},
+		{
+			name:        "build inputs",
+			src:         "version: 1\nbuild:\n  - run: x\n    inputs: [/etc/passwd]\n",
+			wantContain: "build[0].inputs[0]: must be relative",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse([]byte(tc.src))
+			if err == nil {
+				t.Fatalf("expected an error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantContain) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantContain)
+			}
+		})
+	}
+}
+
 // one case per structural rule added for the gaps every one of these used to
 // fall through: service ports, expose names and duplicates, workspace, empty
 // secret and env names.
