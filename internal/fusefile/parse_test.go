@@ -2,6 +2,7 @@ package fusefile
 
 import (
 	"fmt"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -709,5 +710,65 @@ func TestParseDiskAndStorage(t *testing.T) {
 	}
 	if f.Resources.Storage != "10GB" {
 		t.Errorf("resources.storage: got %q, want %q", f.Resources.Storage, "10GB")
+	}
+}
+
+// TestParseRunCommandForm covers the polymorphic top-level `run` field. A
+// scalar keeps its shell semantics (and compiles byte-identical, see
+// TestCompileStartupScript); a list becomes an argv; a mapping, an empty list,
+// or a non-string element is rejected at decode time, before validate runs.
+func TestParseRunCommandForm(t *testing.T) {
+	t.Run("scalar is the shell form", func(t *testing.T) {
+		f, err := Parse([]byte("version: 1\nrun: ./start.sh\n"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if f.Run.Shell != "./start.sh" || f.Run.Argv != nil {
+			t.Errorf("Run = %+v, want Shell=./start.sh, Argv=nil", f.Run)
+		}
+	})
+
+	t.Run("multi-token scalar stays one shell string", func(t *testing.T) {
+		f, err := Parse([]byte("version: 1\nrun: ./serve.sh --port 8080\n"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if f.Run.Shell != "./serve.sh --port 8080" || f.Run.Argv != nil {
+			t.Errorf("Run = %+v, want the whole line as Shell", f.Run)
+		}
+	})
+
+	t.Run("list is the exec form", func(t *testing.T) {
+		// an argument with a space and a slash keeps its integrity; exec form
+		// is an argv, not a shell string.
+		f, err := Parse([]byte("version: 1\nrun: [\"python\", \"app.py\", \"--config\", \"/etc/my app/config.json\"]\n"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := []string{"python", "app.py", "--config", "/etc/my app/config.json"}
+		if f.Run.Shell != "" || !reflect.DeepEqual(f.Run.Argv, want) {
+			t.Errorf("Run = %+v, want Shell=\"\", Argv=%v", f.Run, want)
+		}
+	})
+
+	cases := []struct {
+		name        string
+		src         string
+		wantContain string
+	}{
+		{name: "empty list", src: "version: 1\nrun: []\n", wantContain: "run: an empty list is not a valid command"},
+		{name: "mapping form is rejected", src: "version: 1\nrun: {shell: ./x}\n", wantContain: "run: must be a string or a list of strings"},
+		{name: "non-string element (int)", src: "version: 1\nrun: [\"a\", 5]\n", wantContain: "run: argument 1 is not a string"},
+		{name: "non-string element (bool)", src: "version: 1\nrun: [\"a\", true]\n", wantContain: "run: argument 1 is not a string"},
+		{name: "non-string element (null)", src: "version: 1\nrun: [\"a\", ~]\n", wantContain: "run: argument 1 is not a string"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := Parse([]byte(tc.src)); err == nil {
+				t.Fatalf("expected an error, got nil")
+			} else if !strings.Contains(err.Error(), tc.wantContain) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantContain)
+			}
+		})
 	}
 }

@@ -34,8 +34,16 @@
       "additionalProperties": { "$ref": "#/$defs/service" }
     },
     "run": {
-      "type": "string",
-      "description": "The main entrypoint, run after setup."
+      "description": "The main entrypoint, compile into `startup_script` after `setup`. A string is interpreted by `sh -lc` (shell form); a list is an argv, each element shell-quoted into a single command line so no argument is subject to word splitting, globbing, or metacharacter reinterpretation (exec form). The exec form is not a true execve: the generated command still runs inside `sh -lc`. The shell form compiles to a byte-identical script; only the exec form adds per-argument quoting.",
+      "oneOf": [
+        { "type": "string", "minLength": 1 },
+        {
+          "type": "array",
+          "description": "Exec form argv: each element is a single argument, shell-quoted as a unit.",
+          "items": { "type": "string" },
+          "minItems": 1
+        }
+      ]
     },
     "workspace": {
       "type": "string",

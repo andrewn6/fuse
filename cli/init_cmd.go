@@ -89,7 +89,11 @@ services:
     image: redis:7
     ports: [6379]
 
-# the main task entrypoint. compiles into startup_script (after setup).
+# the main task entrypoint, compiled into startup_script (after setup). a plain
+# string is interpreted by sh -lc; a list ["python", "app.py"] is an argv whose
+# elements are shell-quoted, so spaces, quotes, $, and globs in an argument
+# cannot alter the command. use the list form only when an argument would
+# otherwise be reinterpreted by the shell.
 run: ./start.sh
 
 # where setup and run execute. absolute path, created with mkdir -p. this is

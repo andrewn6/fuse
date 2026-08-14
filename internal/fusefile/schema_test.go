@@ -8,6 +8,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 // schemaPath is the published json schema for the authoring format.
@@ -144,12 +146,25 @@ func (d *schemaDoc) checkStruct(t *testing.T, path string, typ reflect.Type, nod
 
 // checkField recurses into whatever the field's type eventually contains: a
 // slice descends into "items", a map into "additionalProperties", and a struct
-// gets compared. anything else (string, int, bool) is a leaf.
+// gets compared. anything else (string, int, bool) is a leaf. A struct with no
+// yaml-tagged fields is also a leaf: it models a polymorphic scalar (e.g.
+// Command's shell-vs-argv) whose yaml shape is owned by a custom unmarshaler,
+// not by object fields the schema would have to describe.
 func (d *schemaDoc) checkField(t *testing.T, path string, typ reflect.Type, node map[string]any) {
 	t.Helper()
 
 	for typ.Kind() == reflect.Pointer {
 		typ = typ.Elem()
+	}
+
+	// Opaque: a custom type with no yaml-tagged fields carries no field-level
+	// contract for the schema to mirror, so there is nothing to walk. This
+	// does not suppress the reverse parity check in checkStruct, which still
+	// flags any schema property a struct claims but does not back with a
+	// field. (No fielded struct in the tree reaches this branch: every
+	// current struct type carries yaml tags.)
+	if typ.Kind() == reflect.Struct && len(yamlFields(typ)) == 0 {
+		return
 	}
 
 	switch typ.Kind() {
@@ -216,4 +231,50 @@ func TestSchemaDescribesParseableFusefile(t *testing.T) {
 	if _, err := Parse([]byte(src)); err != nil {
 		t.Fatalf("the documented modeline example does not parse: %v", err)
 	}
+}
+
+// TestCommandMarshalRoundTrip verifies that Command's custom (un)marshaler
+// preserves each form byte-for-byte and that an unset `run` is omitted by
+// omitempty rather than serialized as an empty scalar. This is the contract the
+// `fuse init` scaffold and any future `fuse validate --print` rely on.
+func TestCommandMarshalRoundTrip(t *testing.T) {
+	t.Run("shell form round-trips", func(t *testing.T) {
+		f := Fusefile{Version: 1, Run: Command{Shell: "./serve.sh --port 8080"}}
+		out, err := yaml.Marshal(&f)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		got, err := Parse(out)
+		if err != nil {
+			t.Fatalf("re-parse: %v", err)
+		}
+		if got.Run.Shell != f.Run.Shell || got.Run.Argv != nil {
+			t.Errorf("Round-trip Run = %+v, want %+v", got.Run, f.Run)
+		}
+	})
+
+	t.Run("exec form round-trips", func(t *testing.T) {
+		f := Fusefile{Version: 1, Run: Command{Argv: []string{"python", "it's hot.py"}}}
+		out, err := yaml.Marshal(&f)
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		got, err := Parse(out)
+		if err != nil {
+			t.Fatalf("re-parse: %v", err)
+		}
+		if !reflect.DeepEqual(got.Run, f.Run) {
+			t.Errorf("Round-trip Run = %+v, want %+v", got.Run, f.Run)
+		}
+	})
+
+	t.Run("empty command is omitted", func(t *testing.T) {
+		out, err := yaml.Marshal(&Fusefile{Version: 1})
+		if err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		if strings.Contains(string(out), "run") {
+			t.Errorf("marshal(empty Fusefile) emitted a run line:\n%s", out)
+		}
+	})
 }

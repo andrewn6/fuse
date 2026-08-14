@@ -657,7 +657,7 @@ func TestCompileStartupScript(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := &Fusefile{Version: 1, Workspace: tc.workspace, Setup: tc.setup, Run: tc.run}
+			f := &Fusefile{Version: 1, Workspace: tc.workspace, Setup: tc.setup, Run: Command{Shell: tc.run}}
 			c, err := Compile(f)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -690,7 +690,7 @@ func TestCompileBuildAndRunScripts(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := &Fusefile{Version: 1, Setup: tc.setup, Run: tc.run}
+			f := &Fusefile{Version: 1, Setup: tc.setup, Run: Command{Shell: tc.run}}
 			c, err := Compile(f)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -987,5 +987,66 @@ func TestCompileReportsEveryResourceViolation(t *testing.T) {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error is missing %q; got: %s", want, msg)
 		}
+	}
+}
+
+// TestCompileStartupScriptExecForm pins the exec form of `run`: a list argv is
+// shell-quoted per element into a single command line, so an argument
+// containing a single quote, a space, $HOME, or a glob cannot alter the
+// generated script. The shell form stays byte-identical (covered by
+// TestCompileStartupScript). The generated fragment runs under sh -lc, so exec
+// form protects arguments from word splitting and metacharacter
+// reinterpretation but is not a shell-less execve.
+func TestCompileStartupScriptExecForm(t *testing.T) {
+	const prelude = "set -eu\nif (set -o pipefail) 2>/dev/null; then set -o pipefail; fi\n" +
+		"mkdir -p '/workspace'\ncd '/workspace'\n"
+	cases := []struct {
+		name    string
+		argv    []string
+		wantRun string // the single run line emitted after the prelude
+	}{
+		{name: "simple argv", argv: []string{"python", "app.py"}, wantRun: `'python' 'app.py'`},
+		{
+			name:    "argument with a single quote",
+			argv:    []string{"python", "it's hot.py"},
+			wantRun: `'python' 'it'\''s hot.py'`,
+		},
+		{
+			name:    "argument with a space",
+			argv:    []string{"python", "my app.py"},
+			wantRun: `'python' 'my app.py'`,
+		},
+		{
+			name:    "argument with $HOME and a glob",
+			argv:    []string{"python", "$HOME", "*.py"},
+			wantRun: `'python' '$HOME' '*.py'`,
+		},
+		{
+			name:    "argument with quote, space, $ and glob together",
+			argv:    []string{"sh", "-c", "it's $HOME *.py"},
+			wantRun: `'sh' '-c' 'it'\''s $HOME *.py'`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &Fusefile{Version: 1, Run: Command{Argv: tc.argv}}
+			c, err := Compile(f)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			want := prelude + tc.wantRun + "\n"
+			if c.StartupScript != want {
+				t.Errorf("StartupScript = %q, want %q", c.StartupScript, want)
+			}
+			// RunScript is the setup-free StartupScript; the run line is shared.
+			if c.RunScript != want {
+				t.Errorf("RunScript = %q, want %q", c.RunScript, want)
+			}
+			// the exec-form argv must never leak into the bake/build phase
+			if c.BuildScript != "" {
+				t.Errorf("BuildScript = %q, want empty", c.BuildScript)
+			}
+		})
 	}
 }
