@@ -1,6 +1,6 @@
 module github.com/folsomintel/fuse
 
-go 1.26.5
+go 1.26.6
 
 // sdks/go is its own module (github.com/folsomintel/fuse/sdks/go). The in-repo
 // operator CLI (./cli) imports it; this replace resolves it from the local tree

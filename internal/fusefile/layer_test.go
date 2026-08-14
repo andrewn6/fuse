@@ -14,7 +14,7 @@ func cached(steps ...Step) *Fusefile {
 // keysOf derives keys and fails the test on error.
 func keysOf(t *testing.T, f *Fusefile, inputs InputDigester) []LayerKey {
 	t.Helper()
-	keys, err := LayerKeys(f, inputs, LayerOptions{Arch: "amd64"})
+	keys, err := LayerKeys(f, inputs, LayerOptions{})
 	if err != nil {
 		t.Fatalf("LayerKeys: %v", err)
 	}
@@ -103,15 +103,7 @@ func TestLayerKeysChangeWithEveryKeyComponent(t *testing.T) {
 		t.Errorf("spelling out the default workspace changed the key")
 	}
 
-	otherArch, err := LayerKeys(base, nil, LayerOptions{Arch: "arm64"})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if otherArch[0].Key == baseKey {
-		t.Errorf("changing the arch did not change the key")
-	}
-
-	// resources other than the arch do not change the filesystem.
+	// no `resources` field changes the filesystem.
 	moreCPU := cached(Step{Run: "a"})
 	moreCPU.Resources.CPUs = 16
 	moreCPU.Resources.Memory = "64GB"
@@ -138,6 +130,27 @@ func TestLayerKeysChangeWithEveryKeyComponent(t *testing.T) {
 	yes := true
 	if keysOf(t, cached(Step{Run: "a", Cache: &yes}), nil)[0].Key != baseKey {
 		t.Errorf("an explicit cache: true changed the key")
+	}
+}
+
+// The key must be a pure function of the recipe, identical on every machine
+// that derives it. This used to be the opposite invariant: the preimage folded
+// in an arch, and the only arch available client-side is the operator's own,
+// which has nothing to do with the host the build lands on. That made the key
+// assert something false, so an arm64 laptop driving an amd64 build would
+// stamp an arm64 label on amd64 bytes and a later arm64 lookup would hit it.
+// Arch is now recorded on the artifact from the host that built it and applied
+// as a lookup filter instead.
+//
+// A pinned literal is the test for this: CI runs amd64 and developers run
+// arm64, so a key that still varied by platform could not satisfy both.
+func TestLayerKeysDoNotVaryByClientPlatform(t *testing.T) {
+	const golden = "948e6b492662901d0feb5834ff2f3476701795f77b79ed41836ed8db4c9f654c"
+
+	got := keysOf(t, cached(Step{Run: "a"}), nil)[0].Key
+	if got != golden {
+		t.Errorf("key = %q, want %q; either the preimage changed (bump layerKeyDomain) "+
+			"or the key has become platform-dependent again", got, golden)
 	}
 }
 
@@ -284,7 +297,7 @@ func TestLayerKeysExplicitBaseKeyOverridesImage(t *testing.T) {
 	f := cached(Step{Run: "a"})
 	fromImage := keysOf(t, f, nil)[0].Key
 
-	keys, err := LayerKeys(f, nil, LayerOptions{BaseKey: "rootfs:abc", Arch: "amd64"})
+	keys, err := LayerKeys(f, nil, LayerOptions{BaseKey: "rootfs:abc"})
 	if err != nil {
 		t.Fatal(err)
 	}

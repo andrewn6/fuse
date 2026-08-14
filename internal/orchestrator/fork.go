@@ -32,6 +32,76 @@ func (fm *FleetManager) abandonFork(ctx context.Context, provider Provider, host
 	fm.discardFork(vmID, hostID, spec)
 }
 
+// placeFork picks the host a fork lands on, and the provider that owns it.
+//
+// It is a preference ladder, never a gate, and it CANNOT fail. That is the
+// whole contract: forking has always charged the fork to the source's host
+// without consulting capacity, and turning that into a hard admission check
+// would fail forks that work today for a reason the caller never asked about.
+// So every rung falls back to the source's host.
+//
+//  1. the source's host, when it can still take a vm of this shape. this is the
+//     cheapest by far: CreateFromCheckpoint copies the rootfs within one
+//     filesystem rather than across the network.
+//  2. otherwise, if the seed artifact can be copied, whichever host the
+//     scheduler picks -- preferring hosts that already hold those bytes, and
+//     restricted to the source's backend, since a rootfs prepared for one
+//     backend is not a thing another backend can boot.
+//  3. otherwise the source's host anyway, exactly as before.
+func (fm *FleetManager) placeFork(ctx context.Context, spec Spec, srcHostID string, srcProvider Provider, seed SnapshotRecord) (string, Provider) {
+	// single-provider mode: there is no scheduler and no host registry to
+	// consult, so there is nothing to choose between.
+	if srcHostID == "" {
+		return "", srcProvider
+	}
+
+	fm.mu.RLock()
+	hosts := fm.activeHostsLocked()
+	srcBackend := HostBackend("")
+	if h, ok := fm.hosts[srcHostID]; ok {
+		srcBackend = h.Backend
+	}
+	fm.mu.RUnlock()
+
+	if src := hostByID(hosts, srcHostID); src != nil && hostRejection(src, spec) == "" {
+		return srcHostID, srcProvider
+	}
+
+	plan := fm.planSeedPlacement(ctx, Spec{SeedSnapshotID: seed.SnapshotID})
+	if !plan.movable {
+		fm.logger.Warn("fork stays on a host that cannot fit it: its seed artifact cannot be copied",
+			"host", srcHostID, "snapshot", seed.SnapshotID, "reason", plan.whyImmovable())
+		return srcHostID, srcProvider
+	}
+
+	eligible := make([]*Host, 0, len(hosts))
+	for _, h := range hosts {
+		// a rootfs prepared under one backend is not portable to another, and
+		// the backends' snapshot stores are not interchangeable either, so a
+		// fork never crosses that line however much room the other side has.
+		if h.Backend == srcBackend {
+			eligible = append(eligible, h)
+		}
+	}
+	selected, _, err := SchedulePreferring(spec, eligible, fm.placementPolicy,
+		PlacementHints{ArtifactHosts: plan.hostPreference()})
+	if err != nil {
+		fm.logger.Warn("fork stays on a host that cannot fit it: no other host can take it",
+			"host", srcHostID, "err", err)
+		return srcHostID, srcProvider
+	}
+
+	fm.mu.RLock()
+	targetProvider, ok := fm.providerForHost(selected.ID)
+	fm.mu.RUnlock()
+	if !ok {
+		fm.logger.Warn("fork stays on its source host: no provider for the scheduled host",
+			"host", srcHostID, "scheduled", selected.ID)
+		return srcHostID, srcProvider
+	}
+	return selected.ID, targetProvider
+}
+
 // ForkOptions tunes a ForkEnvironment call. All fields are optional.
 type ForkOptions struct {
 	// Comment is attached to the seed snapshot when ForkEnvironment
@@ -55,8 +125,9 @@ type ForkOptions struct {
 // same store path CreateSnapshot uses (upsertSnapshotRecord) and is
 // directly assertable via ListSnapshots / GetSnapshotByID.
 //
-// the fork is charged to the source's host (a fork is pinned there: the seed
-// snapshot's rootfs is host-local) and is given its OWN guest credentials,
+// the fork is charged to whichever host it lands on, which is the source's host
+// unless that host can no longer fit it and the seed artifact can be copied
+// elsewhere (see placeFork). it is given its OWN guest credentials either way,
 // since it boots a copy of the source's disk and would otherwise answer to the
 // source's token.
 //
@@ -150,18 +221,21 @@ func (fm *FleetManager) ForkEnvironment(ctx context.Context, srcVMID string, opt
 	newVMID := fm.prefix + forkTaskID
 	spec := srcSpec
 	spec.Name = newVMID
-	// placement is cleared, not inherited: a fork is already pinned to the
-	// source's host (the seed snapshot's rootfs is host-local) and never goes
-	// through Schedule, so carrying the source's placement.host/labels forward
-	// would record selectors nothing ever evaluates -- and they could name a
-	// different host than the one the fork actually lands on.
+	// a fork inherits the source's shape, never its seed. carrying the source's
+	// own SeedSnapshotID forward would name an artifact on the SOURCE's host,
+	// which is meaningless once the fork can land elsewhere; the fork's rootfs
+	// comes from the seed snapshot chosen above.
+	spec.SeedSnapshotID = ""
+	spec.PinnedHostID = ""
+	// placement is cleared, not inherited: the fork's placement is decided below
+	// from the source's host and the seed's location, so carrying the source's
+	// placement.host/labels forward would record selectors nothing evaluates --
+	// and they could name a different host than the one the fork lands on.
 	spec.HostID = ""
 	spec.Labels = nil
 
-	// a fork is a real vm consuming real resources on the source's host, so it
-	// must be charged to that host. the fork does NOT go through Schedule: the
-	// seed snapshot's rootfs is host-local, so the fork can only be born where
-	// its source lives.
+	// a fork is a real vm consuming real resources on whichever host it lands
+	// on, so it must be charged to that host.
 	//
 	// this is load-bearing beyond bookkeeping: DestroyVM deallocates by v.spec
 	// unconditionally (fleet.go), so a fork that was never allocated would, on
@@ -182,12 +256,21 @@ func (fm *FleetManager) ForkEnvironment(ctx context.Context, srcVMID string, opt
 	// that vanished from the provider, so the placeholder is not torn down for
 	// not existing yet. it is not persisted, so an orchestrator crash mid-fork
 	// leaves nothing behind to recover.
+	//
+	// the source's host is where a fork belongs by default, because
+	// CreateFromCheckpoint copies the rootfs within one filesystem. "belongs
+	// there" must not mean "fails there" though: when that host cannot take
+	// another vm of this shape, the seed artifact follows the fork to a host
+	// that can, exactly as a seeded create does. placeFork never fails; the
+	// worst case is the source's host, which is what this always did.
+	targetHostID, targetProvider := fm.placeFork(ctx, spec, srcHostID, provider, seed)
+
 	now := time.Now()
 	v := &vm{
 		id:             newVMID,
 		state:          VMStateProvisioning,
 		taskID:         forkTaskID,
-		hostID:         srcHostID,
+		hostID:         targetHostID,
 		spec:           spec,
 		createdAt:      now,
 		updatedAt:      now,
@@ -195,14 +278,40 @@ func (fm *FleetManager) ForkEnvironment(ctx context.Context, srcVMID string, opt
 	}
 	fm.mu.Lock()
 	fm.vms[newVMID] = v
-	if srcHostID != "" {
-		fm.allocateOnHost(srcHostID, v)
+	if targetHostID != "" {
+		fm.allocateOnHost(targetHostID, v)
 	}
 	fm.mu.Unlock()
 
-	newEnv, err := forkable.CreateFromCheckpoint(ctx, spec, srcVMID, seed.SnapshotID)
+	var (
+		newEnv Environment
+		err    error
+	)
+	if targetHostID == srcHostID {
+		newEnv, err = forkable.CreateFromCheckpoint(ctx, spec, srcVMID, seed.SnapshotID)
+	} else {
+		// off-host fork: the seed's bytes are copied to the target first, then
+		// the vm is created from them like any other seeded environment. this is
+		// the same rootfs CreateFromCheckpoint would have used, so the fork's
+		// contents are identical; only the transport differs.
+		var localID string
+		localID, err = fm.ensureArtifactOnHost(ctx, seed, targetHostID)
+		if err == nil {
+			spec.SeedSnapshotID = localID
+			spec.PinnedHostID = targetHostID
+			// only these two fields, never the whole spec: allocateOnHost may
+			// have bound resources onto v.spec above, and overwriting it would
+			// silently drop that binding.
+			fm.mu.Lock()
+			v.spec.SeedSnapshotID = localID
+			v.spec.PinnedHostID = targetHostID
+			fm.mu.Unlock()
+			fm.touchArtifact(localID, seed.SnapshotID)
+			newEnv, err = targetProvider.Create(ctx, spec)
+		}
+	}
 	if err != nil {
-		fm.discardFork(newVMID, srcHostID, spec)
+		fm.discardFork(newVMID, targetHostID, spec)
 		return "", fmt.Errorf("fork vm %s from snapshot %s: %w", srcVMID, seed.SnapshotID, err)
 	}
 
@@ -231,24 +340,24 @@ func (fm *FleetManager) ForkEnvironment(ctx context.Context, srcVMID string, opt
 	if len(fm.tokenEncryptionKey) == 32 {
 		creds, credErr := secrets.GenerateVMCredentials(newVMID)
 		if credErr != nil {
-			fm.abandonFork(ctx, provider, srcHostID, newVMID, spec)
+			fm.abandonFork(ctx, targetProvider, targetHostID, newVMID, spec)
 			return "", fmt.Errorf("generate credentials for forked vm %s: %w", newVMID, credErr)
 		}
 		if upErr := uploadFiles(ctx, newEnv, fusedCredentialFiles(creds)); upErr != nil {
-			fm.abandonFork(ctx, provider, srcHostID, newVMID, spec)
+			fm.abandonFork(ctx, targetProvider, targetHostID, newVMID, spec)
 			return "", fmt.Errorf("upload credentials to forked vm %s: %w", newVMID, upErr)
 		}
 		setTokenIfSupported(newEnv, creds)
 		encToken, err = secrets.EncryptToken(creds.AuthToken, fm.tokenEncryptionKey)
 		if err != nil {
-			fm.abandonFork(ctx, provider, srcHostID, newVMID, spec)
+			fm.abandonFork(ctx, targetProvider, targetHostID, newVMID, spec)
 			return "", fmt.Errorf("encrypt token for forked vm %s: %w", newVMID, err)
 		}
 		if agentErr := newEnv.StartAgent(ctx, AgentSpec{
 			AuthToken:    creds.AuthToken,
 			DrainCommand: drainCommand,
 		}); agentErr != nil {
-			fm.abandonFork(ctx, provider, srcHostID, newVMID, spec)
+			fm.abandonFork(ctx, targetProvider, targetHostID, newVMID, spec)
 			return "", fmt.Errorf("restart guest agent on forked vm %s with its own credentials: %w", newVMID, agentErr)
 		}
 	}
@@ -271,7 +380,7 @@ func (fm *FleetManager) ForkEnvironment(ctx context.Context, srcVMID string, opt
 	// microVM is real by this point, so it has to be torn down too, or it
 	// keeps running on the host with nothing tracking it.
 	if err := fm.persistVMByID(ctx, newVMID); err != nil {
-		fm.abandonFork(ctx, provider, srcHostID, newVMID, spec)
+		fm.abandonFork(ctx, targetProvider, targetHostID, newVMID, spec)
 		return "", fmt.Errorf("persist forked vm %s running state: %w", newVMID, err)
 	}
 	// the task record mirrors the running task upsert in ProvisionAndAssign;
@@ -297,7 +406,7 @@ func (fm *FleetManager) ForkEnvironment(ctx context.Context, srcVMID string, opt
 		SnapshotID:       "fork-seed-" + NewEventID(),
 		VMID:             newVMID,
 		TaskID:           forkTaskID,
-		HostID:           srcHostID,
+		HostID:           targetHostID,
 		TenantID:         snapshotTenantID(forkTaskID, newVMID),
 		ParentSnapshotID: seed.SnapshotID,
 		Mode:             SnapshotModeAuto,

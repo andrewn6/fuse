@@ -30,6 +30,17 @@ type ListSnapshotsOptions struct {
 	// sets on an artifact.
 	Name string
 
+	// LayerKey narrows to the build layers taken after one setup step. Empty
+	// means "do not filter", never "match artifacts with no layer key".
+	LayerKey string
+
+	// Arch narrows to artifacts built on one architecture, in GOARCH
+	// vocabulary ("amd64", "arm64"). It is a separate filter from LayerKey
+	// rather than part of it because a rootfs is not portable across
+	// architectures, so a layer lookup that does not constrain arch can be
+	// served bytes it cannot boot.
+	Arch string
+
 	// Limit caps the page size (server default 50, max 200; <=0 uses the
 	// server default). Only consulted by ListPage — List always requests
 	// the server's max page size internally since it walks every page.
@@ -89,6 +100,8 @@ func (s *SnapshotsService) List(ctx context.Context, opt ListSnapshotsOptions) (
 			State:    opt.State,
 			Mode:     opt.Mode,
 			Name:     opt.Name,
+			LayerKey: opt.LayerKey,
+			Arch:     opt.Arch,
 			Limit:    maxPageLimit,
 			Cursor:   cursor,
 		})
@@ -128,6 +141,12 @@ func (s *SnapshotsService) ListPage(ctx context.Context, opt ListSnapshotsOption
 	if opt.Name != "" {
 		values.Set("name", opt.Name)
 	}
+	if opt.LayerKey != "" {
+		values.Set("layer_key", opt.LayerKey)
+	}
+	if opt.Arch != "" {
+		values.Set("arch", opt.Arch)
+	}
 	setPaginationParams(values, opt.Limit, opt.Cursor)
 	req, err := s.t.newRequest(ctx, http.MethodGet, "/v1/snapshots", values, nil)
 	if err != nil {
@@ -150,6 +169,55 @@ func (s *SnapshotsService) ListPage(ctx context.Context, opt ListSnapshotsOption
 		page.NextCursor = *out.NextCursor
 	}
 	return page, nil
+}
+
+// Resolve looks up the newest ready build artifact for one layer cache key and
+// architecture, reporting ok=false when there is none.
+//
+// A miss is not an error. A cold cache is the normal state of a first build, and
+// modelling it as a failure would make every caller wrap this in error handling
+// to discover nothing was wrong.
+//
+// arch is required rather than defaulted. An ext4 rootfs is not portable across
+// architectures, so resolving without one could hand back an artifact the caller
+// cannot boot, at the exact moment it believes it got a cache hit.
+//
+// The scope searched comes from how the client authenticated. There is
+// deliberately no tenant parameter: a caller that could name its own scope could
+// read another tenant's cache.
+func (s *SnapshotsService) Resolve(ctx context.Context, layerKey, arch string) (*Snapshot, bool, error) {
+	if s == nil || s.t == nil {
+		return nil, false, errors.New("snapshots service is not configured")
+	}
+	if layerKey == "" {
+		return nil, false, errors.New("layer key is required")
+	}
+	if arch == "" {
+		return nil, false, errors.New("arch is required")
+	}
+	values := url.Values{}
+	values.Set("layer_key", layerKey)
+	values.Set("arch", arch)
+	req, err := s.t.newRequest(ctx, http.MethodGet, "/v1/snapshots/resolve", values, nil)
+	if err != nil {
+		return nil, false, err
+	}
+	resp, err := s.t.do(req)
+	if err != nil {
+		return nil, false, err
+	}
+	if err := CheckResponse(resp); err != nil {
+		return nil, false, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var out resolveSnapshotResponse
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, false, fmt.Errorf("decode resolved snapshot: %w", err)
+	}
+	if !out.Found || out.Snapshot == nil {
+		return nil, false, nil
+	}
+	return out.Snapshot, true, nil
 }
 
 func (s *SnapshotsService) Get(ctx context.Context, snapshotID string) (*Snapshot, error) {

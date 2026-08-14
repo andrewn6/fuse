@@ -9,7 +9,7 @@ import (
 // layerKeyDomain namespaces the layer key hash. bump the version suffix if the
 // preimage layout below ever changes, so old keys can never collide with new
 // ones and every existing layer is invalidated at once.
-const layerKeyDomain = "fusefile-layer/v1"
+const layerKeyDomain = "fusefile-layer/v2"
 
 // reasons a step is not cacheable. these are stable strings so callers (the
 // `--plan` renderer, and per-step hit/miss reporting) can branch on them
@@ -35,7 +35,7 @@ const (
 // pattern list.
 type InputDigester func(patterns []string) (string, error)
 
-// LayerOptions carries the two key components that are not derivable from the
+// LayerOptions carries the key component that is not derivable from the
 // Fusefile itself.
 type LayerOptions struct {
 	// BaseKey identifies the base rootfs the first step builds on. Empty
@@ -47,11 +47,6 @@ type LayerOptions struct {
 	// a weaker binding: republishing the same tag with new contents does not
 	// invalidate. Wiring a real rootfs digest is backend work.
 	BaseKey string
-
-	// Arch is the architecture of the host the layer will be built on. An
-	// ext4 rootfs is not portable across architectures, so a layer built on
-	// arm64 must never be served to an amd64 boot.
-	Arch string
 }
 
 // LayerKey is the derived cache identity of one setup step.
@@ -84,17 +79,30 @@ type LayerKey struct {
 // and neither can anything after it.
 //
 //	layer_key(i) = sha256(
-//	    "fusefile-layer/v1\n" +
+//	    "fusefile-layer/v2\n" +
 //	    parent_key(i) + "\n" +   // layer_key(i-1), or the base key for i == 0
 //	    step_script(i) + "\n" +  // the fragment the step emits, byte for byte
 //	    inputs_digest(i) + "\n" +
-//	    workspace + "\n" +       // setup runs after `cd <workspace>`
-//	    arch)
+//	    workspace)               // setup runs after `cd <workspace>`
 //
 // Deliberately excluded: secret values (a layer must not be keyed on material
 // it is not allowed to bake in, so a step that reads secrets opts out
-// instead), the task id, every `resources` field except the arch (none of them
-// change the filesystem), and `run:` (it is the entrypoint, not a layer).
+// instead), the task id, every `resources` field (none of them change the
+// filesystem), and `run:` (it is the entrypoint, not a layer).
+//
+// Arch is excluded too, but for a different reason: it is a real constraint,
+// just not a derivable one. An ext4 rootfs genuinely is not portable across
+// architectures, so an arm64 artifact must never be served to an amd64 boot.
+// The problem is that nothing here knows the answer. The key is derived
+// client-side, before any host has been scheduled, so the only arch available
+// at this point is the operator's laptop, which has no relationship to the
+// host the build lands on. Folding that in would produce a key that asserts
+// something false: an operator on an arm64 Mac building on an amd64 host would
+// label the artifact arm64, and a later genuinely-arm64 lookup would hit that
+// key and be handed amd64 bytes. A key that lies is worse than a key that
+// misses. So arch is recorded on the artifact from the host that actually
+// built it, and applied as a separate equality filter at lookup time
+// alongside the tenant and the key.
 //
 // LayerKeys is pure apart from the digester it is handed, so it can be tested
 // without touching a disk.
@@ -145,7 +153,7 @@ func LayerKeys(f *Fusefile, inputs InputDigester, opts LayerOptions) ([]LayerKey
 			}
 			lk.InputsDigest = digest
 			lk.ParentKey = parent
-			lk.Key = hashLayer(parent, scripts[i], digest, workspace, opts.Arch)
+			lk.Key = hashLayer(parent, scripts[i], digest, workspace)
 			lk.Cacheable = true
 			parent = lk.Key
 		}
@@ -171,13 +179,13 @@ func digestInputs(inputs InputDigester, patterns []string) (string, error) {
 // hashLayer computes one link of the chain. every component is newline
 // separated so no two different component splits can produce the same
 // preimage.
-func hashLayer(parent, script, inputsDigest, workspace, arch string) string {
+func hashLayer(parent, script, inputsDigest, workspace string) string {
 	h := sha256.New()
-	for _, part := range []string{layerKeyDomain, parent, script, inputsDigest, workspace} {
+	for _, part := range []string{layerKeyDomain, parent, script, inputsDigest} {
 		h.Write([]byte(part))
 		h.Write([]byte("\n"))
 	}
-	h.Write([]byte(arch))
+	h.Write([]byte(workspace))
 	return hex.EncodeToString(h.Sum(nil))
 }
 

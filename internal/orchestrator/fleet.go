@@ -93,6 +93,12 @@ var (
 	// or must be backgrounded by the script itself.
 	ErrStartupScriptTimeout = errors.New("startup script did not complete in time")
 
+	// Artifact placement and transfer conditions (ErrSeedUnplaceable,
+	// ErrArtifactImmovable, ErrArtifactTransferFailed) are declared in
+	// artifacts.go alongside the code that raises them, because two of the
+	// three deliberately wrap ErrNoCapacity and that reasoning belongs next to
+	// them rather than in a list.
+
 	// ErrStartupScriptTimeoutTooLarge is returned by ProvisionAndAssign when
 	// the caller asks for a startup script bound above the fleet's ceiling.
 	// The request is refused rather than clamped: a caller that silently got
@@ -262,6 +268,33 @@ type FleetConfig struct {
 	// snapshots per tenant. Zero disables byte-based enforcement.
 	SnapshotQuotaMaxBytes int64
 
+	// ArtifactMover copies a build artifact from one host agent to another.
+	// Nil (the default) means artifacts cannot move, in which case an
+	// environment seeded from one is pinned to the host that holds it — the
+	// behaviour that predates peer-to-peer distribution. See ArtifactMover.
+	ArtifactMover ArtifactMover
+
+	// ArtifactPullTimeout bounds a single host-to-host artifact transfer.
+	// Zero inherits the caller's context, which for a create is the HTTP
+	// request. Transfer time scales with artifact size and link speed, so any
+	// fixed bound is either too small for the largest legitimate artifact or
+	// too large to detect anything; set it only where the fleet's artifacts and
+	// links are known.
+	ArtifactPullTimeout time.Duration
+
+	// ArtifactIdleTTL is how long a layer artifact may go unreferenced and
+	// unused before the reconcile loop collects it. "Used" includes cache hits,
+	// not just environments holding it open. Zero (the default) disables idle
+	// collection: an orchestrator upgrade must not start deleting artifacts an
+	// existing fleet relies on.
+	ArtifactIdleTTL time.Duration
+
+	// ArtifactMaxPerTenant caps how many ready layer artifacts one tenant may
+	// keep, evicting least recently used on overflow. It is the cheap ceiling
+	// behind ArtifactIdleTTL, for a tenant that builds often enough to keep
+	// every layer inside the idle window. Zero (the default) disables it.
+	ArtifactMaxPerTenant int
+
 	// PlacementPolicy controls how the scheduler picks among hosts
 	// when multiple are registered. Default is spread.
 	PlacementPolicy PlacementPolicy
@@ -304,6 +337,30 @@ type FleetManager struct {
 	defaultSnapshotRetention time.Duration
 	snapshotQuotaMaxCount    int
 	snapshotQuotaMaxBytes    int64
+
+	// ── Content-addressed artifacts ──────────────────────────────
+	//
+	// The digest-to-hosts index is NOT here: it is derived from snapshot
+	// records on demand (see artifacts.go), so there is nothing to keep in
+	// sync and nothing to rehydrate at startup. Only the two genuinely
+	// ephemeral facts live in memory.
+
+	artifactMover        ArtifactMover
+	artifactPullTimeout  time.Duration
+	artifactIdleTTL      time.Duration
+	artifactMaxPerTenant int
+
+	// artifactUse is when each artifact was last resolved, seeded from, or
+	// pulled, keyed by snapshot id. Not persisted: it would mean a database
+	// write on every cache hit, and the collector falls back to the record's
+	// own updated_at for anything this process has not seen, so a restart
+	// loses nothing it can act on.
+	artifactUse map[string]time.Time
+
+	// artifactPulls counts in-flight transfers touching each snapshot id,
+	// at BOTH ends. It is what stops the collector deleting an artifact that
+	// is currently being read from or written to.
+	artifactPulls map[string]int
 
 	// orphanRetries tracks consecutive destroy failures per orphan VM
 	// name. Cleared when the orphan disappears from the provider.
@@ -404,6 +461,12 @@ func NewFleetManager(cfg FleetConfig) *FleetManager {
 		defaultSnapshotRetention: cfg.DefaultSnapshotRetention,
 		snapshotQuotaMaxCount:    cfg.SnapshotQuotaMaxCount,
 		snapshotQuotaMaxBytes:    cfg.SnapshotQuotaMaxBytes,
+		artifactMover:            cfg.ArtifactMover,
+		artifactPullTimeout:      cfg.ArtifactPullTimeout,
+		artifactIdleTTL:          cfg.ArtifactIdleTTL,
+		artifactMaxPerTenant:     cfg.ArtifactMaxPerTenant,
+		artifactUse:              make(map[string]time.Time),
+		artifactPulls:            make(map[string]int),
 		orphanRetries:            make(map[string]int),
 		stuckStrikes:             make(map[string]int),
 		idleStrikes:              make(map[string]int),
@@ -598,6 +661,13 @@ func (fm *FleetManager) ProvisionAndAssign(ctx context.Context, taskID string, s
 
 	fm.logger.Info("provisioning vm", "vm", vmID, "task", taskID)
 
+	// Resolve where this spec's seed artifact already lives, before any lock is
+	// taken: it reads the state store, and the scheduler runs under fm.mu.
+	// An artifact that can move turns the old hard pin into a preference; one
+	// that cannot keeps the pin, because scheduling somewhere the artifact can
+	// never arrive is worse than not scheduling at all.
+	seed := fm.planSeedPlacement(ctx, spec)
+
 	// Select and reserve a host before boot so concurrent provisions cannot
 	// claim the same capacity. CPU-only legacy deployments may still use the
 	// default provider when no hosts are registered.
@@ -605,11 +675,13 @@ func (fm *FleetManager) ProvisionAndAssign(ctx context.Context, taskID string, s
 	reservedHost := false
 	fm.mu.Lock()
 	hosts := fm.activeHostsLocked()
-	// A pinned vm carries a host-local artifact (a seed snapshot), so narrow
-	// the candidate set to that host and let Schedule report insufficient
-	// capacity the way it does for any other request. Narrowing the input
-	// rather than bypassing Schedule keeps one scheduling path.
-	if spec.PinnedHostID != "" {
+	// A vm seeded from an immovable artifact can only be born where those bytes
+	// already are, so narrow the candidate set to that host and let Schedule
+	// report insufficient capacity the way it does for any other request.
+	// Narrowing the input rather than bypassing Schedule keeps one scheduling
+	// path. When the artifact CAN move, this narrowing is exactly the failure
+	// mode being removed: the pin becomes a locality preference below instead.
+	if spec.PinnedHostID != "" && !seed.movable {
 		pinned := make([]*Host, 0, 1)
 		for _, h := range hosts {
 			if h.ID == spec.PinnedHostID {
@@ -620,7 +692,8 @@ func (fm *FleetManager) ProvisionAndAssign(ctx context.Context, taskID string, s
 			delete(fm.vms, vmID)
 			fm.mu.Unlock()
 			_ = fm.store.DeleteVM(ctx, vmID)
-			return nil, fmt.Errorf("%w: host %s is required by the seed snapshot but is not active", ErrNoCapacity, spec.PinnedHostID)
+			return nil, fmt.Errorf("%w: host %s is required by the seed snapshot but is not active (%s)",
+				ErrNoCapacity, spec.PinnedHostID, seed.whyImmovable())
 		}
 		hosts = pinned
 	}
@@ -640,11 +713,19 @@ func (fm *FleetManager) ProvisionAndAssign(ctx context.Context, taskID string, s
 		return nil, fmt.Errorf("%w: placement requires registered hosts", ErrNoHosts)
 	}
 	if len(hosts) > 0 {
-		selectedHost, decision, schedErr := Schedule(spec, hosts, fm.placementPolicy)
+		selectedHost, decision, schedErr := SchedulePreferring(spec, hosts, fm.placementPolicy,
+			PlacementHints{ArtifactHosts: seed.hostPreference()})
 		if schedErr != nil {
 			delete(fm.vms, vmID)
 			fm.mu.Unlock()
 			_ = fm.store.DeleteVM(ctx, vmID)
+			// Name every rung that was tried. The operator asked for an
+			// environment, not for a particular host, so "no capacity" alone
+			// leaves them unable to tell a full fleet from an artifact that
+			// could not follow the workload.
+			if spec.SeedSnapshotID != "" {
+				return nil, fmt.Errorf("%w: seeded from %s: %w", ErrSeedUnplaceable, seed.describe(), schedErr)
+			}
 			return nil, schedErr
 		}
 		v.hostID = selectedHost.ID
@@ -669,11 +750,13 @@ func (fm *FleetManager) ProvisionAndAssign(ctx context.Context, taskID string, s
 			"policy", decision.Policy,
 			"candidates", decision.Candidates,
 			"headroom_cpus", decision.HeadroomCPUs,
+			"artifact_local", decision.ArtifactLocal,
 		)
 		fm.appendEvent(ctx, "vm", vmID, "vm.scheduled", map[string]any{
-			"host_id":    decision.HostID,
-			"policy":     string(decision.Policy),
-			"candidates": decision.Candidates,
+			"host_id":        decision.HostID,
+			"policy":         string(decision.Policy),
+			"candidates":     decision.Candidates,
+			"artifact_local": decision.ArtifactLocal,
 		})
 	} else {
 		fm.mu.Unlock()
@@ -686,6 +769,52 @@ func (fm *FleetManager) ProvisionAndAssign(ctx context.Context, taskID string, s
 		fm.deallocateOnHost(v.hostID, spec)
 		fm.mu.Unlock()
 		reservedHost = false
+	}
+	abandonProvision := func(cause error) error {
+		releaseReservation()
+		fm.mu.Lock()
+		v.err = cause.Error()
+		delete(fm.vms, vmID)
+		fm.mu.Unlock()
+		_ = fm.store.DeleteVM(ctx, vmID)
+		fm.upsertTaskBackground(TaskRecord{
+			TaskID:     taskID,
+			VMID:       vmID,
+			RunStatus:  TaskRunFailed,
+			LastError:  cause.Error(),
+			AssignedAt: now,
+			UpdatedAt:  time.Now(),
+		})
+		fm.publishTerminalEvent(vmID, VMStateFailed, cause.Error())
+		return cause
+	}
+
+	// The workload was placed somewhere that does not hold the artifact, so the
+	// artifact follows it. This happens BEFORE the VM is created: the host agent
+	// resolves a seed id out of its own snapshot store, so a create issued
+	// before the bytes land would fail with a bare "snapshot not found".
+	if seed.needsMove(v.hostID) {
+		localID, mvErr := fm.ensureArtifactOnHost(ctx, seed.record, v.hostID)
+		if mvErr != nil {
+			return nil, abandonProvision(fmt.Errorf("provision vm %s: %w", vmID, mvErr))
+		}
+		// The seed id is per host, so the create must name the copy that landed
+		// here rather than the one the caller resolved. Both the local spec
+		// (which Boot reads) and the tracked vm's spec (which is persisted and
+		// which the collector reads to see the artifact is in use) are updated.
+		fm.mu.Lock()
+		spec.SeedSnapshotID = localID
+		spec.PinnedHostID = v.hostID
+		v.spec.SeedSnapshotID = localID
+		v.spec.PinnedHostID = v.hostID
+		fm.mu.Unlock()
+	}
+	// Seeding from an artifact is a use of it. Recording that here, rather than
+	// only on a cache lookup, is what keeps an artifact that many environments
+	// boot from out of the collector's reach even when no lookup has touched it
+	// for a while.
+	if spec.SeedSnapshotID != "" {
+		fm.touchArtifact(spec.SeedSnapshotID, seed.record.SnapshotID)
 	}
 
 	result, err := Boot(ctx, bootProvider, spec, manifest, secretMap, opts, fm.tokenEncryptionKey)
@@ -1220,6 +1349,7 @@ func (fm *FleetManager) reconcile(ctx context.Context) {
 	fm.reconcileStuckTasks(ctx, &summary)
 	fm.reconcileIdleVMs(ctx, &summary)
 	fm.reconcileSnapshots(ctx)
+	fm.reconcileArtifacts(ctx)
 
 	// Sweep VMs that have been marked destroying and are no longer present
 	// in the provider so they don't accumulate in memory or in the store.
@@ -1294,6 +1424,14 @@ func (fm *FleetManager) reapDestroyedVMs(providerVMs map[string]bool) {
 	}
 }
 
+// recoverState rehydrates the fleet from the state store after a restart.
+//
+// Note what is deliberately absent: there is no artifact-index phase. The
+// digest-to-hosts mapping is derived from snapshot rows on demand (see
+// artifacts.go), so there is nothing to rebuild and nothing that can come back
+// wrong. Artifact use times are not recovered either; the collector falls back
+// to each record's own updated_at for anything this process has not seen used,
+// so a restart cannot make an artifact suddenly look collectable.
 func (fm *FleetManager) recoverState(ctx context.Context) error {
 	if fm.store == nil {
 		return nil

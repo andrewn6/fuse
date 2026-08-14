@@ -37,23 +37,27 @@ ceiling that is not configurable in the shipped binary. Any real setup step, an
 600 seconds, and shows their output so a failing build is debuggable. The
 result is captured once rather than re-run on every boot.
 
-:::warning[Build artifacts are host-local]
-An artifact is a rootfs file on the host that produced it. Fuse has no object
-storage, so an artifact built on one host **cannot** boot on another:
-`fuse up --from-build` pins the environment to the artifact's host and fails
-with a no-capacity error if that host cannot take it.
+An artifact is a rootfs file on the host that produced it, and Fuse has no object
+storage. It is no longer confined to that host, though: an environment seeded
+from an artifact prefers a host that already holds it, and when no such host can
+take the workload the artifact is copied directly to one that can. See
+[The layer cache](/docs/concepts/layer-cache).
 
-Artifacts are also **Firecracker-only**. Snapshots are unsupported on QEMU
-hosts, which is where GPU workloads run, so a GPU Fusefile cannot be built this
-way.
+:::warning[Artifacts are Firecracker-only]
+Snapshots are unsupported on QEMU hosts, which is where GPU workloads run, so a
+GPU Fusefile cannot be built this way. That also means the cache is missing from
+exactly the hosts whose `setup:` phases tend to cost the most.
 :::
 
-:::warning[Artifacts persist until you delete them]
-Build artifacts are deliberately exempt from snapshot retention sweeping and
-from the per-tenant snapshot quota, because a swept artifact would silently
-break every `fuse up --from-build` that references it. That also means they
-accumulate on the host with no ceiling. Delete them yourself with
+:::warning[Named artifacts persist until you delete them]
+An artifact you named with `--name` is exempt from snapshot retention sweeping
+and from the per-tenant snapshot quota, because sweeping one would silently break
+every `fuse up --from-build` that references it. Delete those yourself with
 [`fuse snapshot delete`](/reference/cli/snapshot) when a build is superseded.
+
+The intermediate **layers** a cached build produces are collected automatically
+once nothing references them and nothing has used them recently, so they do not
+accumulate without a ceiling.
 :::
 
 ## Flags
@@ -97,10 +101,31 @@ non-zero rather than producing an empty artifact.
 
 `build` is where the `setup:` phase actually runs, so the
 [setup layer cache](/docs/concepts/fusefile#the-setup-layer-cache) describes
-exactly this command's work. `--plan` prints the derived keys and exits, and
-`--no-cache` ignores the Fusefile's `cache` block for one run. The plan is the
-same one [`fuse up --plan`](/reference/cli/up) prints for the same Fusefile:
-there is one key derivation, not one per command.
+exactly this command's work, and `build` is the only command that *produces*
+layers. `--plan` prints the derived keys and exits, and `--no-cache` ignores the
+Fusefile's `cache` block for one run. The plan is the same one
+[`fuse up --plan`](/reference/cli/up) prints for the same Fusefile: there is one
+key derivation, not one per command.
+
+With caching enabled, the command resolves the chain **deepest first** and stops
+at the first hit. A hit at step *N* means every step before it is satisfied by
+that same artifact, so the first hit found walking backwards is the most work
+that can be skipped, and a warm cache costs one lookup rather than one per step.
+The builder then boots from that artifact instead of the base image, and only the
+steps it did not cover run.
+
+Those remaining steps run one at a time, each snapshotted as its own layer, up to
+the first step that cannot be cached. Everything from there on runs as a single
+command, since none of it can be captured anyway.
+
+If a step fails, **every layer taken before it is kept**. That is the point of
+snapshotting per step: fix the setup line that broke, run again, and the build
+resumes from the last good layer instead of starting over. The builder
+environment is still destroyed unless `--keep` is set.
+
+Nothing about the cache can fail a build that would otherwise have succeeded. A
+mixed-architecture fleet, an unreachable orchestrator, and a cold cache all fall
+back to running the setup phase in full.
 
 ```bash
 fuse build --plan

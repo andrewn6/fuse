@@ -232,3 +232,48 @@ func TestPostgresStateStore_HostBackendDefaultsToFirecracker(t *testing.T) {
 		}
 	})
 }
+
+// TestPostgresStateStore_SnapshotLayerColumnsNeedNoBackfill checks the claim
+// 0011_layer_cache.sql makes: a snapshot row written before the layer columns
+// existed stays correct without a backfill. It reads back with all three empty,
+// and an empty layer key is not a key anyone can derive, so the row can never
+// be served as a cache hit.
+func TestPostgresStateStore_SnapshotLayerColumnsNeedNoBackfill(t *testing.T) {
+	store := openTestPostgres(t)
+	ctx := context.Background()
+
+	now := time.Now().UTC().Truncate(time.Second)
+	snapshotID := "snap-legacy-row-test"
+	t.Cleanup(func() { _ = store.DeleteSnapshot(ctx, snapshotID) })
+
+	// insert the way the pre-migration statement did: the layer columns are
+	// absent entirely, so Postgres applies each column's DEFAULT.
+	_, err := store.db.ExecContext(ctx, `
+		INSERT INTO orchestrator_snapshots (
+			snapshot_id, vm_id, task_id, host_id, tenant_id, parent_snapshot_id, mode, state, size_bytes,
+			retention_until, metadata_json, exports_json, last_error, created_at, updated_at
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+	`,
+		snapshotID, "vm-legacy-row-test", "", "host-1", "tenant-legacy", "",
+		string(SnapshotModeBuild), string(SnapshotStateReady), int64(0),
+		nil, []byte(`{}`), []byte(`[]`), "", now, now,
+	)
+	if err != nil {
+		t.Fatalf("insert legacy-shaped row: %v", err)
+	}
+
+	got, err := store.GetSnapshot(ctx, snapshotID)
+	if err != nil {
+		t.Fatalf("get snapshot: %v", err)
+	}
+	if got.LayerKey != "" || got.Arch != "" || got.Digest != "" {
+		t.Errorf("legacy row read back as layer_key=%q arch=%q digest=%q, want all empty",
+			got.LayerKey, got.Arch, got.Digest)
+	}
+
+	if _, ok, err := store.FindSnapshotByLayerKey(ctx, "tenant-legacy", "", ""); err != nil {
+		t.Fatalf("FindSnapshotByLayerKey: %v", err)
+	} else if ok {
+		t.Errorf("a legacy row was served as a layer cache hit")
+	}
+}

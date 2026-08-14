@@ -41,6 +41,7 @@ import (
 	"github.com/folsomintel/fuse/internal/api"
 	"github.com/folsomintel/fuse/internal/apikeys"
 	"github.com/folsomintel/fuse/internal/firecracker"
+	"github.com/folsomintel/fuse/internal/hostwire"
 	"github.com/folsomintel/fuse/internal/metrics"
 	"github.com/folsomintel/fuse/internal/orchestrator"
 	"github.com/folsomintel/fuse/internal/qemu"
@@ -73,6 +74,58 @@ func apiKeyStoreOrNil(s *apikeys.APIKeyStore) api.APIKeyStore {
 		return nil
 	}
 	return s
+}
+
+// peerArtifactMover copies a build artifact directly between two host agents.
+//
+// It lives here, at the composition root, for two reasons. The mechanical one
+// is that internal/hostwire imports internal/orchestrator, so the orchestrator
+// package cannot call into hostwire without an import cycle. The substantive
+// one is that this is the only place in the system that legitimately holds two
+// different hosts' agent tokens at once, and keeping that fact in one small
+// type makes it auditable.
+//
+// The orchestrator is NOT on the data path. It mints a capability and tells the
+// receiving host to go and fetch; the bytes travel host to host. A single
+// control-plane process relaying multi-gigabyte blobs would be the bandwidth
+// ceiling for the whole fleet.
+type peerArtifactMover struct {
+	// control is the ordinary agent client, used for the small JSON POST that
+	// asks a host to start pulling. The transfer itself never crosses this
+	// process, so this client's timeouts bound a request, not a copy.
+	control *http.Client
+	logger  *slog.Logger
+}
+
+// MoveArtifact mints a grant with the SERVING host's token and hands it to the
+// RECEIVING host, which authenticates to us with its own token as usual.
+//
+// The pulling host never sees the serving host's token, and the grant it does
+// see authorizes exactly one digest on exactly one endpoint (see
+// hostwire.MintArtifactGrant). Handing over the serving host's token instead
+// would trade one blob read for create-vm and exec-in-guest on that host.
+//
+// The grant's TTL bounds when the fetch may START, not how long it may run: the
+// serving agent verifies once, at request time, so a short grant does not kill
+// a long transfer.
+func (m peerArtifactMover) MoveArtifact(ctx context.Context, move orchestrator.ArtifactMove) (orchestrator.ArtifactMoved, error) {
+	grant, err := hostwire.MintArtifactGrant(move.From.Token, move.Digest, hostwire.DefaultArtifactGrantTTL)
+	if err != nil {
+		return orchestrator.ArtifactMoved{}, fmt.Errorf("mint grant for host %s: %w", move.From.HostID, err)
+	}
+	res, err := hostwire.PullArtifact(ctx, m.control, move.To.URL, move.To.Token, hostwire.ArtifactPullRequest{
+		Digest:     move.Digest,
+		PeerURL:    move.From.URL,
+		Grant:      grant,
+		SnapshotID: move.SnapshotID,
+	})
+	if err != nil {
+		return orchestrator.ArtifactMoved{}, err
+	}
+	m.logger.Info("artifact copied between hosts",
+		"digest", move.Digest, "from", move.From.HostID, "to", move.To.HostID,
+		"snapshot", res.SnapshotID, "bytes", res.SizeBytes)
+	return orchestrator.ArtifactMoved{SnapshotID: res.SnapshotID, SizeBytes: res.SizeBytes}, nil
 }
 
 // envInt parses an int env var, returning fallback on miss or parse error.
@@ -143,6 +196,10 @@ func run() error {
 		startupScriptTimeout    time.Duration
 		maxStartupScriptTimeout time.Duration
 
+		artifactPullTimeout  time.Duration
+		artifactIdleTTL      time.Duration
+		artifactMaxPerTenant int
+
 		fcBaseURL     string
 		fcToken       string
 		databaseURL   string
@@ -171,6 +228,17 @@ func run() error {
 	flag.DurationVar(&maxStartupScriptTimeout, "max-startup-script-timeout",
 		orchestrator.DefaultMaxStartupScriptTimeout,
 		"largest startup script bound a request may ask for; must stay under -write-timeout")
+	flag.DurationVar(&artifactPullTimeout, "artifact-pull-timeout",
+		time.Duration(envInt("ORCH_ARTIFACT_PULL_TIMEOUT_SECONDS", 0))*time.Second,
+		"bound on one host-to-host artifact copy (0 = bound only by the request context)")
+	flag.DurationVar(&artifactIdleTTL, "artifact-idle-ttl",
+		time.Duration(envInt("ORCH_ARTIFACT_IDLE_TTL_SECONDS", 0))*time.Second,
+		"collect a build layer artifact after this long with no environment referencing it "+
+			"and no cache hit (0 = never collect)")
+	flag.IntVar(&artifactMaxPerTenant, "artifact-max-per-tenant",
+		envInt("ORCH_ARTIFACT_MAX_PER_TENANT", 0),
+		"cap on ready build layer artifacts per tenant, evicting least recently used "+
+			"on overflow (0 = no cap)")
 	flag.DurationVar(&shutdownTimeout, "shutdown-timeout",
 		time.Duration(envInt("ORCH_SHUTDOWN_TIMEOUT_SECONDS", 30))*time.Second,
 		"graceful shutdown ceiling")
@@ -358,6 +426,14 @@ func run() error {
 
 		StartupScriptTimeout:    startupScriptTimeout,
 		MaxStartupScriptTimeout: maxStartupScriptTimeout,
+
+		// Peer-to-peer artifact distribution. The mover is always wired: a
+		// fleet with one host simply never uses it, and leaving it nil would
+		// silently pin every artifact-seeded environment to one host.
+		ArtifactMover:        peerArtifactMover{control: hostwire.NewClient(), logger: logger},
+		ArtifactPullTimeout:  artifactPullTimeout,
+		ArtifactIdleTTL:      artifactIdleTTL,
+		ArtifactMaxPerTenant: artifactMaxPerTenant,
 	})
 
 	// Reconcile loop starts with the binary.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 )
@@ -113,14 +114,38 @@ type SnapshotRecord struct {
 	TenantID         string
 	ParentSnapshotID string
 	Mode             SnapshotMode
-	State            SnapshotState
-	SizeBytes        int64
-	RetentionUntil   *time.Time
-	Metadata         json.RawMessage
-	Exports          []SnapshotExportRecord
-	LastError        string
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+
+	// LayerKey is the derived cache key of the setup step this artifact
+	// materializes (see internal/fusefile.LayerKeys). It is what separates a
+	// layer from the rest of SnapshotModeBuild: layers reuse that mode rather
+	// than adding a new one, so a non-empty LayerKey is the only thing that
+	// marks a build artifact as cache-addressable. Empty on every snapshot
+	// that is not a layer, and empty never matches a lookup.
+	LayerKey string
+
+	// Arch is the goarch of the host that actually built this artifact, not
+	// of whoever asked for it. It is part of every layer lookup even though it
+	// is deliberately absent from LayerKey: an ext4 rootfs is not portable
+	// across architectures, but the key is derived client-side before a host
+	// is scheduled, so arch can only be observed after the fact and applied as
+	// a filter.
+	Arch string
+
+	// Digest is the hex sha256 of the artifact rootfs, recorded so a transfer
+	// of these bytes can be verified against them. It is an integrity check
+	// only and is NOT a cross-build identity: two builds of the same recipe
+	// produce different rootfs bytes (timestamps, inode ordering, package
+	// caches), so it can never serve as a cache key and nothing dedups on it.
+	Digest string
+
+	State          SnapshotState
+	SizeBytes      int64
+	RetentionUntil *time.Time
+	Metadata       json.RawMessage
+	Exports        []SnapshotExportRecord
+	LastError      string
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
 }
 
 // EventRecord stores an audit event for critical lifecycle transitions.
@@ -214,6 +239,36 @@ type StateStore interface {
 	// store layer (a WHERE clause for Postgres) rather than requiring the
 	// caller to load and filter every snapshot in the fleet.
 	ListSnapshotsByVM(ctx context.Context, vmID string) ([]SnapshotRecord, error)
+
+	// ListSnapshotsByDigest returns every ready snapshot for tenantID whose
+	// artifact hashes to digest. It is the artifact index: the orchestrator
+	// answers "which hosts already hold these bytes" by reading the host_id of
+	// each row it returns.
+	//
+	// The index is DERIVED, never a second table. A snapshot row is already the
+	// statement "host H holds artifact A", so a separate index could only ever
+	// disagree with it, and the disagreement would be invisible until a pull was
+	// aimed at a host that no longer had the bytes. Deriving also makes recovery
+	// free: there is nothing to rehydrate at startup because the query is the
+	// index, and a row whose digest was never recorded is simply not findable
+	// rather than wrongly findable.
+	//
+	// tenantID is a security boundary for the same reason it is one in
+	// FindSnapshotByLayerKey: an artifact carries whatever its build baked in.
+	ListSnapshotsByDigest(ctx context.Context, tenantID, digest string) ([]SnapshotRecord, error)
+
+	// FindSnapshotByLayerKey returns the newest ready layer artifact matching
+	// (tenantID, layerKey, arch), or ok=false when there is no hit.
+	//
+	// This is its own store method rather than a SnapshotFilter because it
+	// runs once per chain key on every build, and ListSnapshotsFiltered loads
+	// every snapshot in the fleet and filters in Go. Postgres serves this off
+	// a single indexed query.
+	//
+	// tenantID scoping is a security boundary, not an optimization: serving
+	// one tenant's artifact to another leaks whatever that build baked in, so
+	// a cross-tenant match must be a miss, never a hit.
+	FindSnapshotByLayerKey(ctx context.Context, tenantID, layerKey, arch string) (SnapshotRecord, bool, error)
 
 	// SnapshotQuotaUsage returns the count and aggregate size of snapshots
 	// for tenantID that count toward the per-tenant quota: states
@@ -377,6 +432,74 @@ func (s *MemoryStateStore) ListSnapshotsByVM(_ context.Context, vmID string) ([]
 		}
 	}
 	return out, nil
+}
+
+// ListSnapshotsByDigest scans for every ready snapshot of this tenant holding
+// the given artifact bytes. Results are sorted by snapshot id so the caller
+// picks the same source peer on every call, which keeps a retried pull hitting
+// the host that already answered rather than fanning out across the fleet.
+//
+// An empty digest matches nothing, deliberately: every snapshot taken by an
+// agent build that predates artifact hashing has one, so treating it as a value
+// would report the whole fleet as holding a single phantom artifact.
+func (s *MemoryStateStore) ListSnapshotsByDigest(_ context.Context, tenantID, digest string) ([]SnapshotRecord, error) {
+	if digest == "" {
+		return nil, nil
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	out := make([]SnapshotRecord, 0)
+	for _, snapshot := range s.snapshots {
+		if snapshot.Digest != digest || snapshot.TenantID != tenantID {
+			continue
+		}
+		if snapshot.State != SnapshotStateReady {
+			continue
+		}
+		out = append(out, snapshot)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].SnapshotID < out[j].SnapshotID })
+	return out, nil
+}
+
+// FindSnapshotByLayerKey scans for the newest ready layer artifact matching
+// the triple. The winner is picked with snapshotRecordLess, the same ordering
+// sortSnapshotRecords uses (CreatedAt desc, SnapshotID desc as tiebreak), so
+// this store and Postgres cannot disagree about which of two concurrently
+// built artifacts wins.
+//
+// The tenant check is a security boundary: a hit from another tenant would
+// serve that tenant's baked-in build output, so it has to be a miss.
+func (s *MemoryStateStore) FindSnapshotByLayerKey(_ context.Context, tenantID, layerKey, arch string) (SnapshotRecord, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	var (
+		best  SnapshotRecord
+		found bool
+	)
+	for _, snapshot := range s.snapshots {
+		// an empty layer key is not a key: it is every non-layer snapshot in
+		// the fleet, so it must never match.
+		if layerKey == "" || snapshot.LayerKey != layerKey {
+			continue
+		}
+		if snapshot.TenantID != tenantID {
+			continue
+		}
+		if snapshot.Arch != arch {
+			continue
+		}
+		if snapshot.State != SnapshotStateReady {
+			continue
+		}
+		if !found || snapshotRecordLess(snapshot, best) {
+			best = snapshot
+			found = true
+		}
+	}
+	return best, found, nil
 }
 
 func (s *MemoryStateStore) SnapshotQuotaUsage(_ context.Context, tenantID string) (SnapshotQuotaUsage, error) {

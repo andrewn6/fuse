@@ -465,6 +465,36 @@ type PlacementDecision struct {
 	Candidates   int             `json:"candidates"`    // eligible hosts considered
 	HeadroomCPUs int             `json:"headroom_cpus"` // CPUs remaining after placement
 	HeadroomRam  int             `json:"headroom_ram"`  // RAM remaining after placement
+
+	// ArtifactLocal reports that the winning host already held the spec's seed
+	// artifact, so the environment boots from a local copy with no transfer.
+	// When it is false and the spec seeds from an artifact, the caller has to
+	// move the artifact to the winner before creating the VM, so this is the
+	// field that says whether a transfer is about to happen.
+	ArtifactLocal bool `json:"artifact_local,omitempty"`
+
+	// ArtifactHolders is how many of the eligible candidates held the artifact.
+	// Zero alongside ArtifactLocal=false means no host that could take the
+	// workload had it; a positive count alongside ArtifactLocal=false cannot
+	// happen, and reading both is how a decision stays self-explaining.
+	ArtifactHolders int `json:"artifact_holders,omitempty"`
+}
+
+// PlacementHints carries scheduling preferences that come from fleet state
+// rather than from anything the caller asked for. They are kept out of Spec on
+// purpose: Spec is persisted with the VM, and a durable record must not carry a
+// point-in-time observation about where some bytes happened to live.
+type PlacementHints struct {
+	// ArtifactHosts are the hosts that already hold the spec's seed artifact.
+	//
+	// This is a PREFERENCE and never a constraint. A host in this set that
+	// cannot fit the workload, is cordoned, is the wrong arch, has the wrong
+	// labels, or cannot serve the GPU request is rejected by the ordinary gates
+	// before this map is ever consulted; locality only ever breaks a tie among
+	// hosts that already qualify. Letting it do more would trade a correct
+	// placement for a fast one, which is how a cache hit turns a working create
+	// into a failing one.
+	ArtifactHosts map[string]bool
 }
 
 // Schedule picks the best host for the given spec according to the
@@ -485,6 +515,20 @@ type PlacementDecision struct {
 //
 // Ties within a policy are broken by host ID for determinism.
 func Schedule(spec Spec, hosts []*Host, policy PlacementPolicy) (*Host, PlacementDecision, error) {
+	return SchedulePreferring(spec, hosts, policy, PlacementHints{})
+}
+
+// SchedulePreferring is Schedule with placement preferences applied.
+//
+// The preferences are consulted only AFTER the filter pipeline above has run,
+// on the hosts that survived it, so nothing in PlacementHints can admit a host
+// the gates rejected. Within that surviving set, artifact locality outranks the
+// placement policy: seeding from a local artifact is a `cp --reflink=auto` on
+// the host, while seeding from a remote one means copying hundreds of megabytes
+// to tens of gigabytes across the fleet first. No binpack or spread score is
+// worth that difference, and the policy still decides among equally local
+// hosts.
+func SchedulePreferring(spec Spec, hosts []*Host, policy PlacementPolicy, hints PlacementHints) (*Host, PlacementDecision, error) {
 	if len(hosts) == 0 {
 		return nil, PlacementDecision{}, ErrNoHosts
 	}
@@ -509,9 +553,11 @@ func Schedule(spec Spec, hosts []*Host, policy PlacementPolicy) (*Host, Placemen
 	// Filter to eligible candidates.
 	type candidate struct {
 		host     *Host
-		headroom int // policy-specific score (lower = more packed)
+		headroom int  // policy-specific score (lower = more packed)
+		local    bool // already holds the spec's seed artifact
 	}
 	var candidates []candidate
+	localCount := 0
 
 	for _, h := range hosts {
 		if hostRejection(h, spec) != "" {
@@ -523,7 +569,15 @@ func Schedule(spec Spec, hosts []*Host, policy PlacementPolicy) (*Host, Placemen
 		freeCPUs := h.Capacity.CPUs - h.Allocated.CPUs
 		freeRAM := h.Capacity.RamMB - h.Allocated.RamMB
 		score := freeCPUs*10000 + freeRAM // weight CPUs heavily
-		candidates = append(candidates, candidate{host: h, headroom: score})
+		// Locality is read here, on a host that has already passed every gate.
+		// A host holding the artifact that could not take the workload never
+		// reaches this line, which is what makes the preference incapable of
+		// overriding capacity.
+		local := hints.ArtifactHosts[h.ID]
+		if local {
+			localCount++
+		}
+		candidates = append(candidates, candidate{host: h, headroom: score, local: local})
 	}
 
 	if len(candidates) == 0 {
@@ -539,9 +593,17 @@ func Schedule(spec Spec, hosts []*Host, policy PlacementPolicy) (*Host, Placemen
 			ErrNoCapacity, spec.CPUs, spec.RamMB, spec.StorageGB)
 	}
 
-	// Pick by policy.
+	// Pick by policy, with artifact locality as the outer comparison.
 	best := candidates[0]
 	for _, c := range candidates[1:] {
+		if c.local != best.local {
+			// Every candidate here already fits, so choosing the local one
+			// cannot cost an admission; it only ever saves a transfer.
+			if c.local {
+				best = c
+			}
+			continue
+		}
 		switch policy {
 		case PlacementBinpack:
 			// Most packed = smallest headroom.
@@ -559,11 +621,13 @@ func Schedule(spec Spec, hosts []*Host, policy PlacementPolicy) (*Host, Placemen
 	}
 
 	decision := PlacementDecision{
-		HostID:       best.host.ID,
-		Policy:       policy,
-		Candidates:   len(candidates),
-		HeadroomCPUs: best.host.Capacity.CPUs - best.host.Allocated.CPUs - spec.CPUs,
-		HeadroomRam:  best.host.Capacity.RamMB - best.host.Allocated.RamMB - spec.RamMB,
+		HostID:          best.host.ID,
+		Policy:          policy,
+		Candidates:      len(candidates),
+		HeadroomCPUs:    best.host.Capacity.CPUs - best.host.Allocated.CPUs - spec.CPUs,
+		HeadroomRam:     best.host.Capacity.RamMB - best.host.Allocated.RamMB - spec.RamMB,
+		ArtifactLocal:   best.local,
+		ArtifactHolders: localCount,
 	}
 
 	return best.host, decision, nil
