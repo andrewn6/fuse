@@ -1,5 +1,18 @@
 # Changelog
 
+## [0.20.0](https://github.com/folsomintel/fuse/compare/v0.19.0...v0.20.0) (2026-08-14)
+
+
+### Features
+
+* **fusefile:** accept exec-form command lists for `run` ([#170](https://github.com/folsomintel/fuse/issues/170)) ([fe83049](https://github.com/folsomintel/fuse/commit/fe83049bfc93b164f0d196b6b35553c932e33685)), closes [#91](https://github.com/folsomintel/fuse/issues/91)
+
+
+### Bug Fixes
+
+* clear the open security alerts (CodeQL + dependabot) ([#167](https://github.com/folsomintel/fuse/issues/167)) ([c454452](https://github.com/folsomintel/fuse/commit/c4544522b0d20ca06468513e165e21db05250b80))
+* **host-agent:** return the artifact digest on snapshot create ([#169](https://github.com/folsomintel/fuse/issues/169)) ([94e6207](https://github.com/folsomintel/fuse/commit/94e6207fca4810187f65d25bdce87e1efe37d2ea))
+
 ## [0.19.0](https://github.com/folsomintel/fuse/compare/v0.18.0...v0.19.0) (2026-08-14)
 
 
