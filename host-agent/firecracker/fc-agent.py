@@ -13,6 +13,7 @@ from __future__ import annotations
 import base64
 import fcntl
 import copy
+import hashlib
 import hmac
 import ipaddress
 import http.client
@@ -69,6 +70,23 @@ MAX_UPLOAD_BYTES = int(os.environ.get("FC_AGENT_MAX_UPLOAD_BYTES", str(64 << 20)
 # connection and then dribbles (or never finishes) its request. Attach clears
 # it for its own socket, since an interactive session is idle by design.
 REQUEST_TIMEOUT = float(os.environ.get("FC_AGENT_REQUEST_TIMEOUT", "60"))
+# Peer-to-peer artifact transfer bounds. An artifact pull is the one path where
+# this agent reads an unbounded stream from a machine that is not the
+# orchestrator, so every dimension of it has to be capped: total bytes (a
+# hostile or broken peer must not be able to fill the disk), per-socket-op time
+# (a peer that stops sending must not pin a thread), and total wall clock (a
+# peer that dribbles a byte at a time stays under the per-op timeout forever).
+MAX_ARTIFACT_BYTES = int(os.environ.get("FC_AGENT_MAX_ARTIFACT_BYTES", str(64 << 30)))          # 64 GiB
+ARTIFACT_IO_TIMEOUT = float(os.environ.get("FC_AGENT_ARTIFACT_IO_TIMEOUT", "60"))               # per socket op
+ARTIFACT_TRANSFER_TIMEOUT = float(os.environ.get("FC_AGENT_ARTIFACT_TRANSFER_TIMEOUT", "1800")) # whole transfer
+ARTIFACT_CHUNK_BYTES = 1 << 20  # 1 MiB
+# Partial pulls stage here, deliberately NOT under SNAPSHOTS_DIR: nothing that
+# has not been verified against its digest may ever be visible in the store,
+# not even briefly. Default is a sibling of the store so the commit stays a
+# same-filesystem rename; override both together if you move one.
+ARTIFACT_TMP_DIR = Path(
+    os.environ.get("FC_AGENT_ARTIFACT_TMP_DIR", str(SNAPSHOTS_DIR.parent / "artifact-pull-tmp"))
+)
 FC_BIN = os.environ.get("FC_BIN", "/usr/local/bin/firecracker")
 # Port the in-guest agent listens on; per-VM host ports DNAT to this.
 FUSED_PORT = int(os.environ.get("FUSED_PORT", "9550"))
@@ -151,6 +169,7 @@ if not TOKEN:
 
 VMS_DIR.mkdir(parents=True, exist_ok=True)
 SNAPSHOTS_DIR.mkdir(parents=True, exist_ok=True)
+ARTIFACT_TMP_DIR.mkdir(parents=True, exist_ok=True)
 SSH_CONTROL_DIR = STATE_DIR / "ssh-control"
 SSH_CONTROL_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -656,6 +675,32 @@ def snapshot_rootfs(vm_id: str, snapshot_id: str) -> Path:
     return Path(legacy)
 
 
+def file_digest(path: Path | str) -> str:
+    """Hex sha256 of a file, read in bounded chunks.
+
+    This is an INTEGRITY check on these exact bytes and nothing more. It is
+    NOT a cross-build identity: two builds of the same recipe produce
+    different rootfs bytes (timestamps, inode ordering, package caches), so
+    the same layer key legitimately yields a different digest every time. Do
+    not reach for it as a cache key or a dedup key; the layer key is the cache
+    key. The only question this digest can answer is "are the bytes I just
+    received over the wire the bytes the other host meant to send".
+
+    A snapshot rootfs is normally mode 666 (it inherits the vm rootfs mode),
+    but fall back to sudo on a host where it is not, rather than failing the
+    snapshot over a permission bit.
+    """
+    h = hashlib.sha256()
+    try:
+        with open(path, "rb", buffering=0) as f:
+            for chunk in iter(lambda: f.read(ARTIFACT_CHUNK_BYTES), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except PermissionError:
+        cp = sudo(["sha256sum", "--", str(path)])
+        return cp.stdout.decode().split()[0]
+
+
 def snapshot_create(vm_id: str, comment: str) -> dict:
     meta = load_meta(vm_id)
     if not meta:
@@ -669,6 +714,10 @@ def snapshot_create(vm_id: str, comment: str) -> dict:
     sudo(["cp", "--reflink=auto", meta["rootfs"], str(snap_rootfs)], check=False)
     if not snap_rootfs.exists():
         shutil.copyfile(meta["rootfs"], snap_rootfs)
+    # Hashing is inline and blocking, so the snapshot is not reported ready
+    # until its digest is known. A digest that arrives later is a digest that
+    # some caller has already raced past.
+    digest = file_digest(snap_rootfs)
     # origin_vm_id records provenance only. It is deliberately NOT a lifetime
     # link: the origin vm may be destroyed while this artifact stays usable.
     record = {
@@ -676,6 +725,7 @@ def snapshot_create(vm_id: str, comment: str) -> dict:
         "comment": comment,
         "created_at": now_iso(),
         "origin_vm_id": vm_id,
+        "digest": digest,
     }
     (snap_dir / "meta.json").write_text(json.dumps(record))
     meta.setdefault("snapshots", []).append(record)
@@ -757,6 +807,266 @@ def fork_vm(src_vm_id: str, req: dict) -> dict:
 
     with _create_lock:
         return create_vm(fork_req, source_rootfs=snap_rootfs)
+
+
+# -- Content-addressed artifacts (host-to-host) -------------------------------
+# A build artifact produced on host A is useful on host B, and there is no
+# object storage anywhere in this system to stage it in, so hosts hand
+# artifacts to each other directly. Two consequences drive everything below.
+#
+# First, the serving host is the ONLY thing vouching for the bytes, so the
+# receiving host verifies the digest itself and nothing unverified is ever
+# allowed to appear in the snapshot store, not even briefly.
+#
+# Second, B fetching from A is a new trust edge. Until now the only credential
+# any agent honoured was `Bearer $FC_AGENT_TOKEN`, held by the orchestrator.
+# Handing B the token for A to make the fetch work would give B every
+# capability on A (create vms, exec in guests, read every artifact) in order to
+# grant it one read of one blob. Instead the orchestrator, which already stores
+# every host's agent token, mints a capability grant that A verifies with its
+# own token as the HMAC key:
+#
+#   grant = "v1." + digest + "." + expiry_unix + "." + nonce + "." + mac
+#   mac   = HMAC-SHA256(key=<A's FC_AGENT_TOKEN>,
+#                       msg="fuse-artifact-grant/v1\n" + digest + "\n"
+#                           + expiry_unix + "\n" + nonce)
+#
+# Properties worth stating, because they are the whole reason for the scheme:
+# B never learns A's token (HMAC is one-way); the grant authorizes exactly one
+# digest on exactly one endpoint; it is worthless once expired; and A needs no
+# call to the orchestrator to verify it.
+
+ARTIFACT_GRANT_HEADER = "X-Fuse-Artifact-Grant"
+GRANT_VERSION = "v1"
+GRANT_DOMAIN = "fuse-artifact-grant/v1"
+# A grant is ~150 chars. Bounding it keeps a hostile header out of the hmac
+# path entirely; http.server already caps a header line at 64 KiB.
+MAX_GRANT_BYTES = 512
+_DIGEST_RE = re.compile(r"[0-9a-f]{64}")
+_SNAP_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+# The nonce is 16 random bytes hex (32 chars). The accepted range is slack for
+# a minter with a different width; the mac covers the nonce either way, so its
+# length is a format matter, not a security one.
+_GRANT_NONCE_RE = re.compile(r"[0-9a-fA-F]{16,64}")
+
+
+def artifact_grant_mac(digest: str, expiry: str, nonce: str, key: str | None = None) -> str:
+    """HMAC over the grant's own fields, domain-separated.
+
+    The domain string is in the preimage so a mac minted for some other future
+    use of this token can never be replayed as an artifact grant.
+    """
+    msg = f"{GRANT_DOMAIN}\n{digest}\n{expiry}\n{nonce}".encode()
+    return hmac.new((key or TOKEN or "").encode(), msg, hashlib.sha256).hexdigest()
+
+
+def verify_artifact_grant(grant: str, digest: str) -> bool:
+    """True if `grant` authorizes reading exactly `digest` from this host now.
+
+    Returns a bare bool on purpose: the caller answers every failure with an
+    identical 403. Which check failed (unknown digest vs expired vs forged
+    mac) is exactly the oracle an attacker would use to probe, so it never
+    leaves this function.
+    """
+    if not grant or len(grant) > MAX_GRANT_BYTES:
+        return False
+    parts = grant.split(".")
+    if len(parts) != 5:
+        return False
+    version, g_digest, expiry, nonce, mac = parts
+    if version != GRANT_VERSION:
+        return False
+    # The digest is bound twice: to the url being served (here) and to the mac
+    # (below). A grant for one artifact cannot be pointed at another.
+    if not hmac.compare_digest(g_digest, digest):
+        return False
+    if not _DIGEST_RE.fullmatch(g_digest) or not _GRANT_NONCE_RE.fullmatch(nonce):
+        return False
+    try:
+        expires_at = int(expiry)
+    except ValueError:
+        return False
+    if expires_at <= time.time():
+        return False
+    # compare_digest, not ==, because a byte-at-a-time comparison of the mac is
+    # forgeable given enough attempts with a timer. Non-negotiable.
+    return hmac.compare_digest(artifact_grant_mac(g_digest, expiry, nonce), mac)
+
+
+def artifact_rootfs(digest: str) -> Path:
+    """Resolve a content digest to a local artifact rootfs.
+
+    The digest arrives over the wire from another host, so it is never used to
+    build a path: the store is listed and digests are compared as strings. The
+    path that comes back out is still realpath'd and confirmed to stay under
+    SNAPSHOTS_DIR, exactly as snapshot_rootfs does, because a store entry can
+    itself be a symlink pointing somewhere else. This file has had
+    path-traversal findings before; both halves of that guard stay.
+    """
+    if not _DIGEST_RE.fullmatch(digest):
+        raise HTTPError(404, "artifact not found")
+    store_root = os.path.realpath(str(SNAPSHOTS_DIR))
+    try:
+        entries = sorted(os.listdir(store_root))
+    except OSError:
+        raise HTTPError(404, "artifact not found")
+    for entry in entries:
+        try:
+            with open(os.path.join(store_root, entry, "meta.json"), "rb") as f:
+                rec = json.loads(f.read(MAX_BODY_BYTES))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(rec, dict) or rec.get("digest") != digest:
+            continue
+        resolved = os.path.realpath(os.path.join(store_root, entry, "rootfs.ext4"))
+        if not resolved.startswith(store_root + os.sep):
+            continue
+        if os.path.exists(resolved):
+            return Path(resolved)
+    raise HTTPError(404, "artifact not found")
+
+
+def _artifact_dest(snapshot_id: str) -> Path:
+    """Where a pulled artifact commits, containment-checked like every other
+    store path. snapshot_id comes from the orchestrator rather than from a
+    peer, but it still names a directory, so it gets the same treatment."""
+    store_root = os.path.realpath(str(SNAPSHOTS_DIR))
+    resolved = os.path.realpath(os.path.join(store_root, snapshot_id))
+    if not resolved.startswith(store_root + os.sep):
+        raise HTTPError(400, f"invalid snapshot id: {snapshot_id!r}")
+    return Path(resolved)
+
+
+def _peer_connection(peer_url: str) -> http.client.HTTPConnection:
+    """Connection to a peer agent. Only the scheme/host/port of peer_url are
+    used; agents always serve this endpoint at the root of their listener."""
+    u = urlparse(peer_url)
+    if u.scheme not in ("http", "https") or not u.hostname:
+        raise HTTPError(400, f"invalid peer url: {peer_url!r}")
+    cls = http.client.HTTPSConnection if u.scheme == "https" else http.client.HTTPConnection
+    return cls(u.hostname, u.port, timeout=ARTIFACT_IO_TIMEOUT)
+
+
+def pull_artifact(digest: str, peer_url: str, grant: str, snapshot_id: str = "") -> dict:
+    """Fetch an artifact from a peer agent and commit it only if it verifies.
+
+    Every failure mode (peer refusal, short read, wrong bytes, full disk,
+    stall) has to end with nothing in SNAPSHOTS_DIR: a rootfs that is subtly
+    not what its digest claims would be seeded into guests forever after, and
+    no later step re-checks it. So the stream lands in a temp file outside the
+    store, is hashed as it arrives, and only a matching digest earns the
+    rename into place.
+    """
+    if not _DIGEST_RE.fullmatch(digest):
+        raise HTTPError(400, "digest must be a lowercase hex sha256")
+    if not grant:
+        raise HTTPError(400, "grant required")
+    # Committing under the id the orchestrator already knows is what makes a
+    # pulled artifact indistinguishable from a locally created one: a later
+    # create with seed_snapshot=<id> resolves it through snapshot_rootfs with
+    # no special case. The digest-derived fallback keeps the endpoint usable
+    # for a caller that has no id to impose.
+    snapshot_id = snapshot_id or f"art-{digest[:16]}"
+    if not _SNAP_ID_RE.fullmatch(snapshot_id):
+        raise HTTPError(400, f"invalid snapshot id: {snapshot_id!r}")
+    dest_dir = _artifact_dest(snapshot_id)
+
+    tmp = ARTIFACT_TMP_DIR / f"pull-{digest[:16]}-{uuid.uuid4().hex}.tmp"
+    deadline = time.monotonic() + ARTIFACT_TRANSFER_TIMEOUT
+    running = hashlib.sha256()
+    total = 0
+    conn = _peer_connection(peer_url)
+    try:
+        # B presents the grant and NOTHING else. It has no bearer token for the
+        # peer and must never be given one.
+        conn.request("GET", f"/v1/artifacts/{digest}", headers={ARTIFACT_GRANT_HEADER: grant})
+        resp = conn.getresponse()
+        if resp.status != 200:
+            raise HTTPError(422, f"peer returned {resp.status} for artifact {digest}")
+
+        declared = -1
+        raw_len = resp.getheader("Content-Length")
+        if raw_len is not None:
+            try:
+                declared = int(raw_len)
+            except ValueError:
+                raise HTTPError(422, "peer sent an invalid Content-Length")
+        if declared > MAX_ARTIFACT_BYTES:
+            raise HTTPError(
+                422,
+                f"artifact of {declared} bytes exceeds the {MAX_ARTIFACT_BYTES} byte limit",
+            )
+        # Refuse before writing a byte if the staging filesystem obviously
+        # cannot hold it. The streaming loop still handles ENOSPC, since the
+        # peer may lie about the length and other things are writing here too.
+        if declared >= 0:
+            free = shutil.disk_usage(ARTIFACT_TMP_DIR).free
+            if declared + (64 << 20) > free:
+                raise HTTPError(
+                    422, f"artifact of {declared} bytes does not fit in {free} bytes free"
+                )
+
+        with open(tmp, "wb", buffering=0) as f:
+            while True:
+                if time.monotonic() > deadline:
+                    raise HTTPError(
+                        422, f"artifact transfer exceeded {ARTIFACT_TRANSFER_TIMEOUT}s"
+                    )
+                chunk = resp.read(ARTIFACT_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > MAX_ARTIFACT_BYTES:
+                    raise HTTPError(
+                        422, f"artifact exceeds the {MAX_ARTIFACT_BYTES} byte limit"
+                    )
+                if declared >= 0 and total > declared:
+                    raise HTTPError(422, "peer sent more bytes than it declared")
+                running.update(chunk)
+                f.write(chunk)
+            # Durable before the rename: a crash between the two would
+            # otherwise publish a file whose tail never reached the disk, and
+            # the digest that vouched for it is not re-checked on any later
+            # read.
+            f.flush()
+            os.fsync(f.fileno())
+
+        if declared >= 0 and total != declared:
+            raise HTTPError(422, f"short read: got {total} of {declared} bytes")
+        if not hmac.compare_digest(running.hexdigest(), digest):
+            raise HTTPError(422, "artifact digest mismatch; nothing committed")
+
+        # Same fresh-inode-plus-mv commit as snapshot_restore: the bytes are
+        # written to a brand-new inode and renamed into place, never written
+        # over a file another process may already have open or cached.
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        rootfs = dest_dir / "rootfs.ext4"
+        sudo(["mv", str(tmp), str(rootfs)])
+        sudo(["chmod", "666", str(rootfs)], check=False)
+        record = {
+            "snapshot_id": snapshot_id,
+            "comment": f"pulled from {peer_url}",
+            "created_at": now_iso(),
+            # No origin vm on this host; provenance is the peer, not a builder.
+            "origin_vm_id": "",
+            "digest": digest,
+            "bytes": total,
+            "source_peer": peer_url,
+        }
+        (dest_dir / "meta.json").write_text(json.dumps(record))
+        return record
+    except HTTPError:
+        raise
+    except (OSError, http.client.HTTPException) as e:
+        # Transport faults and a full disk are the peer's problem or the
+        # host's, never a malformed request, so they read as 422 like a
+        # digest mismatch does.
+        raise HTTPError(422, f"artifact pull failed: {e}")
+    finally:
+        conn.close()
+        # Unconditional: on every failure path this is the partial file, and
+        # on the success path it is already gone.
+        tmp.unlink(missing_ok=True)
 
 
 # -- Upload / Exec / start-agent ---------------------------------------------
@@ -1292,18 +1602,72 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             raise HTTPError(400, f"bad JSON: {e}")
 
-    def _route(self, method: str):
-        if not self._auth():
-            return self._text(401, "unauthorized")
-        path = self.path.split("?", 1)[0]
-        query = {}
-        if "?" in self.path:
-            for kv in self.path.split("?", 1)[1].split("&"):
-                if "=" in kv:
-                    k, v = kv.split("=", 1)
-                    query[k] = v
+    def _serve_artifact(self, digest: str) -> None:
+        """Stream a local artifact to a peer agent, authorized by a grant.
 
+        This is the one endpoint on this agent that does NOT require
+        `Bearer $FC_AGENT_TOKEN`, and that is the point: the pulling host must
+        never hold this host's token. See the artifact section above for the
+        grant format and why it is shaped that way.
+        """
+        if not verify_artifact_grant(self.headers.get(ARTIFACT_GRANT_HEADER, ""), digest):
+            # One undifferentiated answer for every verification failure.
+            return self._text(403, "forbidden")
+        path = artifact_rootfs(digest)
+        size = path.stat().st_size
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(size))
+        self.send_header("X-Fuse-Artifact-Digest", digest)
+        self.end_headers()
+        # Bounded chunks with an exact Content-Length: an artifact is hundreds
+        # of MB to tens of GB and must never be materialized in memory. The
+        # socket timeout bounds each write; the deadline bounds a reader that
+        # stays just under it forever and would otherwise pin this thread.
+        deadline = time.monotonic() + ARTIFACT_TRANSFER_TIMEOUT
+        sent = 0
         try:
+            with open(path, "rb", buffering=0) as f:
+                while sent < size:
+                    if time.monotonic() > deadline:
+                        break
+                    chunk = f.read(min(ARTIFACT_CHUNK_BYTES, size - sent))
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    sent += len(chunk)
+        except OSError:
+            # A peer that hung up or stalled mid-stream. Swallowed rather than
+            # raised, because _route's handler would try to send a 500 on top
+            # of a response whose headers and part of whose body are already on
+            # the wire.
+            pass
+        if sent < size:
+            # Fewer bytes than the Content-Length promised. Drop the connection
+            # so the peer cannot mistake the next response for the remainder;
+            # its digest check would have rejected the body regardless.
+            self.close_connection = True
+
+    def _route(self, method: str):
+        path = self.path.split("?", 1)[0]
+        try:
+            # Grant-authenticated, deliberately ahead of the bearer check: a
+            # peer agent pulling a blob has a capability for one digest, not
+            # this host's token. Any grant failure is 403 before the store is
+            # touched, so this cannot be used to probe which digests exist.
+            m = re.fullmatch(r"/v1/artifacts/([^/]+)", path)
+            if m and method == "GET":
+                return self._serve_artifact(m.group(1))
+
+            if not self._auth():
+                return self._text(401, "unauthorized")
+            query = {}
+            if "?" in self.path:
+                for kv in self.path.split("?", 1)[1].split("&"):
+                    if "=" in kv:
+                        k, v = kv.split("=", 1)
+                        query[k] = v
+
             # /v1/vm collection
             if path == "/v1/vm" and method == "POST":
                 req = self._read_json()
@@ -1409,6 +1773,20 @@ class Handler(BaseHTTPRequestHandler):
                         # before a vm lock, so this order cannot cycle.
                         body = self._read_json()
                         return self._json(200, vm_public(fork_vm(vm_id, body)))
+            # Artifact pull. Bearer-authenticated like everything else here,
+            # because the caller is the orchestrator; the grant in the body is
+            # for the peer, not for us. The body is a few short fields, so it
+            # goes through _read_json; the artifact stream it triggers does
+            # not, and never could (MAX_BODY_BYTES is 1 MiB).
+            m = re.fullmatch(r"/v1/artifacts/([^/]+)/pull", path)
+            if m and method == "POST":
+                body = self._read_json()
+                return self._json(200, pull_artifact(
+                    m.group(1),
+                    body["peer_url"],
+                    body["grant"],
+                    body.get("snapshot_id", ""),
+                ))
             # Capacity
             if path == "/v1/capacity" and method == "GET":
                 return self._json(200, host_capacity())
