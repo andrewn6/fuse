@@ -1,3 +1,3 @@
 module github.com/folsomintel/fuse/sdks/go
 
-go 1.26.5
+go 1.26.6
