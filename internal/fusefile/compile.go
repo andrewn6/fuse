@@ -254,6 +254,22 @@ func ValidExposeName(s string) bool {
 	return exposeNamePattern.MatchString(s)
 }
 
+// envKeyPattern is the accepted form for a top-level env key: a portable shell
+// identifier, a letter or underscore followed by letters, digits and
+// underscores.
+//
+// The rule is narrow because the key is not just a name. The orchestrator
+// renders the env block into a file of `KEY=<quoted value>` lines that the
+// generated script sources, and the key side of that line cannot be quoted the
+// way shellQuote protects the value. Anything but an identifier is therefore a
+// way to inject a second statement into a file the guest runs.
+var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ValidEnvKey reports whether s is a well-formed environment variable name.
+func ValidEnvKey(s string) bool {
+	return envKeyPattern.MatchString(s)
+}
+
 // validRestartPolicies is the compose-native restart policy vocabulary.
 // Compose also accepts "on-failure:N" for a bounded retry count, but that
 // extension is deliberately not accepted here to keep the validated set

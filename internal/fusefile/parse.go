@@ -133,6 +133,36 @@ func validate(f *Fusefile) error {
 		}
 	}
 
+	// the top-level env block. keys are sorted first so the joined message is
+	// stable regardless of map iteration order, same as everywhere else here.
+	topEnvKeys := make([]string, 0, len(f.Env))
+	for key := range f.Env {
+		topEnvKeys = append(topEnvKeys, key)
+	}
+	sort.Strings(topEnvKeys)
+
+	for _, key := range topEnvKeys {
+		// a key is emitted unquoted, as a shell identifier, into the /fuse file
+		// the generated script sources. shellQuote protects the value; nothing
+		// protects the key, so anything but an identifier is rejected here.
+		switch {
+		case strings.TrimSpace(key) == "":
+			errs = append(errs, fmt.Errorf("env: environment variable name must not be empty"))
+			continue
+		case !ValidEnvKey(key):
+			errs = append(errs, fmt.Errorf(
+				"env: invalid environment variable name %q (letters, digits and underscores, not starting with a digit)", key))
+			continue
+		}
+		env := f.Env[key]
+		switch {
+		case env.Value != "" && env.Secret != "":
+			errs = append(errs, fmt.Errorf("env.%s: value and secret are mutually exclusive", key))
+		case env.Value == "" && env.Secret == "":
+			errs = append(errs, fmt.Errorf("env.%s: value or secret is required", key))
+		}
+	}
+
 	serviceNames := make([]string, 0, len(f.Services))
 	for name := range f.Services {
 		serviceNames = append(serviceNames, name)
