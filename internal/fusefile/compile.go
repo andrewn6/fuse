@@ -512,6 +512,29 @@ func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
+// IsEmpty reports whether the command is unset: neither the shell form nor the
+// exec form was provided. The compiler treats an empty command the same as an
+// omitted `run` (no line emitted, setup-only or build-only scripts unaffected).
+func (c Command) IsEmpty() bool {
+	return c.Shell == "" && len(c.Argv) == 0
+}
+
+// Render produces the shell line emitted for the command. The shell form is
+// passed through byte for byte so a scalar `run` compiles to exactly the
+// script it always did; the exec form is built from shellQuote'd elements so an
+// argument value (spaces, quotes, glob characters) can never be reinterpreted
+// by the shell.
+func (c Command) Render() string {
+	if len(c.Argv) > 0 {
+		quoted := make([]string, len(c.Argv))
+		for i, arg := range c.Argv {
+			quoted[i] = shellQuote(arg)
+		}
+		return strings.Join(quoted, " ")
+	}
+	return c.Shell
+}
+
 // setupScripts returns the shell fragment emitted for each setup step, in
 // order. compileStartupScript concatenates exactly this, and layer key
 // derivation hashes exactly this, so the key and the emitted script cannot
@@ -633,14 +656,14 @@ func SetupScriptRange(f *Fusefile, from, to int, includeFiles bool) string {
 // have been edited since, and rewriting a few KiB is cheap. Setup is the
 // expensive work --from-build exists to skip; files are not.
 func compileRunScript(f *Fusefile) string {
-	if f.Run == "" && len(f.Files) == 0 {
+	if f.Run.IsEmpty() && len(f.Files) == 0 {
 		return ""
 	}
 	var b strings.Builder
 	b.WriteString(scriptPrelude(f))
 	b.WriteString(renderFiles(f.Files))
-	if f.Run != "" {
-		b.WriteString(f.Run)
+	if !f.Run.IsEmpty() {
+		b.WriteString(f.Run.Render())
 		b.WriteString("\n")
 	}
 	return b.String()
@@ -650,7 +673,7 @@ func compileRunScript(f *Fusefile) string {
 // shell script with a strict-mode prelude. if there is nothing to run (no
 // setup steps and no run command), it returns "" rather than a bare prelude.
 func compileStartupScript(f *Fusefile) string {
-	if len(f.Setup) == 0 && f.Run == "" && len(f.Files) == 0 {
+	if len(f.Setup) == 0 && f.Run.IsEmpty() && len(f.Files) == 0 {
 		return ""
 	}
 
@@ -661,8 +684,8 @@ func compileStartupScript(f *Fusefile) string {
 		b.WriteString(script)
 		b.WriteString("\n")
 	}
-	if f.Run != "" {
-		b.WriteString(f.Run)
+	if !f.Run.IsEmpty() {
+		b.WriteString(f.Run.Render())
 		b.WriteString("\n")
 	}
 	return b.String()
@@ -689,7 +712,7 @@ func StartupScriptFrom(f *Fusefile, from int) string {
 	if from > len(scripts) {
 		from = len(scripts)
 	}
-	if from == len(scripts) && f.Run == "" && len(f.Files) == 0 {
+	if from == len(scripts) && f.Run.IsEmpty() && len(f.Files) == 0 {
 		return ""
 	}
 
@@ -700,8 +723,8 @@ func StartupScriptFrom(f *Fusefile, from int) string {
 		b.WriteString(script)
 		b.WriteString("\n")
 	}
-	if f.Run != "" {
-		b.WriteString(f.Run)
+	if !f.Run.IsEmpty() {
+		b.WriteString(f.Run.Render())
 		b.WriteString("\n")
 	}
 	return b.String()
