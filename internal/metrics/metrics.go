@@ -23,6 +23,11 @@ type PrometheusMetrics struct {
 	idleVMsSuspected    prometheus.Counter
 	idleVMsFailed       prometheus.Counter
 	vmsMissingProvider  prometheus.Counter
+	// Health gauges rather than counters: each cycle reports how many
+	// environments answered their probe and how many of those are failing
+	// right now, not how many ever have.
+	healthChecked prometheus.Gauge
+	healthFailing prometheus.Gauge
 
 	// HTTP handler metrics (used by the middleware).
 	HTTPRequestsTotal    *prometheus.CounterVec
@@ -108,6 +113,18 @@ func NewPrometheusMetrics(reg prometheus.Registerer) *PrometheusMetrics {
 			Name:      "vms_missing_provider_total",
 			Help:      "Total VMs that vanished from the provider.",
 		}),
+		healthChecked: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "orchestrator",
+			Subsystem: "reconcile",
+			Name:      "health_checked_vms",
+			Help:      "VMs whose guest returned an environment healthcheck verdict this cycle.",
+		}),
+		healthFailing: prometheus.NewGauge(prometheus.GaugeOpts{
+			Namespace: "orchestrator",
+			Subsystem: "reconcile",
+			Name:      "health_failing_vms",
+			Help:      "VMs whose environment healthcheck reported failing this cycle.",
+		}),
 
 		HTTPRequestsTotal: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Namespace: "orchestrator",
@@ -143,6 +160,8 @@ func NewPrometheusMetrics(reg prometheus.Registerer) *PrometheusMetrics {
 		m.idleVMsSuspected,
 		m.idleVMsFailed,
 		m.vmsMissingProvider,
+		m.healthChecked,
+		m.healthFailing,
 		m.HTTPRequestsTotal,
 		m.HTTPRequestDuration,
 		m.HTTPRequestsInFlight,
@@ -166,4 +185,6 @@ func (m *PrometheusMetrics) ReconcileCompleted(s orchestrator.ReconcileSummary) 
 	m.idleVMsSuspected.Add(float64(s.IdleVMsSuspected))
 	m.idleVMsFailed.Add(float64(s.IdleVMsFailed))
 	m.vmsMissingProvider.Add(float64(s.VMsMissingProvider))
+	m.healthChecked.Set(float64(s.HealthChecked))
+	m.healthFailing.Set(float64(s.HealthFailing))
 }
