@@ -30,6 +30,17 @@ type ListSnapshotsOptions struct {
 	// sets on an artifact.
 	Name string
 
+	// LayerKey narrows to the build layers taken after one setup step. Empty
+	// means "do not filter", never "match artifacts with no layer key".
+	LayerKey string
+
+	// Arch narrows to artifacts built on one architecture, in GOARCH
+	// vocabulary ("amd64", "arm64"). It is a separate filter from LayerKey
+	// rather than part of it because a rootfs is not portable across
+	// architectures, so a layer lookup that does not constrain arch can be
+	// served bytes it cannot boot.
+	Arch string
+
 	// Limit caps the page size (server default 50, max 200; <=0 uses the
 	// server default). Only consulted by ListPage — List always requests
 	// the server's max page size internally since it walks every page.
@@ -89,6 +100,8 @@ func (s *SnapshotsService) List(ctx context.Context, opt ListSnapshotsOptions) (
 			State:    opt.State,
 			Mode:     opt.Mode,
 			Name:     opt.Name,
+			LayerKey: opt.LayerKey,
+			Arch:     opt.Arch,
 			Limit:    maxPageLimit,
 			Cursor:   cursor,
 		})
@@ -127,6 +140,12 @@ func (s *SnapshotsService) ListPage(ctx context.Context, opt ListSnapshotsOption
 	}
 	if opt.Name != "" {
 		values.Set("name", opt.Name)
+	}
+	if opt.LayerKey != "" {
+		values.Set("layer_key", opt.LayerKey)
+	}
+	if opt.Arch != "" {
+		values.Set("arch", opt.Arch)
 	}
 	setPaginationParams(values, opt.Limit, opt.Cursor)
 	req, err := s.t.newRequest(ctx, http.MethodGet, "/v1/snapshots", values, nil)

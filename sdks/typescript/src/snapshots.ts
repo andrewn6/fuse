@@ -12,6 +12,15 @@ export interface ListSnapshotsOptions {
   taskId?: string;
   tenantId?: string;
   state?: string;
+  /** Narrows to the build layers taken after one setup step. Unset means "do
+   * not filter", never "match artifacts with no layer key". */
+  layerKey?: string;
+  /** Narrows to artifacts built on one architecture, in GOARCH vocabulary
+   * ("amd64", "arm64"). It is a separate filter from layerKey rather than
+   * part of it because a rootfs is not portable across architectures, so a
+   * layer lookup that does not constrain arch can be served bytes it cannot
+   * boot. */
+  arch?: string;
   /** Page size (server default 50, max 200). Only consulted by listPage —
    * list() always walks every page, so it ignores this and requests the
    * server's max page size. */
@@ -82,6 +91,8 @@ export class SnapshotsService {
         task_id: options.taskId,
         tenant_id: options.tenantId,
         state: options.state,
+        layer_key: options.layerKey,
+        arch: options.arch,
         limit: options.limit ? String(options.limit) : undefined,
         cursor: options.cursor,
       },

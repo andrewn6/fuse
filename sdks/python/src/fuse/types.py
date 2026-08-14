@@ -177,6 +177,22 @@ class Snapshot(_Model):
     mode: str = ""
     state: str = ""
     comment: str = ""
+    # the content-addressed cache key of the setup step this artifact was
+    # taken after. empty on anything that is not a build layer, and an empty
+    # key never matches a lookup.
+    layer_key: str = ""
+    # cpu architecture, in goarch vocabulary ("amd64", "arm64"), of the host
+    # that actually built the artifact rather than of whoever asked for it. a
+    # rootfs is not portable across architectures, so this is a real
+    # constraint on whether the artifact can be booted; it is deliberately not
+    # folded into layer_key, so a lookup has to filter on it separately.
+    arch: str = ""
+    # hex sha256 of the artifact rootfs. it verifies that a given copy of
+    # those bytes is intact, and nothing more: it is not a cross-build
+    # identity, because two builds of the same recipe produce different rootfs
+    # bytes (timestamps, inode ordering, package caches). it can never be used
+    # as a cache key.
+    digest: str = ""
     size_bytes: int = 0
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None

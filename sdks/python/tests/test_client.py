@@ -313,6 +313,60 @@ def test_snapshots_list() -> None:
 
 
 @respx.mock
+def test_snapshots_list_page_sends_layer_filters() -> None:
+    route = respx.get(f"{BASE_URL}/v1/snapshots").mock(
+        return_value=httpx.Response(200, json={"snapshots": []})
+    )
+    with new_client() as client:
+        client.snapshots.list_page(layer_key="abc123", arch="arm64")
+
+    # arch is its own filter rather than being folded into the layer key, so a
+    # lookup that omits it can match an artifact it cannot boot.
+    request = route.calls.last.request
+    assert request.url.params.get("layer_key") == "abc123"
+    assert request.url.params.get("arch") == "arm64"
+
+
+@respx.mock
+def test_snapshots_list_page_omits_unset_layer_filters() -> None:
+    route = respx.get(f"{BASE_URL}/v1/snapshots").mock(
+        return_value=httpx.Response(200, json={"snapshots": []})
+    )
+    with new_client() as client:
+        client.snapshots.list_page(vm_id="vm-1")
+
+    # an empty layer_key would ask the server to match every snapshot that is
+    # not a layer, so an unset filter must not be sent at all.
+    request = route.calls.last.request
+    assert "layer_key" not in request.url.params
+    assert "arch" not in request.url.params
+
+
+@respx.mock
+def test_snapshots_get_decodes_artifact_fields() -> None:
+    respx.get(f"{BASE_URL}/v1/snapshots/snap-1").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "snap-1",
+                "vm_id": "vm-1",
+                "mode": "build",
+                "layer_key": "abc123",
+                "arch": "amd64",
+                "digest": "deadbeef",
+                "created_at": "2024-01-01T00:00:00Z",
+            },
+        )
+    )
+    with new_client() as client:
+        snap = client.snapshots.get("snap-1")
+
+    assert snap.layer_key == "abc123"
+    assert snap.arch == "amd64"
+    assert snap.digest == "deadbeef"
+
+
+@respx.mock
 def test_snapshots_restore() -> None:
     route = respx.post(f"{BASE_URL}/v1/snapshots/snap-1").mock(
         return_value=httpx.Response(204)

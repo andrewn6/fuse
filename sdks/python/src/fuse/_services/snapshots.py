@@ -31,6 +31,8 @@ class SnapshotsService:
         task_id: str = "",
         tenant_id: str = "",
         state: str = "",
+        layer_key: str = "",
+        arch: str = "",
         cursor: str = "",
     ) -> list[Snapshot]:
         # returns every snapshot matching the filters, transparently walking
@@ -43,6 +45,8 @@ class SnapshotsService:
                 task_id=task_id,
                 tenant_id=tenant_id,
                 state=state,
+                layer_key=layer_key,
+                arch=arch,
                 limit=_MAX_PAGE_LIMIT,
                 cursor=cursor,
             )
@@ -59,15 +63,27 @@ class SnapshotsService:
         task_id: str = "",
         tenant_id: str = "",
         state: str = "",
+        layer_key: str = "",
+        arch: str = "",
         limit: int = 0,
         cursor: str = "",
     ) -> SnapshotPage:
         # returns one page of snapshots matching the filters.
+        #
+        # layer_key narrows to the build layers taken after one setup step,
+        # and arch to the artifacts built on one architecture ("amd64",
+        # "arm64"). arch is a separate filter rather than part of the layer
+        # key because a rootfs is not portable across architectures, so a
+        # layer lookup that does not constrain arch can be served bytes it
+        # cannot boot. an empty filter is dropped by clean_params, so it means
+        # "do not filter" rather than "match artifacts with no layer key".
         params: dict[str, str] = {
             "vm_id": vm_id,
             "task_id": task_id,
             "tenant_id": tenant_id,
             "state": state,
+            "layer_key": layer_key,
+            "arch": arch,
         }
         if limit > 0:
             params["limit"] = str(limit)

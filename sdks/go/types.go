@@ -204,7 +204,27 @@ type Snapshot struct {
 	Comment          string `json:"comment,omitempty"`
 	// Name is the caller-chosen lookup key from the snapshot's metadata, set
 	// by `fuse build` so an artifact can be found without its random id.
-	Name           string           `json:"name,omitempty"`
+	Name string `json:"name,omitempty"`
+
+	// LayerKey is the content-addressed cache key of the setup step this
+	// artifact was taken after. It is empty on every snapshot that is not a
+	// build layer, and an empty key never matches a lookup.
+	LayerKey string `json:"layer_key,omitempty"`
+
+	// Arch is the CPU architecture, in GOARCH vocabulary ("amd64", "arm64"),
+	// of the host that actually built the artifact, not of whoever asked for
+	// it. A rootfs is not portable across architectures, so this is a real
+	// constraint on whether the artifact can be booted; it is deliberately not
+	// folded into LayerKey, so a lookup has to filter on it separately.
+	Arch string `json:"arch,omitempty"`
+
+	// Digest is the hex sha256 of the artifact rootfs. It verifies that a
+	// given copy of those bytes is intact, and nothing more: it is not a
+	// cross-build identity, because two builds of the same recipe produce
+	// different rootfs bytes (timestamps, inode ordering, package caches).
+	// It can never be used as a cache key.
+	Digest string `json:"digest,omitempty"`
+
 	SizeBytes      int64            `json:"size_bytes,omitempty"`
 	CreatedAt      time.Time        `json:"created_at"`
 	UpdatedAt      time.Time        `json:"updated_at,omitempty"`

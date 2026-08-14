@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"testing"
 	"time"
 )
@@ -173,6 +174,84 @@ func TestSnapshotsList(t *testing.T) {
 	}
 	if len(snaps) != 1 || snaps[0].ID != "snap-1" {
 		t.Fatalf("decoded snaps = %+v", snaps)
+	}
+}
+
+func TestSnapshotsListPage_sendsLayerFilters(t *testing.T) {
+	var got recordedRequest
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		got = recordedRequest{r.Method, r.URL.Path, r.URL.RawQuery}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"snapshots":[]}`)
+	})
+	defer cleanup()
+
+	// arch travels as its own filter rather than being folded into the layer
+	// key, so a lookup that omits it can match an artifact it cannot boot.
+	_, err := c.Snapshots.ListPage(context.Background(), ListSnapshotsOptions{
+		LayerKey: "abc123",
+		Arch:     "arm64",
+	})
+	if err != nil {
+		t.Fatalf("ListPage: %v", err)
+	}
+	values, err := url.ParseQuery(got.query)
+	if err != nil {
+		t.Fatalf("parse query %q: %v", got.query, err)
+	}
+	if values.Get("layer_key") != "abc123" {
+		t.Fatalf("layer_key = %q, want abc123", values.Get("layer_key"))
+	}
+	if values.Get("arch") != "arm64" {
+		t.Fatalf("arch = %q, want arm64", values.Get("arch"))
+	}
+}
+
+func TestSnapshotsListPage_omitsUnsetLayerFilters(t *testing.T) {
+	var got recordedRequest
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		got = recordedRequest{r.Method, r.URL.Path, r.URL.RawQuery}
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"snapshots":[]}`)
+	})
+	defer cleanup()
+
+	// an unset filter must not be sent at all: an empty layer_key would ask
+	// the server to match every snapshot that is not a layer.
+	if _, err := c.Snapshots.ListPage(context.Background(), ListSnapshotsOptions{VMID: "vm-1"}); err != nil {
+		t.Fatalf("ListPage: %v", err)
+	}
+	values, err := url.ParseQuery(got.query)
+	if err != nil {
+		t.Fatalf("parse query %q: %v", got.query, err)
+	}
+	if _, ok := values["layer_key"]; ok {
+		t.Fatalf("layer_key sent when unset: %q", got.query)
+	}
+	if _, ok := values["arch"]; ok {
+		t.Fatalf("arch sent when unset: %q", got.query)
+	}
+}
+
+func TestSnapshotsGet_decodesArtifactFields(t *testing.T) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"snap-1","vm_id":"vm-1","mode":"build","layer_key":"abc123","arch":"amd64","digest":"deadbeef","created_at":"2024-01-01T00:00:00Z"}`)
+	})
+	defer cleanup()
+
+	snap, err := c.Snapshots.Get(context.Background(), "snap-1")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if snap.LayerKey != "abc123" {
+		t.Fatalf("LayerKey = %q, want abc123", snap.LayerKey)
+	}
+	if snap.Arch != "amd64" {
+		t.Fatalf("Arch = %q, want amd64", snap.Arch)
+	}
+	if snap.Digest != "deadbeef" {
+		t.Fatalf("Digest = %q, want deadbeef", snap.Digest)
 	}
 }
 
