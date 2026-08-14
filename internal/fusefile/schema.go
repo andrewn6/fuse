@@ -20,7 +20,7 @@ type Fusefile struct {
 	Files     []File             `yaml:"files,omitempty"`
 	Setup     []Step             `yaml:"setup,omitempty"`
 	Services  map[string]Service `yaml:"services,omitempty"`
-	Run       string             `yaml:"run,omitempty"`
+	Run       Command            `yaml:"run,omitempty"`
 	Workspace string             `yaml:"workspace,omitempty"`
 	Expose    []Expose           `yaml:"expose,omitempty"`
 	Secrets   []string           `yaml:"secrets,omitempty"`
@@ -34,6 +34,72 @@ type Fusefile struct {
 	// bounded by the control plane's HTTP write timeout because create is
 	// synchronous. Bake long work into an image with `fuse build` instead.
 	StartupTimeout string `yaml:"startup_timeout,omitempty"`
+}
+
+// Command is the polymorphic `run` field. It accepts either a scalar shell
+// command (the legacy form, interpreted by sh -lc byte for byte) or a list of
+// strings (the exec form, each element shell-quoted into a single command line
+// so no argument is subject to word splitting, globbing, or metacharacter
+// reinterpretation). Exactly one of Shell or Argv is populated.
+type Command struct {
+	// Shell is the shell-form command; set when `run` was a yaml scalar.
+	Shell string
+	// Argv is the exec-form argv; set when `run` was a yaml sequence.
+	Argv []string
+}
+
+// UnmarshalYAML accepts either a scalar (shell form) or a sequence of strings
+// (exec form). KnownFields(true) does not propagate into a custom unmarshaler,
+// so other node kinds -- including a mapping, which would look like an object
+// form this type does not have -- are rejected here rather than silently
+// dropped. An empty sequence is a decode error: an argv of zero arguments is
+// not a command. A non-string element (an int, bool, float, or null scalar) is
+// a decode error too: yaml.v3 silently coerces such scalars into strings when
+// decoding into []string, so each element's tag is checked explicitly.
+func (c *Command) UnmarshalYAML(node *yaml.Node) error {
+	switch node.Kind {
+	case yaml.ScalarNode:
+		var shell string
+		if err := node.Decode(&shell); err != nil {
+			return err
+		}
+		c.Shell = shell
+		c.Argv = nil
+		return nil
+	case yaml.SequenceNode:
+		if len(node.Content) == 0 {
+			return fmt.Errorf("run: an empty list is not a valid command")
+		}
+		argv := make([]string, 0, len(node.Content))
+		for i, el := range node.Content {
+			// yaml.v3 silently coerces a non-string scalar (5, true, 1.5, null)
+			// into a string when decoding into []string, so the tag is checked
+			// explicitly: only genuine string scalars are accepted.
+			if el.Kind != yaml.ScalarNode || el.Tag != "!!str" {
+				return fmt.Errorf("run: argument %d is not a string (tag %s)", i, el.Tag)
+			}
+			var s string
+			if err := el.Decode(&s); err != nil {
+				return fmt.Errorf("run: argument %d is not a string: %w", i, err)
+			}
+			argv = append(argv, s)
+		}
+		c.Shell = ""
+		c.Argv = argv
+		return nil
+	default:
+		return fmt.Errorf("run: must be a string or a list of strings")
+	}
+}
+
+// MarshalYAML renders the command back to its source shape: a scalar for the
+// shell form, a sequence for the exec form. This keeps a round-trip through the
+// custom unmarshaler lossless (e.g. `fuse init`'s scaffold).
+func (c Command) MarshalYAML() (any, error) {
+	if len(c.Argv) > 0 {
+		return c.Argv, nil
+	}
+	return c.Shell, nil
 }
 
 // File is one file materialized inside the guest before setup runs.

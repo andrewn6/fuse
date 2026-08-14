@@ -113,7 +113,7 @@ func TestLayerKeysChangeWithEveryKeyComponent(t *testing.T) {
 
 	// run: is the entrypoint, not a layer.
 	withRun := cached(Step{Run: "a"})
-	withRun.Run = "./start.sh"
+	withRun.Run = Command{Shell: "./start.sh"}
 	if keysOf(t, withRun, nil)[0].Key != baseKey {
 		t.Errorf("run: leaked into the key")
 	}

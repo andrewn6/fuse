@@ -15,7 +15,7 @@ func TestCompileFilesRendersBase64Heredoc(t *testing.T) {
 			{Path: "config/app.yaml", Content: "key: value\n"},
 			{Path: "/opt/bin/entry.sh", Content: "#!/bin/sh\necho hi\n", Mode: "0755"},
 		},
-		Run: "cat config/app.yaml",
+		Run: Command{Shell: "cat config/app.yaml"},
 	}
 	c, err := Compile(f)
 	if err != nil {
@@ -81,7 +81,7 @@ func TestCompileFilesInAllScripts(t *testing.T) {
 		Version: 1,
 		Files:   []File{{Path: "app.conf", Content: "x"}},
 		Setup:   []Step{{Run: "echo setup"}},
-		Run:     "echo run",
+		Run:     Command{Shell: "echo run"},
 	}
 	c, err := Compile(f)
 	if err != nil {
