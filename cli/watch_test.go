@@ -267,3 +267,55 @@ func TestUpFailsWhenEnvironmentFails(t *testing.T) {
 		t.Errorf("error = %v, want it to mention the provisioning failure", err)
 	}
 }
+
+// healthServer replies to environment reads with the given verdicts in order,
+// repeating the last one once they run out.
+func healthServer(t *testing.T, bodies ...string) *fuse.Client {
+	t.Helper()
+	var i int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		body := bodies[i]
+		if i < len(bodies)-1 {
+			i++
+		}
+		fmt.Fprint(w, body)
+	}))
+	t.Cleanup(srv.Close)
+
+	cl, err := fuse.New(srv.URL, "test-token")
+	if err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	return cl
+}
+
+const envBase = `"id":"vm1","state":"running","task_id":"t","url":"","spec":{}`
+
+// the wait ends as soon as the verdict turns passing, and it tolerates the
+// window before the guest has reported anything at all.
+func TestWaitForEnvironmentHealthyPasses(t *testing.T) {
+	cl := healthServer(t,
+		`{`+envBase+`}`,
+		`{`+envBase+`,"health":{"state":"starting"}}`,
+		`{`+envBase+`,"health":{"state":"passing"}}`,
+	)
+	if err := waitForEnvironmentHealthy(t.Context(), cl, "vm1", 10*time.Second); err != nil {
+		t.Fatalf("waitForEnvironmentHealthy: %v", err)
+	}
+}
+
+// a probe that never passes ends on the timeout, and the error carries the
+// last verdict so the author knows why rather than just that time ran out.
+func TestWaitForEnvironmentHealthyTimesOut(t *testing.T) {
+	cl := healthServer(t, `{`+envBase+`,"health":{"state":"failing","message":"connection refused"}}`)
+
+	err := waitForEnvironmentHealthy(t.Context(), cl, "vm1", time.Millisecond)
+	if err == nil {
+		t.Fatal("wait returned success for a probe that never passed")
+	}
+	for _, want := range []string{"did not report healthy", "failing", "connection refused"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error = %v, want it to contain %q", err, want)
+		}
+	}
+}

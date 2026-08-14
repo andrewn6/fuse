@@ -57,6 +57,23 @@ type compiledExpose struct {
 	As   string `json:"as,omitempty" yaml:"as,omitempty"`
 }
 
+// compiledHealthcheck mirrors fuse.HealthcheckSpec with yaml tags added.
+type compiledHealthcheck struct {
+	HTTP *compiledHealthcheckHTTP `json:"http,omitempty" yaml:"http,omitempty"`
+	Exec []string                 `json:"exec,omitempty" yaml:"exec,omitempty"`
+
+	IntervalSeconds    int64 `json:"interval_seconds,omitempty" yaml:"interval_seconds,omitempty"`
+	TimeoutSeconds     int64 `json:"timeout_seconds,omitempty" yaml:"timeout_seconds,omitempty"`
+	Retries            int   `json:"retries,omitempty" yaml:"retries,omitempty"`
+	StartPeriodSeconds int64 `json:"start_period_seconds,omitempty" yaml:"start_period_seconds,omitempty"`
+}
+
+// compiledHealthcheckHTTP mirrors fuse.HealthcheckHTTP with yaml tags added.
+type compiledHealthcheckHTTP struct {
+	Port int    `json:"port" yaml:"port"`
+	Path string `json:"path,omitempty" yaml:"path,omitempty"`
+}
+
 // compiledRequest is the create-environment body a Fusefile compiles into. it
 // mirrors fuse.CreateRequest so the output is directly comparable to what the
 // orchestrator receives, with two deliberate differences:
@@ -76,7 +93,10 @@ type compiledRequest struct {
 	Secrets        map[string]string `json:"secrets" yaml:"secrets"`
 	StartupScript  string            `json:"startup_script,omitempty" yaml:"startup_script,omitempty"`
 	Expose         []compiledExpose  `json:"expose,omitempty" yaml:"expose,omitempty"`
-	SeedSnapshotID string            `json:"seed_snapshot_id,omitempty" yaml:"seed_snapshot_id,omitempty"`
+	// Healthcheck is the environment-level readiness probe, absent when the
+	// Fusefile declared none.
+	Healthcheck    *compiledHealthcheck `json:"healthcheck,omitempty" yaml:"healthcheck,omitempty"`
+	SeedSnapshotID string               `json:"seed_snapshot_id,omitempty" yaml:"seed_snapshot_id,omitempty"`
 	// StartupScriptTimeoutSeconds bounds setup + run. Zero means the author
 	// asked for no bound and the orchestrator's default applies.
 	StartupScriptTimeoutSeconds int64    `json:"startup_script_timeout_seconds,omitempty" yaml:"startup_script_timeout_seconds,omitempty"`
@@ -212,6 +232,18 @@ func newCompiledRequest(taskID, seedSnapshotID string, c *fusefile.Compiled) com
 	for _, e := range c.Expose {
 		req.Expose = append(req.Expose, compiledExpose{Port: e.Port, As: e.As})
 	}
+	if hc := c.Healthcheck; hc != nil {
+		req.Healthcheck = &compiledHealthcheck{
+			Exec:               hc.Exec,
+			IntervalSeconds:    hc.IntervalSeconds,
+			TimeoutSeconds:     hc.TimeoutSeconds,
+			Retries:            hc.Retries,
+			StartPeriodSeconds: hc.StartPeriodSeconds,
+		}
+		if hc.HTTP != nil {
+			req.Healthcheck.HTTP = &compiledHealthcheckHTTP{Port: hc.HTTP.Port, Path: hc.HTTP.Path}
+		}
+	}
 	return req
 }
 
@@ -305,6 +337,29 @@ func writeCompiledText(w io.Writer, c *fusefile.Compiled, req compiledRequest) e
 		}
 	}
 
+	if hc := req.Healthcheck; hc != nil {
+		_, _ = fmt.Fprintf(w, "\nhealthcheck\n")
+		if hc.HTTP != nil {
+			path := hc.HTTP.Path
+			if path == "" {
+				path = "/"
+			}
+			_, _ = fmt.Fprintf(w, "  %-15s http://127.0.0.1:%d%s\n", "probe", hc.HTTP.Port, path)
+		} else {
+			_, _ = fmt.Fprintf(w, "  %-15s %s\n", "probe", strings.Join(hc.Exec, " "))
+		}
+		// a zero is the author leaving the field out, and the guest agent
+		// picks the default, so print the omission rather than a misleading 0.
+		for _, r := range [][2]string{
+			{"interval s", healthValue(hc.IntervalSeconds)},
+			{"timeout s", healthValue(hc.TimeoutSeconds)},
+			{"retries", healthValue(int64(hc.Retries))},
+			{"start period s", healthValue(hc.StartPeriodSeconds)},
+		} {
+			_, _ = fmt.Fprintf(w, "  %-15s %s\n", r[0], r[1])
+		}
+	}
+
 	if len(c.RequiredSecrets) > 0 {
 		_, _ = fmt.Fprintf(w, "\nrequired secrets (values supplied at `fuse up`)\n")
 		names := append([]string(nil), c.RequiredSecrets...)
@@ -352,6 +407,16 @@ func writeCompiledPart(w io.Writer, part string, c *fusefile.Compiled, req compi
 	default:
 		return fmt.Errorf("invalid --only %q: want %s", part, strings.Join(compileParts, ", "))
 	}
+}
+
+// healthValue renders one healthcheck timing. Zero means the author omitted
+// the field, which is not the same as asking for zero: the guest agent fills
+// its own default in, so say so rather than printing a number nothing will use.
+func healthValue(v int64) string {
+	if v == 0 {
+		return "(guest default)"
+	}
+	return fmt.Sprint(v)
 }
 
 // writeIndented writes s indented by two spaces per line, dropping the

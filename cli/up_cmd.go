@@ -29,6 +29,8 @@ func newUpCmd() *cobra.Command {
 		fromBuild         string
 		plan              bool
 		noCache           bool
+		waitHealthy       bool
+		healthTimeout     time.Duration
 	)
 	cmd := &cobra.Command{
 		Use:   "up [path]",
@@ -42,6 +44,11 @@ func newUpCmd() *cobra.Command {
 			// for both is a mistake rather than a combination to resolve.
 			if dryRun && plan {
 				return fmt.Errorf("--dry-run and --plan are mutually exclusive: --dry-run prints the create request, --plan prints the setup layer cache plan")
+			}
+			// waiting for a verdict requires waiting at all, and --no-wait
+			// returns before the environment is even running.
+			if waitHealthy && noWait {
+				return fmt.Errorf("--wait-healthy and --no-wait are mutually exclusive: --no-wait returns before the environment is running, so there is no verdict to wait for")
 			}
 
 			path, err := findFusefilePath(file, args)
@@ -81,6 +88,11 @@ func newUpCmd() *cobra.Command {
 			c, err := fusefile.Compile(f)
 			if err != nil {
 				return fmt.Errorf("%s: %w", path, err)
+			}
+			// waiting for a verdict nothing will ever produce would just hang
+			// until the timeout, so say what is missing instead.
+			if waitHealthy && c.Healthcheck == nil {
+				return fmt.Errorf("--wait-healthy needs a `healthcheck:` block in %s: without one the environment reports no verdict to wait for", path)
 			}
 
 			var lp *layerPlan
@@ -201,6 +213,7 @@ func newUpCmd() *cobra.Command {
 				StartupScript:               startupScript,
 				StartupScriptTimeoutSeconds: c.StartupTimeoutSeconds,
 				Expose:                      toSDKExpose(c.Expose),
+				Healthcheck:                 toSDKHealthcheck(c.Healthcheck),
 				SeedSnapshotID:              seedID,
 				// the gateway carries a credential, so it is a flag rather
 				// than a Fusefile field. matching `fuse environment create`
@@ -227,6 +240,17 @@ func newUpCmd() *cobra.Command {
 				if s := steps.summary(time.Since(started)); s != "" && !app.isJSON() {
 					_, _ = fmt.Fprintln(os.Stdout, s)
 				}
+				// running only means the environment booted and its startup
+				// script returned. --wait-healthy keeps waiting until the
+				// probe the author declared actually passes.
+				if waitHealthy {
+					if !app.isJSON() {
+						infof("waiting for the healthcheck to pass (up to %s)", healthTimeout)
+					}
+					if err := waitForEnvironmentHealthy(cmd.Context(), cl, e.ID, healthTimeout); err != nil {
+						return err
+					}
+				}
 				return reportReady(cmd.Context(), cl, e.ID)
 			}
 			if app.isJSON() {
@@ -248,6 +272,8 @@ func newUpCmd() *cobra.Command {
 	cmd.Flags().StringVar(&fromBuild, "from-build", "", "boot from a `fuse build` artifact instead of a base image (skips the setup phase)")
 	cmd.Flags().BoolVar(&plan, "plan", false, "print the derived setup layer cache plan and exit without creating anything")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "ignore the Fusefile's cache block and run every setup step")
+	cmd.Flags().BoolVar(&waitHealthy, "wait-healthy", false, "after the environment is running, keep waiting until its `healthcheck` reports passing")
+	cmd.Flags().DurationVar(&healthTimeout, "health-timeout", 2*time.Minute, "how long --wait-healthy waits for a passing verdict before giving up")
 	return cmd
 }
 
@@ -284,6 +310,15 @@ func renderUpSummary(e *fuse.EnvironmentInfo) {
 	}
 	if e.URL != "" {
 		pairs = append(pairs, [2]string{"agent", e.URL})
+	}
+	// only shown when the environment declared a probe, so a Fusefile without
+	// one prints exactly what it printed before.
+	if e.Health != nil {
+		health := e.Health.State
+		if e.Health.Message != "" {
+			health += "  " + e.Health.Message
+		}
+		pairs = append(pairs, [2]string{"health", health})
 	}
 	pairs = append(pairs, endpointPairs(e.Endpoints)...)
 	pairs = append(pairs, [2]string{"shell", "fuse environment shell " + e.ID})
@@ -357,6 +392,27 @@ func toSDKExpose(in []fusefile.ExposeSpec) []fuse.ExposeSpec {
 	out := make([]fuse.ExposeSpec, len(in))
 	for i, e := range in {
 		out[i] = fuse.ExposeSpec{Port: e.Port, As: e.As}
+	}
+	return out
+}
+
+// toSDKHealthcheck converts the compiler's environment-level probe into the
+// SDK wire type. Nil in, nil out: a Fusefile with no `healthcheck:` block must
+// send no healthcheck, which is what tells the server to ship no probe into
+// the guest.
+func toSDKHealthcheck(in *fusefile.HealthcheckSpec) *fuse.HealthcheckSpec {
+	if in == nil {
+		return nil
+	}
+	out := &fuse.HealthcheckSpec{
+		Exec:               in.Exec,
+		IntervalSeconds:    in.IntervalSeconds,
+		TimeoutSeconds:     in.TimeoutSeconds,
+		Retries:            in.Retries,
+		StartPeriodSeconds: in.StartPeriodSeconds,
+	}
+	if in.HTTP != nil {
+		out.HTTP = &fuse.HealthcheckHTTP{Port: in.HTTP.Port, Path: in.HTTP.Path}
 	}
 	return out
 }

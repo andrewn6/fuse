@@ -855,3 +855,146 @@ func TestParseHostLabels(t *testing.T) {
 		}
 	}
 }
+
+// writeHealthcheckFusefile writes a Fusefile whose only notable field is an
+// environment-level healthcheck, and returns its path.
+func writeHealthcheckFusefile(t *testing.T, dir string) string {
+	t.Helper()
+	src := `version: 1
+resources:
+  memory: 2GB
+run: ./serve.sh
+healthcheck:
+  http:
+    port: 8080
+    path: /healthz
+  interval: 5s
+  timeout: 2s
+  retries: 12
+  start_period: 10s
+`
+	path := filepath.Join(dir, "Fusefile")
+	if err := os.WriteFile(path, []byte(src), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+// the authored healthcheck has to reach the create body, or the whole feature
+// is an authoring exercise the server never hears about.
+func TestUpSendsHealthcheck(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		fmt.Fprint(w, `{"id":"vm1","state":"pending","task_id":"t","url":"","spec":{}}`)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeHealthcheckFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	if _, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{"--config", cfg, "-o", "json", "up", "-f", fusefilePath, "--task-id", "t", "--no-wait"})
+		return root.Execute()
+	}); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	hc, ok := gotBody["healthcheck"].(map[string]any)
+	if !ok {
+		t.Fatalf("healthcheck missing from the create body: %v", gotBody)
+	}
+	httpProbe, ok := hc["http"].(map[string]any)
+	if !ok {
+		t.Fatalf("healthcheck.http missing: %v", hc)
+	}
+	if port, _ := httpProbe["port"].(float64); port != 8080 {
+		t.Errorf("healthcheck.http.port = %v, want 8080", httpProbe["port"])
+	}
+	if httpProbe["path"] != "/healthz" {
+		t.Errorf("healthcheck.http.path = %v, want /healthz", httpProbe["path"])
+	}
+	for key, want := range map[string]float64{
+		"interval_seconds": 5, "timeout_seconds": 2, "retries": 12, "start_period_seconds": 10,
+	} {
+		if got, _ := hc[key].(float64); got != want {
+			t.Errorf("healthcheck.%s = %v, want %v", key, hc[key], want)
+		}
+	}
+}
+
+// a Fusefile with no healthcheck must send none: an empty object would start a
+// probe in the guest that nobody asked for.
+func TestUpOmitsHealthcheckWhenUndeclared(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatalf("decode request body: %v", err)
+		}
+		fmt.Fprint(w, `{"id":"vm1","state":"pending","task_id":"t","url":"","spec":{}}`)
+	}))
+	defer srv.Close()
+
+	fusefilePath := writeFusefile(t, t.TempDir())
+	cfg := writeConfig(t, srv.URL)
+
+	if _, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{
+			"--config", cfg, "-o", "json", "up", "-f", fusefilePath,
+			"--task-id", "t", "--secret", "pg_password=shh", "--no-wait",
+		})
+		return root.Execute()
+	}); err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if _, ok := gotBody["healthcheck"]; ok {
+		t.Errorf("healthcheck sent for a Fusefile that declares none: %v", gotBody)
+	}
+}
+
+// --wait-healthy needs something to wait for; both of these would otherwise
+// hang until the timeout with no explanation.
+func TestUpWaitHealthyRejectsImpossibleCombinations(t *testing.T) {
+	dir := t.TempDir()
+	cfg := writeConfig(t, "http://127.0.0.1:1")
+
+	cases := []struct {
+		name string
+		path string
+		args []string
+		want string
+	}{
+		{
+			name: "with no-wait",
+			path: writeHealthcheckFusefile(t, dir),
+			args: []string{"--wait-healthy", "--no-wait"},
+			want: "mutually exclusive",
+		},
+		{
+			name: "without a healthcheck block",
+			path: writeFusefile(t, t.TempDir()),
+			args: []string{"--wait-healthy", "--secret", "pg_password=shh"},
+			want: "needs a `healthcheck:` block",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := capture(t, func() error {
+				root := newRootCmd()
+				root.SetArgs(append([]string{"--config", cfg, "up", "-f", tc.path, "--task-id", "t"}, tc.args...))
+				return root.Execute()
+			})
+			if err == nil {
+				t.Fatalf("accepted %s", tc.name)
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %v, want it to contain %q", err, tc.want)
+			}
+		})
+	}
+}
