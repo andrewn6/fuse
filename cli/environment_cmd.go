@@ -154,6 +154,19 @@ func renderEnvDetail(e *fuse.EnvironmentInfo) {
 		{"created", shortTime(e.CreatedAt)},
 		{"updated", shortTime(e.UpdatedAt)},
 	}
+	// health is a separate axis from state: an environment can be running and
+	// failing at the same time. the row only appears when the environment
+	// declared a `healthcheck:`, so nothing else changes shape.
+	if e.Health != nil {
+		health := e.Health.State
+		if e.Health.Failures > 0 {
+			health += fmt.Sprintf("  (%d consecutive failures)", e.Health.Failures)
+		}
+		if e.Health.Message != "" {
+			health += "  " + styleBad.Render(e.Health.Message)
+		}
+		pairs = append(pairs, [2]string{"health", health})
+	}
 	pairs = append(pairs, endpointPairs(e.Endpoints)...)
 	if e.Error != "" {
 		pairs = append(pairs, [2]string{"error", styleBad.Render(e.Error)})
