@@ -123,6 +123,11 @@ func TestValidateReportsErrors(t *testing.T) {
 			want: []string{"resources.gpu_profile: invalid MIG profile"},
 		},
 		{
+			name: "build and setup together",
+			body: "version: 1\nbuild:\n  - npm ci\nsetup:\n  - npm test\n",
+			want: []string{"setup is a deprecated alias for build"},
+		},
+		{
 			// structural and compile problems are reported together in one
 			// pass; `fuse up` stops after the structural batch.
 			name: "structural and compile together",
