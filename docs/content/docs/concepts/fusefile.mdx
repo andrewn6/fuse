@@ -81,6 +81,14 @@ files:
       echo hello
     mode: "0755" # optional octal mode
 
+# local files and directories shipped into the guest, also before setup. this
+# is the one that takes a directory. combined size capped at 512KiB.
+copy:
+  - from: ./start.sh # relative to this Fusefile, not your cwd
+    to: ./start.sh # relative paths resolve against the workspace
+  - from: ./src # a directory is walked into one upload per file
+    to: /workspace/src
+
 resources:
   cpus: 2             # whole vCPUs; 2.0 is accepted, a fraction is not
   memory: 2GB         # M/MB/MiB, G/GB/GiB, T/TB/TiB (all binary), compiles to ram_mb
@@ -178,6 +186,9 @@ you can stop reading at [The setup layer cache](#the-setup-layer-cache).
 | `version` | int | Currently always `1`. A Fusefile is a single yaml document; anything after a second `---` is rejected rather than silently dropped. |
 | `image` | string | Name of a rootfs pre-baked on the host, **not** an OCI image ref. There is no OCI pull: fc-agent resolves it to `<IMAGES_DIR>/<image>.ext4` and qemu-agent to `<IMAGES_DIR>/<image>.qcow2`, and returns a 400 if no such file exists. An operator bakes and places it out of band (e.g. with `fc-bake-rootfs.sh`). Omit to use the baked base rootfs. See [Base images](#base-images-are-not-oci-images). |
 | `files` | list of `{path, source \| content, mode}` | Files written into the guest before `setup` runs. See [Files](#files). |
+| `copy` | list of `{from, to}` | Local files **and directories** copied into the guest before `setup` runs. See [Copy](#copy). |
+| `copy[].from` | string | A file or directory on your machine, resolved relative to the Fusefile, not your working directory. A directory is walked into one upload per regular file. A symlink is an error, never followed. |
+| `copy[].to` | string | Where it lands in the guest. Absolute, or relative to `workspace`. `..` segments are rejected, as is anything under `/fuse`, which holds the guest agent's own manifest, secrets and credentials. Two entries may not write the same path. |
 | `resources.cpus` | int | Whole vCPU count. A whole-valued float (`2.0`) is accepted; a fraction (`0.5`) is rejected, because Firecracker takes an integer `vcpu_count` and QEMU an integer `-smp`. A negative count is rejected. Omitting it (or `0`) means "host default": the host agent boots the VM with 1 vCPU. |
 | `resources.memory` | string | A size, e.g. `2GB`. Compiles to `ram_mb`. See [Size units](#size-units). |
 | `resources.disk` | string | Size of the guest root disk, e.g. `10GB`. Compiles to `storage_gb`, rounded **up** to a whole GB, so `512MB` provisions 1GB. See [Size units](#size-units). |
@@ -367,6 +378,64 @@ bake them in with `fuse build`), where they stream directly into the guest.
 Files are rewritten on every boot, including a `fuse up --from-build` boot that
 skips `setup`, since they are authoring inputs that may have changed since the
 artifact was baked.
+
+## Copy
+
+`copy` is the directory-capable sibling of `files`. Each entry names a `from` on
+your machine and a `to` in the guest, and everything lands before `setup` runs:
+
+```yaml
+copy:
+  - from: ./start.sh
+    to: ./start.sh
+  - from: ./src
+    to: /workspace/src
+  - from: ../shared/config.yaml
+    to: /etc/app/config.yaml
+
+setup:
+  - chmod +x ./start.sh
+
+run: ./start.sh
+```
+
+The rules:
+
+- **`from` is relative to the Fusefile**, not to your working directory, so
+  `fuse up ./repro/Fusefile` copies the same sources it would from inside
+  `./repro`. An absolute path is taken as written.
+- **`to` may be absolute or relative to `workspace`**, the same directory
+  `setup` and `run` already start in. A relative `to` with the default
+  workspace means `/workspace/<to>`.
+- **A directory is expanded on your machine**, one upload per regular file,
+  landing under `to` with its structure preserved. Empty directories do not
+  travel: the guest creates a file's parents when it is written.
+- **Symlinks are an error, not a silent follow.** Following one would ship
+  whatever it points at, which for a link out of the tree is a file you never
+  meant to send. Name the target instead.
+- **Nothing may land under `/fuse`.** That is where the guest agent keeps its
+  manifest, its resolved secrets, and its TLS credentials. The CLI rejects it,
+  and so does the orchestrator.
+
+Choose between the two blocks by what you have: `files` for a literal body or a
+`mode`, `copy` for a directory or for a file you would rather not restate.
+
+:::warning[This is a source transport, not a data transport]
+Copied files travel inside the create request, so their combined size is capped
+at **512 KiB**. Going over is an error at `fuse up` naming the size and the
+limit, before anything is uploaded. Datasets, model weights, and `node_modules`
+do not belong here: fetch them from `setup`, or bake them in with `fuse build`.
+:::
+
+Two other limits worth knowing before you reach for it:
+
+- **Permissions are not preserved.** The upload carries a path and a body and
+  nothing else, so an executable arrives without its executable bit. `chmod` it
+  in `setup`, as the example above does.
+- **A fork does not re-copy.** [`fuse environment fork`](/reference/cli/environment/fork)
+  starts from a copy of the source's disk, so it already has the files. A
+  restored environment does get them again, since it may have been edited since
+  the snapshot.
 
 ## Startup timeout
 

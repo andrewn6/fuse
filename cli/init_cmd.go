@@ -8,8 +8,11 @@ import (
 )
 
 // initScaffold is the commented example Fusefile written by `fuse init`. it
-// documents the full v1 contract; every field here is parsed, validated, and
-// compiled today.
+// documents the full v1 contract: every field it mentions is parsed,
+// validated, and compiled today. the blocks that name a path on the authoring
+// machine (files, copy) are commented out rather than omitted, because a
+// scaffold that shipped them live would fail its first `fuse up` on a source
+// that does not exist yet.
 //
 // the first line is the yaml-language-server modeline, which points editors at
 // the published json schema (schema/fusefile-v1.json) for completion and inline
@@ -36,6 +39,17 @@ version: 1
 #       #!/bin/sh
 #       echo hello
 #     mode: "0755"            # optional octal mode
+
+# local files and directories copied into the guest, also before setup runs.
+# this is the block that takes a directory: 'from' is read relative to this
+# Fusefile, 'to' resolves against the workspace when it is relative, symlinks
+# are an error, and the combined size is capped at 512KiB. permissions are not
+# carried, so chmod in setup. commented out for the same reason as files above.
+# copy:
+#   - from: ./start.sh
+#     to: ./start.sh
+#   - from: ./src           # a directory is walked into one upload per file
+#     to: /workspace/src
 
 resources:
   cpus: 2 # whole vcpus; 2.0 is accepted, a fraction is not
