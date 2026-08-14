@@ -397,22 +397,22 @@ to also update a co-located orchestrator. Override the source repo with `FUSE_RE
 
 ## End-to-end test
 
-`../e2e` drives the whole orchestrator API (deploy lifecycle, hosts, rotate-token, events).
-It runs hermetically against the in-memory stub by default; point it at a real host to test
-everything end to end:
+`fc-e2e.sh` boots the real `./bin/fuse` binary and drives a complete environment
+lifecycle over HTTP (create → get → list → snapshot → restore → drain →
+destroy), asserting each step:
 
 ```bash
-# hermetic (no host needed)
-go test ./e2e/
+# hermetic (no host needed) — uses the in-memory stub provider
+./fc-e2e.sh
 
-# against the host in ../.env (FIRECRACKER_BASE_URL / FIRECRACKER_TOKEN)
-FUSE_E2E_REMOTE=1 go test ./e2e/ -v
-
-# or an explicit host
-FUSE_E2E_FIRECRACKER_URL=http://<host>:8090 FUSE_E2E_FIRECRACKER_TOKEN=<tok> go test ./e2e/ -v
+# against a real Firecracker host (network + a Fuse-compatible host required).
+# reads FIRECRACKER_BASE_URL / FIRECRACKER_TOKEN from ../../.env
+FUSE_E2E_REMOTE=1 ./fc-e2e.sh
 ```
 
-`host-agent/firecracker/fc-e2e.sh` is the binary-level equivalent (boots `./bin/fuse` and curls the lifecycle).
+Exit 0 means everything works; any failed assertion exits non-zero. For GPU
+environments, see `qemu-e2e.sh` (registers a QEMU host, deploys a GPU environment,
+verifies the device is visible in the guest).
 
 ## State
 

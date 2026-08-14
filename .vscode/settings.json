@@ -1,7 +1,7 @@
 {
   // a Fusefile has no extension, so nothing detects it as YAML on its own.
   // these three patterns cover ./Fusefile, the Fusefile.<variant> style used
-  // in e2e-fusefiles/, and the explicit *.fuse escape hatch.
+  // in docs/fusefiles/, and the explicit *.fuse escape hatch.
   "files.associations": {
     "Fusefile": "yaml",
     "Fusefile.*": "yaml",
