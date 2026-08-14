@@ -80,8 +80,12 @@ func TestUpPlanPrintsKeysAndReportsMisses(t *testing.T) {
 	if plan.BaseKey != fusefile.BaseKey("base-ubuntu-24", nil) {
 		t.Errorf("base_key = %q", plan.BaseKey)
 	}
-	if plan.Arch == "" {
-		t.Errorf("arch is empty")
+	// arch is not a key component and is not knowable before the build is
+	// scheduled onto a host, so the plan must not guess at one. reporting the
+	// client's arch here would be a claim about the artifact that nothing has
+	// established yet.
+	if plan.Arch != "" {
+		t.Errorf("arch = %q, want empty until a build lands on a host", plan.Arch)
 	}
 	if len(plan.Steps) != 2 {
 		t.Fatalf("got %d steps, want 2", len(plan.Steps))

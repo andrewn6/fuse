@@ -8,7 +8,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 
@@ -19,7 +18,12 @@ import (
 // single place layer keys are computed for the CLI, so `--plan` and per-step
 // cache reporting cannot disagree about what a step's key is.
 type layerPlan struct {
-	BaseKey      string                `json:"base_key"`
+	BaseKey string `json:"base_key"`
+	// Arch is the architecture the artifacts would be built on. It is not part
+	// of a layer key, only a serving constraint, and it is not knowable until
+	// the build is scheduled onto a host, so it is empty today. The field is a
+	// shipped `--plan --json` surface, so it stays; a later phase populates it
+	// from the host the builder lands on.
 	Arch         string                `json:"arch"`
 	CacheEnabled bool                  `json:"cache_enabled"`
 	Steps        []fusefile.LayerKey   `json:"steps"`
@@ -58,20 +62,20 @@ func planSetupLayers(fusefilePath string, f *fusefile.Fusefile, show bool) (*lay
 // directory, which is the only directory the CLI will read project files from.
 func buildLayerPlan(fusefilePath string, f *fusefile.Fusefile) (*layerPlan, error) {
 	dir := filepath.Dir(fusefilePath)
-	// the target host's architecture is not knowable client-side today, so the
-	// client's is used. an ext4 layer is not portable across architectures, so
-	// this component must become the host's arch when layers are actually
-	// stored on a host.
-	opts := fusefile.LayerOptions{Arch: runtime.GOARCH}
 
-	keys, err := fusefile.LayerKeys(f, inputDigester(dir), opts)
+	keys, err := fusefile.LayerKeys(f, inputDigester(dir), fusefile.LayerOptions{})
 	if err != nil {
 		return nil, err
 	}
 
 	plan := &layerPlan{
-		BaseKey:      fusefile.BaseKey(f.Image, f.Files),
-		Arch:         opts.Arch,
+		BaseKey: fusefile.BaseKey(f.Image, f.Files),
+		// arch is not a key component and is not knowable client-side: the
+		// build has not been scheduled onto a host yet, and the client's own
+		// arch says nothing about the host's. left empty so the plan does not
+		// assert something it cannot know; a later phase fills it in from the
+		// host the builder actually lands on.
+		Arch:         "",
 		CacheEnabled: f.Cache.Enabled,
 		Steps:        keys,
 		Statuses:     make([]layerPlanStepStatus, len(keys)),
@@ -93,11 +97,15 @@ func renderLayerPlan(p *layerPlan) error {
 		return printJSON(p.jsonView())
 	}
 
-	renderDetail([][2]string{
-		{"base key", p.BaseKey},
-		{"arch", p.Arch},
-		{"cache", map[bool]string{true: "enabled", false: "disabled"}[p.CacheEnabled]},
-	})
+	detail := [][2]string{{"base key", p.BaseKey}}
+	// the arch row is omitted rather than shown blank: until the build is
+	// placed on a host there is no answer, and an empty value reads as "amd64
+	// probably" to anyone skimming.
+	if p.Arch != "" {
+		detail = append(detail, [2]string{"arch", p.Arch})
+	}
+	detail = append(detail, [2]string{"cache", map[bool]string{true: "enabled", false: "disabled"}[p.CacheEnabled]})
+	renderDetail(detail)
 	if len(p.Steps) == 0 {
 		fmt.Fprintln(os.Stderr, styleFaint.Render("no setup steps"))
 		return nil
