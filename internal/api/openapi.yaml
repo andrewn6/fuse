@@ -801,6 +801,22 @@ paths:
             type: string
             enum: [creating, ready, restoring, deleting, error]
           description: Return only snapshots in this lifecycle state.
+        - name: layer_key
+          in: query
+          schema:
+            type: string
+          description: |
+            Return only build artifacts materializing this setup layer.
+            For a single-key lookup use /v1/snapshots/resolve, which
+            answers off an index instead of scanning the fleet.
+        - name: arch
+          in: query
+          schema:
+            type: string
+            enum: [amd64, arm64]
+          description: |
+            Return only artifacts built on this architecture. The uname
+            spellings (x86_64, aarch64) are accepted and normalized.
       responses:
         "200":
           description: Snapshot list.
@@ -808,6 +824,55 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/SnapshotList"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
+  /v1/snapshots/resolve:
+    get:
+      tags: [snapshots]
+      operationId: resolveSnapshot
+      summary: Resolve a build layer
+      description: |
+        Returns the newest ready artifact for one build layer cache key,
+        scoped to the caller's tenant. The tenant is taken from the
+        credentials the request authenticated with and cannot be named
+        in the request: an artifact is only ever served back to whoever
+        built it.
+
+        A cold cache is a 200 with `found: false`, not a 404. A client
+        walks its layer chain deepest-first, one key per call, and stops
+        at the first hit, so misses are the ordinary path here.
+      parameters:
+        - name: layer_key
+          in: query
+          required: true
+          schema:
+            type: string
+          description: Derived cache key of the setup step.
+        - name: arch
+          in: query
+          required: true
+          schema:
+            type: string
+            enum: [amd64, arm64]
+          description: |
+            Architecture the artifact must have been built on. Required,
+            never defaulted: an artifact is a rootfs image and a rootfs
+            does not travel across architectures, so a guess here would
+            hand back bytes the caller cannot boot.
+      responses:
+        "200":
+          description: The resolved artifact, or a miss.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResolveSnapshotResponse"
+        "400":
+          description: layer_key or arch missing.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
         "500":
           $ref: "#/components/responses/InternalError"
 
@@ -1684,6 +1749,14 @@ components:
           type: object
           additionalProperties:
             type: string
+        layer_key:
+          type: string
+          description: |
+            Labels this snapshot as the artifact of one cacheable setup
+            step, so a later build can find it by recipe instead of by
+            id. Set by `fuse build`; every other caller omits it. A
+            layer is still an ordinary build-mode snapshot; the key is
+            the only thing that distinguishes it.
         export_ref:
           type: string
         export_status:
@@ -1745,6 +1818,28 @@ components:
           enum: [creating, ready, restoring, deleting, error]
         comment:
           type: string
+        layer_key:
+          type: string
+          description: |
+            Derived cache key of the setup step this artifact
+            materializes. Absent on any snapshot that is not a build
+            layer.
+        arch:
+          type: string
+          enum: [amd64, arm64]
+          description: |
+            Architecture of the host that built the artifact, not of
+            whoever asked for it. An ext4 rootfs does not travel across
+            architectures, so this is what says whether these bytes are
+            bootable for you.
+        digest:
+          type: string
+          description: |
+            Hex sha256 of the artifact rootfs, for verifying a transfer
+            of these exact bytes. It is not an identity two artifacts
+            can share: rebuilding the same recipe produces different
+            bytes, so nothing is looked up by digest. Absent when the
+            host agent does not hash.
         size_bytes:
           type: integer
           format: int64
@@ -1778,6 +1873,16 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/Snapshot"
+
+    ResolveSnapshotResponse:
+      type: object
+      required: [found]
+      properties:
+        found:
+          type: boolean
+          description: False on a cold cache; snapshot is then absent.
+        snapshot:
+          $ref: "#/components/schemas/Snapshot"
 
     CreateAPIKeyRequest:
       type: object

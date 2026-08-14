@@ -126,6 +126,14 @@ type CreateSnapshotRequest struct {
 	Metadata         map[string]string `json:"metadata,omitempty"`
 	ExportRef        string            `json:"export_ref,omitempty"`
 	ExportStatus     string            `json:"export_status,omitempty"`
+
+	// LayerKey labels this snapshot as the artifact of one cacheable setup
+	// step. `fuse build` sets it after each such step; every other caller
+	// leaves it empty. It is what a later build looks the artifact up by, so
+	// an artifact taken without it can only ever be found by its random id.
+	// A layer is still an ordinary build-mode snapshot; the key is the only
+	// thing that distinguishes it.
+	LayerKey string `json:"layer_key,omitempty"`
 }
 
 // ForkEnvironmentRequest is the optional body for
@@ -156,7 +164,19 @@ type Snapshot struct {
 	Comment          string `json:"comment,omitempty"`
 	// Name is the caller-chosen lookup key from the snapshot's metadata,
 	// surfaced so a build artifact can be found without its random id.
-	Name           string           `json:"name,omitempty"`
+	Name string `json:"name,omitempty"`
+	// LayerKey is the derived cache key of the setup step this artifact
+	// materializes, empty on any snapshot that is not a build layer.
+	LayerKey string `json:"layer_key,omitempty"`
+	// Arch is the goarch of the host that built the artifact, not of whoever
+	// asked for it. An ext4 rootfs does not travel across architectures, so
+	// this is what tells a caller whether it can boot these bytes.
+	Arch string `json:"arch,omitempty"`
+	// Digest is the hex sha256 of the artifact rootfs, for verifying a
+	// transfer of these exact bytes. It is not an identity two artifacts can
+	// share: rebuilding the same recipe produces different bytes, so nothing
+	// looks a snapshot up by digest. Empty when the host agent does not hash.
+	Digest         string           `json:"digest,omitempty"`
 	SizeBytes      int64            `json:"size_bytes,omitempty"`
 	CreatedAt      time.Time        `json:"created_at"`
 	UpdatedAt      time.Time        `json:"updated_at,omitempty"`
@@ -173,6 +193,19 @@ type Snapshot struct {
 type SnapshotList struct {
 	Snapshots  []Snapshot `json:"snapshots"`
 	NextCursor *string    `json:"next_cursor,omitempty"`
+}
+
+// ResolveSnapshotResponse is the body of GET /v1/snapshots/resolve: at most
+// one artifact for one layer key.
+//
+// A miss is reported as found=false with a 200, not as a 404. The first build
+// of any recipe misses every key in its chain, and a caller probes its chain
+// one key at a time, so a cold cache is the ordinary path through this
+// endpoint and dressing it up as an error would make every clean build look
+// like a pile of failures in logs and metrics.
+type ResolveSnapshotResponse struct {
+	Found    bool      `json:"found"`
+	Snapshot *Snapshot `json:"snapshot,omitempty"`
 }
 
 // Error is the JSON envelope returned for every non-2xx response. It

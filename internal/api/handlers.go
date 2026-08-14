@@ -195,6 +195,13 @@ func (h *Handler) register(r chi.Router) {
 
 	r.Post("/v1/environments/{vmId}/snapshots", h.createSnapshot)
 	r.Get("/v1/snapshots", h.listSnapshots)
+	// A fixed sub-path rather than a filter on the collection above: this
+	// answers "is there an artifact for this one key" with at most one record
+	// off an indexed lookup, where the collection route loads and filters
+	// every snapshot in the fleet. Chi matches the literal segment ahead of
+	// {snapshotId}, and snapshot ids are provider-generated, so it cannot be
+	// shadowed by a real id.
+	r.Get("/v1/snapshots/resolve", h.resolveSnapshot)
 	r.Get("/v1/snapshots/{snapshotId}", h.getSnapshot)
 	r.Post("/v1/snapshots/{snapshotId}", h.snapshotAction)
 	r.Delete("/v1/snapshots/{snapshotId}", h.deleteSnapshot)
@@ -524,6 +531,7 @@ func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 		RetentionUntil: retentionUntil,
 		Metadata:       req.Metadata,
 		Exports:        exports,
+		LayerKey:       req.LayerKey,
 	})
 	if err != nil {
 		writeFleetError(w, err)
@@ -550,6 +558,8 @@ func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 //	@Param		state		query		string	false	"Filter by state"	Enums(creating, ready, restoring, deleting, error)
 //	@Param		mode		query		string	false	"Filter by creation mode"	Enums(manual, auto, build)
 //	@Param		name		query		string	false	"Filter by metadata name (build artifact lookup key)"
+//	@Param		layer_key	query		string	false	"Filter by build layer cache key"
+//	@Param		arch		query		string	false	"Filter by the architecture the artifact was built on"	Enums(amd64, arm64)
 //	@Param		limit		query		int		false	"Max results per page (default 50, max 200)"
 //	@Param		cursor		query		string	false	"Opaque pagination cursor from a previous response's next_cursor"
 //	@Success	200			{object}	SnapshotList
@@ -564,8 +574,12 @@ func (h *Handler) listSnapshots(w http.ResponseWriter, r *http.Request) {
 		State:    orchestrator.SnapshotState(r.URL.Query().Get("state")),
 		Mode:     orchestrator.SnapshotMode(r.URL.Query().Get("mode")),
 		Name:     r.URL.Query().Get("name"),
-		Limit:    limit,
-		Cursor:   cursor,
+		LayerKey: r.URL.Query().Get("layer_key"),
+		// normalized so a browsing operator typing the uname spelling
+		// ("x86_64") sees the same rows the scheduler's vocabulary stores.
+		Arch:   orchestrator.NormalizeArch(r.URL.Query().Get("arch")),
+		Limit:  limit,
+		Cursor: cursor,
 	}
 
 	records, next, err := h.Fleet.ListSnapshotsFiltered(r.Context(), filter)
@@ -581,6 +595,54 @@ func (h *Handler) listSnapshots(w http.ResponseWriter, r *http.Request) {
 		out.NextCursor = &next
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// resolveSnapshot resolves one build layer cache key to at most one artifact.
+//
+//	@Summary		Resolve a build layer
+//	@Description	Returns the newest ready artifact for one layer cache key, scoped to the caller's tenant. A cold cache is a 200 with found=false, not an error: a client walks its layer chain deepest-first, one key per call, and stops at the first hit.
+//	@Tags			snapshots
+//	@Produce		json
+//	@Param			layer_key	query		string	true	"Derived cache key of the setup step"
+//	@Param			arch		query		string	true	"Architecture the artifact must have been built on"	Enums(amd64, arm64)
+//	@Success		200			{object}	ResolveSnapshotResponse
+//	@Failure		400			{object}	Error
+//	@Security		BearerAuth
+//	@Router			/v1/snapshots/resolve [get]
+func (h *Handler) resolveSnapshot(w http.ResponseWriter, r *http.Request) {
+	layerKey := r.URL.Query().Get("layer_key")
+	if layerKey == "" {
+		// An empty key matches nothing by construction, so answering "miss"
+		// would be technically true and completely useless: it would hide a
+		// caller that failed to derive its keys behind a cache that always
+		// looks cold.
+		writeError(w, http.StatusBadRequest, CodeInvalidArgument, "layer_key is required", nil)
+		return
+	}
+
+	// Required, never defaulted. An artifact is a rootfs image, and a rootfs
+	// does not travel across architectures, so guessing here would hand back
+	// bytes the caller cannot boot, and it would do it silently, at the one
+	// moment the caller believes it got a cache hit.
+	arch := orchestrator.NormalizeArch(r.URL.Query().Get("arch"))
+	if arch == "" {
+		writeError(w, http.StatusBadRequest, CodeInvalidArgument, "arch is required", nil)
+		return
+	}
+
+	// Security boundary: the tenant comes from how the caller authenticated,
+	// never from the request. See callerTenantID.
+	record, ok, err := h.Fleet.ResolveLayer(r.Context(), callerTenantID(r.Context()), layerKey, arch)
+	if err != nil {
+		writeFleetError(w, err)
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusOK, ResolveSnapshotResponse{Found: false})
+		return
+	}
+	snapshot := toAPISnapshot(record)
+	writeJSON(w, http.StatusOK, ResolveSnapshotResponse{Found: true, Snapshot: &snapshot})
 }
 
 // getSnapshot fetches a single snapshot by ID.

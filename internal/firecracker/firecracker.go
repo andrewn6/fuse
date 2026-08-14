@@ -414,12 +414,20 @@ func toWireExpose(in []orchestrator.ExposeSpec) []exposeWire {
 }
 
 func (e *remoteEnv) Checkpoint(ctx context.Context, comment string) (string, error) {
+	cp, err := e.CheckpointWithDigest(ctx, comment)
+	return cp.ID, err
+}
+
+// CheckpointWithDigest implements orchestrator.SnapshotDigester. The agent
+// hashes the artifact inline as it writes it, so this response is the only
+// place the digest is ever available; nothing recomputes it later.
+func (e *remoteEnv) CheckpointWithDigest(ctx context.Context, comment string) (orchestrator.Checkpoint, error) {
 	req := snapshotRequest{Comment: comment, IncludeRAM: false}
 	var resp snapshotResponse
 	if err := e.client.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/vm/%s/snapshot", e.id), req, &resp); err != nil {
-		return "", fmt.Errorf("snapshot: %w", err)
+		return orchestrator.Checkpoint{}, fmt.Errorf("snapshot: %w", err)
 	}
-	return resp.SnapshotID, nil
+	return orchestrator.Checkpoint{ID: resp.SnapshotID, Comment: comment, Digest: resp.Digest}, nil
 }
 
 func (e *remoteEnv) Restore(ctx context.Context, checkpointID string) error {
@@ -580,6 +588,13 @@ type snapshotRequest struct {
 
 type snapshotResponse struct {
 	SnapshotID string `json:"snapshot_id"`
+
+	// Digest is the hex sha256 the agent computed over the artifact rootfs it
+	// just wrote. It is absent from an agent build that predates artifact
+	// hashing, which decodes as "" and must stay a non-error: an operator
+	// running an older agent still gets working snapshots, just no integrity
+	// value to verify a later transfer against.
+	Digest string `json:"digest,omitempty"`
 }
 
 type restoreRequest struct {

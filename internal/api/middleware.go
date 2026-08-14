@@ -51,6 +51,25 @@ func PrincipalFromContext(ctx context.Context) (Principal, bool) {
 	return p, ok
 }
 
+// callerTenantID derives the tenant scope of the authenticated caller.
+//
+// It is deliberately not readable from the request: a tenant a caller can
+// name is a tenant a caller can probe, and the build cache is exactly the
+// kind of thing worth probing (an artifact carries whatever the build baked
+// into it, and its mere existence tells you someone built that recipe). So
+// the scope comes from how the request authenticated and nowhere else.
+//
+// An API key is its own scope. The master token, and insecure/dev mode where
+// no principal is set at all, share the default scope: there is one operator
+// behind the master token, so there is nothing to separate them from.
+func callerTenantID(ctx context.Context) string {
+	p, ok := PrincipalFromContext(ctx)
+	if !ok || p.Master {
+		return ""
+	}
+	return p.KeyID
+}
+
 // AuthFailureFunc is invoked once for every rejected authentication
 // attempt. It receives the per-request correlation ID (see
 // [RequestIDMiddleware]) so audit events and log lines can be tied
