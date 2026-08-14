@@ -133,6 +133,11 @@ class CreateRequest(_Model):
     manifest_inline: Optional[str] = None
     secrets: Optional[dict[str, str]] = None
     startup_script: Optional[str] = None
+    # guest files written before the startup script runs, keyed by absolute
+    # guest path with base64-encoded content. what a fusefile's `copy` block
+    # compiles to. paths under /fuse are rejected, the total decoded size is
+    # capped at 512 KiB, and permissions are not carried.
+    files: Optional[dict[str, str]] = None
     gateway_url: Optional[str] = None
     gateway_token: Optional[str] = None
     expose: Optional[list[ExposeSpec]] = None
