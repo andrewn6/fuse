@@ -24,9 +24,10 @@ version: 1
 # (services[].image below IS an oci ref -- those run in containers in the vm.)
 # image: cuda-12
 
-# files materialized in the guest before setup runs. for config and small code,
-# not weights or datasets: entries are carried inside the create request, so
-# their combined size is capped at 64KiB. fetch large artifacts from setup.
+# files materialized in the guest before the build steps run. for config and
+# small code, not weights or datasets: entries are carried inside the create
+# request, so their combined size is capped at 64KiB. fetch large artifacts
+# from a build step.
 # commented out because 'source' would have to point at a file that exists.
 # files:
 #   - path: config/app.yaml   # relative paths resolve against the workspace
@@ -45,19 +46,21 @@ resources:
   # idle_timeout: 15m # uncomment to destroy after this long with no exec or attach
   # region: us-east # uncomment to schedule only onto a host registered in this region
 
-# opt in to the setup layer cache. layers are host-local and firecracker-only;
+# opt in to the build layer cache. layers are host-local and firecracker-only;
 # a gpu environment gets no caching. see 'fuse build --plan'.
 cache:
   enabled: true
 
-# bound on setup + run, which the orchestrator runs synchronously during
+# bound on build + run, which the orchestrator runs synchronously during
 # create. the default is 30s and the ceiling is an operator setting (55s out of
-# the box), so this is headroom for a slow setup, not a budget for a long one:
+# the box), so this is headroom for a slow build, not a budget for a long one:
 # bake genuinely long work into an image with 'fuse build' instead.
 startup_timeout: 55s
 
-# convenience layer run once at boot, before run. compiles into startup_script.
-setup:
+# work that prepares the environment. runs once at boot, before run, and
+# compiles into startup_script ahead of it. 'setup:' is the old name for this
+# block: it still works, but setting both is an error.
+build:
   # bare string form: keyed on its bytes plus the step before it.
   - apt-get update -qq && apt-get install -y --no-install-recommends ripgrep
 
@@ -89,16 +92,16 @@ services:
     image: redis:7
     ports: [6379]
 
-# the main task entrypoint, compiled into startup_script (after setup). a plain
+# the main task entrypoint, compiled into startup_script (after build). a plain
 # string is interpreted by sh -lc; a list ["python", "app.py"] is an argv whose
 # elements are shell-quoted, so spaces, quotes, $, and globs in an argument
 # cannot alter the command. use the list form only when an argument would
 # otherwise be reinterpreted by the shell.
 run: ./start.sh
 
-# where setup and run execute. absolute path, created with mkdir -p. this is
-# the default, so the line can be deleted. services and 'fuse environment
-# exec'/'shell' do not inherit it.
+# where the build steps and run execute. absolute path, created with mkdir -p.
+# this is the default, so the line can be deleted. services and 'fuse
+# environment exec'/'shell' do not inherit it.
 workspace: /workspace
 
 # ports published to the outside world (ingress).

@@ -227,9 +227,10 @@ func newUpCmd() *cobra.Command {
 			successf("creating environment %s (task %s)", e.ID, e.TaskID)
 			if !noWait {
 				// the step events carry only an index, so the cli supplies the
-				// setup commands it just compiled as the labels.
-				labels := make([]string, 0, len(f.Setup))
-				for _, step := range f.Setup {
+				// build commands it just compiled as the labels.
+				buildSteps := f.BuildSteps()
+				labels := make([]string, 0, len(buildSteps))
+				for _, step := range buildSteps {
 					labels = append(labels, step.Run)
 				}
 				steps := newStepTracker(labels)
