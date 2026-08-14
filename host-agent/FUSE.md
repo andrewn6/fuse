@@ -27,8 +27,19 @@ the HTTP contract, and the networking model are in [`README.md`](README.md).
 ## Content-addressed artifacts (host-to-host)
 
 A snapshot taken by `POST /v1/vm/{id}/snapshot` is a rootfs file copy. The agent hashes it
-inline at creation and records the hex sha256 as `digest` in the snapshot record and in the
-artifact's `meta.json`.
+inline at creation and records the hex sha256 as `digest` in the artifact's `meta.json` **and
+on the create response**:
+
+```json
+{
+  "snapshot_id": "snap-1712345678-ab12cd",
+  "digest": "<hex sha256>"
+}
+```
+
+The response is the only place a caller ever sees the digest. It is computed while the
+artifact is written and nothing upstream recomputes it, so a response that omits it leaves the
+control plane with no integrity value to check a later peer transfer against.
 
 That digest is an **integrity check on those exact bytes only**. It is not a cross-build
 identity and can never be a cache key: two builds of the same recipe produce different rootfs

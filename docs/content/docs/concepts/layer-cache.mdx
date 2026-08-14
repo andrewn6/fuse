@@ -78,9 +78,21 @@ plane is a single process with a single replica: relaying blobs through it would
 make one copy loop the bandwidth ceiling for the whole fleet, inside the same
 process that has to answer health checks.
 
-Once a layer is local, every subsequent clone on that host is a
-`cp --reflink=auto` and effectively free, so the network cost is paid once per
-host per artifact.
+Once a layer is local, the network cost is paid once per host per artifact:
+every subsequent clone is a local `cp --reflink=auto`.
+
+:::warning[How cheap that copy is depends on your filesystem]
+`--reflink=auto` is a copy-on-write clone on xfs and btrfs, where it is
+effectively free and instant. On a filesystem without reflink support, including
+most ext4 setups, it **silently falls back to a full byte-for-byte copy**. A
+650MB artifact then costs 650MB of disk and a real read-write on every clone,
+and on every layer a build captures.
+
+Check with `cp --reflink=always <a> <b>` on the host's `SNAPSHOTS_DIR`. If it
+reports "operation not supported", budget disk accordingly and set
+`--artifact-max-per-tenant`, because the collector is the only thing keeping
+that growth bounded.
+:::
 
 The index is derived from snapshot records rather than stored separately. A
 snapshot row already says "host H holds artifact A", and a second copy of that

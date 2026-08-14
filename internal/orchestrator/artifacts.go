@@ -283,6 +283,12 @@ type seedPlacement struct {
 // holding the artifact is preferred because seeding from it is a local
 // `cp --reflink=auto` and no network transfer at all, which is a different
 // order of magnitude from copying tens of gigabytes between hosts.
+//
+// Local does not always mean free: --reflink=auto is a copy-on-write clone on
+// xfs and btrfs, but silently degrades to a full byte-for-byte copy on a
+// filesystem without reflink support, which most ext4 deployments are. Even
+// then a local copy beats a network transfer of the same bytes, so the
+// preference is still right; it is the size of the win that varies.
 func (s seedPlacement) hostPreference() map[string]bool {
 	if len(s.holders) == 0 {
 		return nil
