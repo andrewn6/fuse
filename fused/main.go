@@ -43,6 +43,14 @@ type config struct {
 	vmID          string
 	insecure      bool
 	showVersion   bool
+
+	// healthcheck is the environment-level probe's config, and healthState is
+	// where its verdict is written for the orchestrator to read back. Both
+	// default to the paths the orchestrator uploads to, because the
+	// firecracker host agent builds its own ExecStart line and would never
+	// pass a flag added after the wire was frozen. See health.go.
+	healthcheck string
+	healthState string
 }
 
 func parseFlags() config {
@@ -56,6 +64,8 @@ func parseFlags() config {
 	flag.StringVar(&c.gateway, "gateway", "", "gateway websocket URL (pass-through)")
 	flag.StringVar(&c.gatewayToken, "gateway-token", "", "gateway token (pass-through)")
 	flag.StringVar(&c.vmID, "vm-id", "", "VM identifier assigned by the orchestrator")
+	flag.StringVar(&c.healthcheck, "healthcheck", "/fuse/healthcheck.json", "path to the environment healthcheck config (absent means no probe)")
+	flag.StringVar(&c.healthState, "health-state", "/fuse/health.json", "path to write the healthcheck verdict for the orchestrator to read")
 	flag.BoolVar(&c.insecure, "insecure", false, "run without TLS/auth (dev only)")
 	flag.BoolVar(&c.showVersion, "version", false, "print version and exit")
 	flag.Parse()
@@ -96,9 +106,19 @@ func main() {
 		useTLS = false
 	}
 
+	// Load the environment-level probe. A missing config file is the ordinary
+	// "no healthcheck declared" case and yields a nil prober; a config that
+	// exists but is unusable is fatal, because it only reached the guest
+	// because somebody asked for a probe and silently running none would leave
+	// them believing the environment was being checked.
+	probe, err := loadProber(c.healthcheck, c.healthState)
+	if err != nil {
+		log.Fatalf("%v", err)
+	}
+
 	srv := &http.Server{
 		Addr:              c.listen,
-		Handler:           newHandler(c, authToken, manifestBytes, secretCount, useTLS),
+		Handler:           newHandler(c, authToken, manifestBytes, secretCount, useTLS, probe),
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
@@ -106,6 +126,10 @@ func main() {
 	// SIGTERM; quiesce and exit 0 so Drain records a clean stop.
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
+
+	// The probe loop shares the shutdown context, so SIGTERM stops it along
+	// with the server. A nil prober returns immediately.
+	go probe.run(ctx)
 
 	errCh := make(chan error, 1)
 	go func() {
@@ -137,10 +161,21 @@ func main() {
 // newHandler builds the agent's HTTP routes. /health is unauthenticated so the
 // host and load balancers can probe it; /v1/info is bearer-protected when a
 // token was provided. Extracted from main so it can be exercised in tests.
-func newHandler(c config, authToken string, manifestBytes []byte, secretCount int, useTLS bool) http.Handler {
+//
+// The environment-level probe's verdict rides along on /health as a nested
+// object, absent when no probe was declared. The status code deliberately
+// stays 200 whatever the verdict says: /health answers "is the agent up",
+// which is a different question from "is the workload healthy", and anything
+// already treating a non-200 here as a dead agent must keep working. Callers
+// that want the verdict read the field.
+func newHandler(c config, authToken string, manifestBytes []byte, secretCount int, useTLS bool, probe *prober) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "vm_id": c.vmID})
+		body := map[string]any{"status": "ok", "vm_id": c.vmID}
+		if probe != nil {
+			body["healthcheck"] = probe.snapshot()
+		}
+		writeJSON(w, http.StatusOK, body)
 	})
 	mux.HandleFunc("/v1/info", protect(authToken, func(w http.ResponseWriter, _ *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{
