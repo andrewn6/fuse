@@ -111,6 +111,18 @@ func FusedAgentSpec(manifest []byte, secretMap map[string]string, creds *secrets
 		files[fuseComposePath] = compose
 	}
 
+	// ship the environment-level probe into the guest. Files is the only
+	// channel that reaches it: the firecracker host agent ignores Command and
+	// reads structured paths off the frozen /start-surfd wire, so a
+	// --healthcheck flag added below would never actually be passed there.
+	// fused looks for the config at this fixed path instead. an environment
+	// with no probe writes no file, which is what tells fused not to probe.
+	if opts.Healthcheck != nil {
+		if probe, err := json.Marshal(opts.Healthcheck); err == nil {
+			files[GuestHealthcheckPath] = probe
+		}
+	}
+
 	spec := AgentSpec{
 		Files:        files,
 		Command:      buildFusedCommand(creds, opts),
@@ -136,6 +148,10 @@ func buildFusedCommand(creds *secrets.VMCredentials, opts BootOptions) string {
 	b.WriteString(" --listen 0.0.0.0:3000")
 	fmt.Fprintf(&b, " --manifest %s", fuseManifestPath)
 	fmt.Fprintf(&b, " --secrets %s", fuseSecretsPath)
+	// stated explicitly even though it is also fused's default, so a provider
+	// that does run Command carries the same paths the file upload used.
+	fmt.Fprintf(&b, " --healthcheck %s", GuestHealthcheckPath)
+	fmt.Fprintf(&b, " --health-state %s", GuestHealthStatePath)
 	if creds != nil {
 		fmt.Fprintf(&b, " --auth-token-file %s", fuseAuthTokenPath)
 		fmt.Fprintf(&b, " --tls-cert %s", fuseTLSCertPath)

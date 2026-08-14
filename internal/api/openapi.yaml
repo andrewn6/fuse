@@ -1492,6 +1492,98 @@ components:
           type: string
           description: Caller-chosen label, e.g. "http".
 
+    HealthcheckHTTP:
+      type: object
+      required: [port]
+      properties:
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          description: |
+            Guest port to dial. The probe runs inside the guest, so this
+            port needs no matching `expose` entry.
+        path:
+          type: string
+          description: Request path, which must start with a slash. Defaults to "/".
+
+    HealthcheckSpec:
+      type: object
+      description: |
+        The environment-level readiness probe (the Fusefile's
+        `healthcheck:` block). Exactly one of `http` and `exec` must be
+        set.
+
+        This is not the per-service compose healthcheck that can appear
+        inside `manifest_inline`: that one governs a single container, is
+        evaluated by the guest's compose, and never reaches the control
+        plane. This one is evaluated by the guest agent over the whole
+        environment and its verdict comes back on `Environment.health`.
+
+        Every duration is in seconds. Zero means "omitted, use the guest
+        agent's default"; the orchestrator substitutes no defaults of its
+        own, because the probe executes in the guest.
+      properties:
+        http:
+          $ref: "#/components/schemas/HealthcheckHTTP"
+        exec:
+          type: array
+          items:
+            type: string
+          description: |
+            An argv run inside the guest. Exit status 0 passes. An argv
+            rather than a shell string, so no argument can be reinterpreted
+            by a shell.
+        interval_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+          description: Seconds between attempts. 0 for the guest agent default (10s).
+        timeout_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Bound on one attempt, in seconds. 0 for the guest agent
+            default (2s). Attempts run one at a time, so a value above
+            `interval_seconds` is rejected with 400 rather than silently
+            stretching the interval.
+        retries:
+          type: integer
+          minimum: 0
+          description: |
+            Consecutive failures that flip the verdict to failing. 0 for
+            the guest agent default (3).
+        start_period_seconds:
+          type: integer
+          format: int64
+          minimum: 0
+          description: |
+            Grace window from the first attempt during which failures are
+            not counted. It ends for good once the probe passes once.
+
+    Health:
+      type: object
+      required: [state]
+      properties:
+        state:
+          type: string
+          enum: [starting, passing, failing]
+          description: |
+            The probe's last verdict. Deliberately separate from
+            `Environment.state`: an unhealthy environment is still a
+            running one, and nothing tears it down for a failing probe.
+        since:
+          type: string
+          format: date-time
+          description: When the probe entered this state.
+        failures:
+          type: integer
+          description: Consecutive failed attempts. Zero while passing.
+        message:
+          type: string
+          description: The last attempt's failure detail. Empty while passing.
+
     Endpoint:
       type: object
       required: [url, port]
@@ -1555,6 +1647,15 @@ components:
           description: |
             Guest ports to publish as reachable endpoints; each entry
             surfaces on the Environment's `endpoints`.
+        healthcheck:
+          allOf:
+            - $ref: "#/components/schemas/HealthcheckSpec"
+          description: |
+            Environment-level readiness probe. Omit it for an environment
+            with no probe, in which case `Environment.health` is never
+            populated. It is not evaluated inside this request: create
+            returns as soon as the VM is up, and the verdict arrives on
+            later reads of the environment.
 
     Environment:
       type: object
@@ -1595,6 +1696,15 @@ components:
           description: |
             Published network endpoints for ports requested via the
             create request's `expose` list. Omitted when none.
+        health:
+          allOf:
+            - $ref: "#/components/schemas/Health"
+          description: |
+            Last verdict of the environment-level healthcheck. Omitted
+            when the environment declared no healthcheck, and omitted
+            until the first verdict has been read back from the guest.
+            The orchestrator refreshes it on the reconcile tick (30s by
+            default), so it lags the guest by up to one tick.
 
     EnvironmentList:
       type: object

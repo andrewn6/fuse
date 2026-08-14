@@ -20,7 +20,44 @@ func toAPIEnvironment(v orchestrator.VMInfo) Environment {
 		UpdatedAt: v.UpdatedAt,
 		Error:     v.Error,
 		Endpoints: toAPIEndpoints(v.Endpoints),
+		Health:    toAPIHealth(v.Health),
 	}
+}
+
+// toAPIHealth converts the orchestrator's health verdict into the wire shape.
+// Nil in, nil out, so an environment with no probe (or none read back yet)
+// omits the field entirely rather than reporting an empty state.
+func toAPIHealth(h *orchestrator.HealthStatus) *Health {
+	if h == nil {
+		return nil
+	}
+	return &Health{
+		State:    string(h.State),
+		Since:    h.Since,
+		Failures: h.Failures,
+		Message:  h.Message,
+	}
+}
+
+// toOrchestratorHealthcheck converts a wire healthcheck into the orchestrator
+// type. Nil in, nil out: a create request with no healthcheck must produce a
+// nil spec, since that is what tells the boot path to ship no probe file and
+// the reconcile loop not to poll the guest.
+func toOrchestratorHealthcheck(hc *HealthcheckSpec) *orchestrator.HealthcheckSpec {
+	if hc == nil {
+		return nil
+	}
+	out := &orchestrator.HealthcheckSpec{
+		Exec:               append([]string(nil), hc.Exec...),
+		IntervalSeconds:    hc.IntervalSeconds,
+		TimeoutSeconds:     hc.TimeoutSeconds,
+		Retries:            hc.Retries,
+		StartPeriodSeconds: hc.StartPeriodSeconds,
+	}
+	if hc.HTTP != nil {
+		out.HTTP = &orchestrator.HealthcheckHTTP{Port: hc.HTTP.Port, Path: hc.HTTP.Path}
+	}
+	return out
 }
 
 // toAPIResourceSpec converts an orchestrator.Spec into the wire shape.
