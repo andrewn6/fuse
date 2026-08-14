@@ -586,6 +586,45 @@ func compileBuildScript(f *Fusefile) string {
 	return b.String()
 }
 
+// SetupScriptRange renders setup steps [from, to) as one runnable script.
+//
+// It exists because `fuse build` runs the cacheable part of the setup phase one
+// step at a time, snapshotting between them, rather than as the single blob
+// compileBuildScript emits. Every one of those execs is a fresh shell, so every
+// one of them needs the prelude again. Without it a step would run without
+// strict mode and, far worse, in whatever directory the shell happened to start
+// in rather than the workspace, which fails quietly rather than loudly.
+//
+// includeFiles writes the file block ahead of the steps, and belongs only on
+// the first exec of a cold build. Files are folded into BaseKey, so any layer
+// artifact the build seeded from already contains them.
+//
+// SetupScriptRange(f, 0, len(f.Setup), true) is compileBuildScript(f) byte for
+// byte. That equivalence is what lets the stepped path and the single-blob path
+// coexist without drifting, and there is a test pinning it.
+func SetupScriptRange(f *Fusefile, from, to int, includeFiles bool) string {
+	scripts := setupScripts(f)
+	if from < 0 {
+		from = 0
+	}
+	if to > len(scripts) {
+		to = len(scripts)
+	}
+	if from >= to && !includeFiles {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString(scriptPrelude(f))
+	if includeFiles {
+		b.WriteString(renderFiles(f.Files))
+	}
+	for _, script := range scripts[from:to] {
+		b.WriteString(script)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 // compileRunScript renders the file block and the run command, without the
 // setup steps.
 //
@@ -619,6 +658,45 @@ func compileStartupScript(f *Fusefile) string {
 	b.WriteString(scriptPrelude(f))
 	b.WriteString(renderFiles(f.Files))
 	for _, script := range setupScripts(f) {
+		b.WriteString(script)
+		b.WriteString("\n")
+	}
+	if f.Run != "" {
+		b.WriteString(f.Run)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
+// StartupScriptFrom renders the boot script for an environment seeded from a
+// layer artifact that already covers setup steps [0, from).
+//
+// It is compileStartupScript with a head start: the steps the artifact baked in
+// are dropped, and everything after them still runs, followed by the run
+// command. from == 0 makes it compileStartupScript exactly, which is the
+// no-cache-hit case and is pinned by a test.
+//
+// Files are rewritten even though the artifact already carries the copy made
+// when it was baked, for the same reason compileRunScript rewrites them: they
+// are authoring inputs that may have been edited since the bake, and a few KiB
+// is cheap. Setup is the expensive work a cache hit exists to skip; files are
+// not.
+func StartupScriptFrom(f *Fusefile, from int) string {
+	if from <= 0 {
+		return compileStartupScript(f)
+	}
+	scripts := setupScripts(f)
+	if from > len(scripts) {
+		from = len(scripts)
+	}
+	if from == len(scripts) && f.Run == "" && len(f.Files) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(scriptPrelude(f))
+	b.WriteString(renderFiles(f.Files))
+	for _, script := range scripts[from:] {
 		b.WriteString(script)
 		b.WriteString("\n")
 	}
