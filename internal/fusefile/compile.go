@@ -91,6 +91,13 @@ type Compiled struct {
 	// describes services, and this probe is about the environment.
 	Healthcheck *HealthcheckSpec
 
+	// Copy is the compiled `copy` block: one entry per authored entry, with
+	// its guest path resolved against the workspace. The sources are named,
+	// never read. Expanding a directory into files is the CLI's job
+	// (cli/copy.go), so that this compiler stays a pure function of the
+	// Fusefile and `fuse compile` keeps working with no filesystem behind it.
+	Copy []CopySpec
+
 	// BuildScript is the setup phase alone, for `fuse build` to run through
 	// the exec path (600s) rather than the startup-script path (30s).
 	// StartupScript still carries setup+run, so `fuse up` is unchanged.
@@ -382,6 +389,9 @@ func Compile(f *Fusefile) (*Compiled, error) {
 
 	errs = append(errs, validateFiles(f.Files)...)
 
+	copySpecs, copyErrs := compileCopy(f)
+	errs = append(errs, copyErrs...)
+
 	if f.Resources.GPUProfile != "" {
 		if !ValidGPUProfile(f.Resources.GPUProfile) {
 			errs = append(errs, fmt.Errorf(
@@ -447,6 +457,7 @@ func Compile(f *Fusefile) (*Compiled, error) {
 		BuildScript:           compileBuildScript(f),
 		RunScript:             compileRunScript(f),
 		RequiredSecrets:       requiredSecrets,
+		Copy:                  copySpecs,
 		Expose:                compileExpose(f),
 		Healthcheck:           healthcheck,
 		StartupTimeoutSeconds: startupTimeoutSeconds,
