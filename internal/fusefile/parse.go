@@ -173,6 +173,25 @@ func validate(f *Fusefile) error {
 		}
 	}
 
+	// Only the shape of a copy entry is checked here. Where `to` actually
+	// lands needs the workspace, so resolution (and the reserved-path and
+	// duplicate checks that follow from it) happens in compileCopy; what
+	// `from` points at needs the filesystem, so it is the walking client's
+	// business (cli/copy.go) and never this package's.
+	for i, entry := range f.Copy {
+		if strings.TrimSpace(entry.From) == "" {
+			errs = append(errs, fmt.Errorf("copy[%d].from: is required", i))
+		}
+		switch {
+		case strings.TrimSpace(entry.To) == "":
+			errs = append(errs, fmt.Errorf("copy[%d].to: is required", i))
+		case strings.ContainsAny(entry.To, "\x00\n"):
+			errs = append(errs, fmt.Errorf("copy[%d].to: must not contain newlines or NUL bytes", i))
+		case containsDotDot(entry.To):
+			errs = append(errs, fmt.Errorf("copy[%d].to: must not contain %q segments, got %q", i, "..", entry.To))
+		}
+	}
+
 	// the workspace is emitted into the generated script as `mkdir -p <ws>`
 	// followed by `cd <ws>`. shellQuote keeps it from altering the script, but
 	// a relative or traversing path still lands somewhere the author did not

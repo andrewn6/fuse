@@ -18,6 +18,7 @@ type Fusefile struct {
 	Placement Placement          `yaml:"placement,omitempty"`
 	Cache     Cache              `yaml:"cache,omitempty"`
 	Files     []File             `yaml:"files,omitempty"`
+	Copy      []CopyEntry        `yaml:"copy,omitempty"`
 	Setup     []Step             `yaml:"setup,omitempty"`
 	Services  map[string]Service `yaml:"services,omitempty"`
 	Run       Command            `yaml:"run,omitempty"`
@@ -124,6 +125,40 @@ type File struct {
 	// Mode is an octal permission string, e.g. "0755". Empty leaves the
 	// mode to the guest's umask.
 	Mode string `yaml:"mode,omitempty"`
+}
+
+// CopyEntry ships one local file or directory into the guest before setup and
+// run execute.
+//
+// It is the directory-capable sibling of File, and deliberately not sugar over
+// it: the two use different transports because they have to. A File is
+// base64-encoded into the generated startup script, which reaches the guest as
+// a single shell argument and is therefore capped at MaxFilesBytes by Linux's
+// MAX_ARG_STRLEN. A source tree does not fit in 64 KiB. A copy entry instead
+// rides the create request's own files map, which the orchestrator uploads into
+// the guest one file at a time (Environment.Upload) before it runs the startup
+// script. Same "lands before setup" ordering, no argv ceiling, and MaxCopyBytes
+// rather than MaxFilesBytes as the bound.
+//
+// What copy gives up in exchange is the mode bit: the upload wire carries a
+// path and a body and nothing else, so an executable copied in arrives without
+// its executable bit and the author has to `chmod` it in `setup`. File keeps
+// its `mode` because the script it compiles into can chmod on the author's
+// behalf.
+type CopyEntry struct {
+	// From is a file or directory on the authoring machine, resolved
+	// relative to the Fusefile's directory rather than the process working
+	// directory, so `fuse up ./repro/Fusefile` copies the same sources it
+	// would from inside that directory. A directory is expanded
+	// client-side into one entry per regular file; a symlink is an error
+	// rather than something silently followed out of the tree.
+	From string `yaml:"from"`
+
+	// To is where it lands in the guest. An absolute path is taken as
+	// written; a relative one resolves against the workspace, the same
+	// directory setup and run already start in. For a directory source this
+	// is the directory the tree lands under.
+	To string `yaml:"to"`
 }
 
 // Placement constrains which host in a self-hosted fleet may run the
