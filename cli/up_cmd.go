@@ -83,6 +83,16 @@ func newUpCmd() *cobra.Command {
 				return fmt.Errorf("%s: %w", path, err)
 			}
 
+			// `copy` entries name sources relative to the Fusefile too, and
+			// the walk happens here rather than at compile time because it is
+			// the only part of the pipeline that reads the filesystem. It runs
+			// before the --dry-run branch so a missing source or an oversized
+			// tree fails the dry run as well, which is the point of one.
+			copyFiles, err := collectCopyFiles(c.Copy, filepath.Dir(path), nil)
+			if err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+
 			var lp *layerPlan
 			if fromBuild == "" {
 				// derive layer keys when caching is on (so a bad `inputs` entry
@@ -145,7 +155,11 @@ func newUpCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return writeCompiled(cmd.OutOrStdout(), format, c, newCompiledRequest(taskID, fromBuild, c))
+				req := newCompiledRequest(taskID, fromBuild, c)
+				// the walk already happened, so a dry run can show the copied
+				// files exactly as the create would carry them.
+				req.Files = encodeCopyFiles(copyFiles)
+				return writeCompiled(cmd.OutOrStdout(), format, c, req)
 			}
 
 			manifestInline := base64.StdEncoding.EncodeToString(c.ManifestJSON)
@@ -197,6 +211,7 @@ func newUpCmd() *cobra.Command {
 					Labels:             c.Spec.Labels,
 				},
 				ManifestInline:              manifestInline,
+				Files:                       encodeCopyFiles(copyFiles),
 				Secrets:                     secretMap,
 				StartupScript:               startupScript,
 				StartupScriptTimeoutSeconds: c.StartupTimeoutSeconds,
