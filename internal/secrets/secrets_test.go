@@ -54,6 +54,40 @@ func TestExtractRequiredSecrets_findsSecretRefs(t *testing.T) {
 	}
 }
 
+// a ref in the machine-wide env block is as required as a service's: the
+// orchestrator resolves it into /fuse/env at boot, so a value missing here
+// would silently become an empty variable in the startup script.
+func TestExtractRequiredSecrets_findsMachineEnvRefs(t *testing.T) {
+	manifest := []byte(`{
+		"version": "1",
+		"machine": {
+			"workspace": "/workspace",
+			"env": {
+				"DATABASE_URL": {"secret": "db_url"},
+				"SHARED": {"secret": "db_password"},
+				"NODE_ENV": {"value": "production"}
+			}
+		},
+		"services": {
+			"api": {"env": {"DB_PASSWORD": {"secret": "db_password"}}}
+		}
+	}`)
+
+	got, err := secpkg.ExtractRequiredSecrets(manifest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("expected 2 unique secrets, got %d: %v", len(got), got)
+	}
+	if !got["db_url"] {
+		t.Error("missing db_url from the machine env block")
+	}
+	if !got["db_password"] {
+		t.Error("missing db_password")
+	}
+}
+
 func TestExtractRequiredSecrets_noEnvField(t *testing.T) {
 	manifest := []byte(`{
 		"version": "1",

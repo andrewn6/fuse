@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"sort"
 	"strings"
 
 	"github.com/folsomintel/fuse/internal/secrets"
@@ -31,6 +33,7 @@ const (
 	fuseManifestPath  = "/fuse/manifest.json"
 	fuseSecretsPath   = "/fuse/secrets.json"
 	fuseComposePath   = "/fuse/compose.yaml"
+	fuseEnvPath       = "/fuse/env"
 	fuseTLSCertPath   = "/fuse/tls/cert.pem"
 	fuseTLSKeyPath    = "/fuse/tls/key.pem"
 	fuseAuthTokenPath = "/fuse/auth-token"
@@ -136,6 +139,14 @@ func FusedAgentSpec(manifest []byte, secretMap map[string]string, creds *secrets
 		if probe, err := json.Marshal(opts.Healthcheck); err == nil {
 			files[GuestHealthcheckPath] = probe
 		}
+	}
+
+	// the machine-wide env block, resolved here for the same reason compose is:
+	// upload time is where the secret map already lives. the generated startup
+	// script sources this file by path rather than carrying the values, so a
+	// resolved secret never enters the script's text.
+	if env, ok := envFileFromManifest(manifest, secretsMap); ok {
+		files[fuseEnvPath] = env
 	}
 
 	spec := AgentSpec{
@@ -272,6 +283,67 @@ func composeFromManifest(manifestJSON []byte, secretMap map[string]string) ([]by
 		return nil, false
 	}
 	return out, true
+}
+
+// envKeyPattern is the shell-identifier form a machine.env key has to take.
+// The compiler holds Fusefile authors to the same rule (fusefile.ValidEnvKey),
+// but the manifest is caller-supplied on the raw create path, and a key is
+// written out unquoted, so the rule is enforced again on this side.
+var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// envFileFromManifest renders the manifest's machine.env block to a file of
+// shell assignments for the generated startup script to source. It returns
+// (nil, false) when the manifest declares no usable env, so callers skip
+// writing the file entirely.
+//
+// This file is the reason the env block exists as a manifest field rather than
+// as text the compiler emits. The startup script runs as `sh -lc <script>` and
+// the host agent hands the whole thing to ssh as a single argv element, so
+// anything interpolated into it is readable in the host's process table for the
+// length of the boot. Resolving here keeps the values in /fuse, which the guest
+// mounts on tmpfs, and leaves only the path in the script.
+//
+// Keys are sorted and values are single-quoted, so identical inputs produce
+// byte-identical output and no value can end the line it is on.
+func envFileFromManifest(manifestJSON []byte, secretMap map[string]string) ([]byte, bool) {
+	var m struct {
+		Machine struct {
+			Env map[string]struct {
+				Value  string `json:"value"`
+				Secret string `json:"secret"`
+			} `json:"env"`
+		} `json:"machine"`
+	}
+	if err := json.Unmarshal(manifestJSON, &m); err != nil || len(m.Machine.Env) == 0 {
+		return nil, false
+	}
+
+	keys := make([]string, 0, len(m.Machine.Env))
+	for key := range m.Machine.Env {
+		// a malformed key is dropped rather than written out: the key side of
+		// an assignment cannot be quoted, so it would be a way to put a second
+		// statement into a file the guest sources.
+		if envKeyPattern.MatchString(key) {
+			keys = append(keys, key)
+		}
+	}
+	if len(keys) == 0 {
+		return nil, false
+	}
+	sort.Strings(keys)
+
+	var b bytes.Buffer
+	for _, key := range keys {
+		ev := m.Machine.Env[key]
+		value := ev.Value
+		if ev.Secret != "" {
+			// required secrets are validated upstream before boot, so a
+			// present value is the expected case.
+			value = secretMap[ev.Secret]
+		}
+		fmt.Fprintf(&b, "%s=%s\n", key, shellEscape(value))
+	}
+	return b.Bytes(), true
 }
 
 // shellEscape produces a single-quoted shell literal safe to embed in a

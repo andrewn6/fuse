@@ -25,12 +25,21 @@ var ErrSecretsValidation = errors.New("secrets validation failed")
 // else — no dependency on fused's manifest package.
 //
 // COUPLING NOTE: the manifest-shaped secret cross-check below
-// (services -> env -> secret) embeds fused's manifest contract. It is a
-// fused-profile validation, not a hard requirement of the generic create
-// path; a non-fused agent profile with a different manifest schema would
-// supply its own validation. Flagged per the decoupling scan; no behavioral
-// change.
+// (machine -> env -> secret, services -> env -> secret) embeds fused's
+// manifest contract. It is a fused-profile validation, not a hard requirement
+// of the generic create path; a non-fused agent profile with a different
+// manifest schema would supply its own validation. Flagged per the decoupling
+// scan; no behavioral change.
 type manifestSecretExtractor struct {
+	// Machine.Env is the machine-wide env block, applied to the startup
+	// script. A ref there is as required as a service's: the orchestrator
+	// resolves it into /fuse/env at boot, so a missing value would silently
+	// become an empty variable.
+	Machine struct {
+		Env map[string]struct {
+			Secret *string `json:"secret"`
+		} `json:"env"`
+	} `json:"machine"`
 	Services map[string]struct {
 		Env map[string]struct {
 			Secret *string `json:"secret"`
@@ -38,8 +47,8 @@ type manifestSecretExtractor struct {
 	} `json:"services"`
 }
 
-// ExtractRequiredSecrets parses a compiled manifest JSON and returns
-// the set of secret names referenced by services via env vars.
+// ExtractRequiredSecrets parses a compiled manifest JSON and returns the set
+// of secret names it references via env vars, machine-wide and per service.
 func ExtractRequiredSecrets(manifestJSON []byte) (map[string]bool, error) {
 	var m manifestSecretExtractor
 	if err := json.Unmarshal(manifestJSON, &m); err != nil {
@@ -47,6 +56,11 @@ func ExtractRequiredSecrets(manifestJSON []byte) (map[string]bool, error) {
 	}
 
 	required := make(map[string]bool)
+	for _, v := range m.Machine.Env {
+		if v.Secret != nil && *v.Secret != "" {
+			required[*v.Secret] = true
+		}
+	}
 	for _, svc := range m.Services {
 		for _, v := range svc.Env {
 			if v.Secret != nil && *v.Secret != "" {
