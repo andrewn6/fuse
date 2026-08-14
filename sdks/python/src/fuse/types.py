@@ -156,6 +156,11 @@ class SnapshotRequest(_Model):
     metadata: Optional[dict[str, str]] = None
     export_ref: Optional[str] = None
     export_status: Optional[str] = None
+    # labels this snapshot as the artifact of one cacheable setup step, which is
+    # what makes it findable by recipe rather than by its random id. none for an
+    # ordinary snapshot. the scope it is filed under comes from how the caller
+    # authenticated and is not settable here.
+    layer_key: Optional[str] = None
 
 
 class SnapshotExport(_Model):

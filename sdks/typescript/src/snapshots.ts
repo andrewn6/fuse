@@ -1,5 +1,5 @@
 import type { CallOptions, Transport } from "./transport.js";
-import type { Snapshot, SnapshotRequest } from "./types.js";
+import type { ResolveSnapshotResponse, Snapshot, SnapshotRequest } from "./types.js";
 import { requireArg } from "./validate.js";
 
 /** The server's max page size; list() requests this internally so it walks
@@ -99,6 +99,36 @@ export class SnapshotsService {
       signal: opts.signal,
     });
     return { snapshots: out.snapshots ?? [], nextCursor: out.next_cursor };
+  }
+
+  /**
+   * Resolve one layer cache key and architecture to the newest ready build
+   * artifact, or null when there is none.
+   *
+   * A miss is not an error and never rejects: a cold cache is the normal state
+   * of a first build, and modelling it as a failure would make every caller
+   * wrap this in a try/catch to discover nothing was wrong.
+   *
+   * arch is required rather than defaulted. An ext4 rootfs is not portable
+   * across architectures, so resolving without one could hand back an artifact
+   * the caller cannot boot, at the exact moment it believes it got a hit.
+   *
+   * The scope searched comes from how the client authenticated; there is
+   * deliberately no tenant parameter.
+   */
+  async resolve(
+    layerKey: string,
+    arch: string,
+    opts: CallOptions = {},
+  ): Promise<Snapshot | null> {
+    requireArg(layerKey, "layer key");
+    requireArg(arch, "arch");
+    const out = await this.t.json<ResolveSnapshotResponse>(
+      "GET",
+      "/v1/snapshots/resolve",
+      { query: { layer_key: layerKey, arch }, signal: opts.signal },
+    );
+    return out.found && out.snapshot ? out.snapshot : null;
   }
 
   /** Fetch a single snapshot by id. */

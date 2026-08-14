@@ -154,6 +154,18 @@ export interface SnapshotRequest {
   metadata?: Record<string, string>;
   export_ref?: string;
   export_status?: string;
+  /** Labels this snapshot as the artifact of one cacheable setup step, which is
+   * what makes it findable by recipe rather than by its random id. Empty for an
+   * ordinary snapshot. The scope it is filed under comes from how the caller
+   * authenticated and is not settable here. */
+  layer_key?: string;
+}
+
+/** ResolveSnapshotResponse is the wire envelope for a layer lookup. Internal:
+ * resolve() returns Snapshot | null so the found flag never reaches callers. */
+export interface ResolveSnapshotResponse {
+  found: boolean;
+  snapshot?: Snapshot;
 }
 
 /** SnapshotExport is an optional exported snapshot artifact. */

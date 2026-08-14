@@ -181,6 +181,23 @@ type SnapshotRequest struct {
 	Metadata         map[string]string `json:"metadata,omitempty"`
 	ExportRef        string            `json:"export_ref,omitempty"`
 	ExportStatus     string            `json:"export_status,omitempty"`
+
+	// LayerKey labels this snapshot as the artifact of one cacheable setup
+	// step, which is what makes it findable by recipe rather than by its
+	// random id. Empty for an ordinary snapshot.
+	//
+	// The scope it is filed under comes from how the caller authenticated and
+	// is not settable here.
+	LayerKey string `json:"layer_key,omitempty"`
+}
+
+// resolveSnapshotResponse is the wire envelope for a layer lookup. It stays
+// unexported so the found flag never reaches the public surface: callers get
+// the ok idiom instead, which cannot be confused with a decode that happened to
+// produce a zero-value snapshot.
+type resolveSnapshotResponse struct {
+	Found    bool      `json:"found"`
+	Snapshot *Snapshot `json:"snapshot,omitempty"`
 }
 
 // SnapshotExport is an optional exported snapshot artifact.

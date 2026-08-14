@@ -24,6 +24,35 @@ class SnapshotsService:
         resp = self._t.request("POST", path, body=request or SnapshotRequest())
         return Snapshot.model_validate(resp.json())
 
+    def resolve(self, layer_key: str, arch: str) -> Optional[Snapshot]:
+        # resolves one layer cache key and architecture to the newest ready
+        # build artifact, or None when there is none.
+        #
+        # a miss is not an error and never raises: a cold cache is the normal
+        # state of a first build, and modelling it as a failure would make every
+        # caller wrap this in a try/except to discover nothing was wrong.
+        #
+        # arch is required rather than defaulted. an ext4 rootfs is not portable
+        # across architectures, so resolving without one could hand back an
+        # artifact the caller cannot boot, at the exact moment it believes it
+        # got a hit.
+        #
+        # the scope searched comes from how the client authenticated; there is
+        # deliberately no tenant parameter.
+        if not layer_key:
+            raise ValueError("layer key is required")
+        if not arch:
+            raise ValueError("arch is required")
+        resp = self._t.request(
+            "GET",
+            "/v1/snapshots/resolve",
+            params={"layer_key": layer_key, "arch": arch},
+        )
+        body = resp.json()
+        if not body.get("found") or not body.get("snapshot"):
+            return None
+        return Snapshot.model_validate(body["snapshot"])
+
     def list(
         self,
         *,
