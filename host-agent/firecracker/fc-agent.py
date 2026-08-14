@@ -893,7 +893,7 @@ def verify_artifact_grant(grant: str, digest: str) -> bool:
     return hmac.compare_digest(artifact_grant_mac(g_digest, expiry, nonce), mac)
 
 
-def artifact_rootfs(digest: str) -> Path:
+def artifact_rootfs(digest: str) -> tuple[Path, str]:
     """Resolve a content digest to a local artifact rootfs.
 
     The digest arrives over the wire from another host, so it is never used to
@@ -902,6 +902,12 @@ def artifact_rootfs(digest: str) -> Path:
     SNAPSHOTS_DIR, exactly as snapshot_rootfs does, because a store entry can
     itself be a symlink pointing somewhere else. This file has had
     path-traversal findings before; both halves of that guard stay.
+
+    Returns the stored digest alongside the path, rather than leaving the
+    caller to echo the one it was handed. The two are equal by construction
+    (that equality is how the entry was selected), but only the stored one came
+    off local disk instead of off the request, so it is the safe thing to put
+    in a response header.
     """
     if not _DIGEST_RE.fullmatch(digest):
         raise HTTPError(404, "artifact not found")
@@ -922,7 +928,7 @@ def artifact_rootfs(digest: str) -> Path:
         if not resolved.startswith(store_root + os.sep):
             continue
         if os.path.exists(resolved):
-            return Path(resolved)
+            return Path(resolved), str(rec["digest"])
     raise HTTPError(404, "artifact not found")
 
 
@@ -971,7 +977,12 @@ def pull_artifact(digest: str, peer_url: str, grant: str, snapshot_id: str = "")
         raise HTTPError(400, f"invalid snapshot id: {snapshot_id!r}")
     dest_dir = _artifact_dest(snapshot_id)
 
-    tmp = ARTIFACT_TMP_DIR / f"pull-{digest[:16]}-{uuid.uuid4().hex}.tmp"
+    # The name is built from a fresh uuid alone. A digest prefix would have been
+    # a nicer thing to read in a directory listing, but it puts request-derived
+    # bytes into a filesystem path, and "the regex above makes that safe" is a
+    # property that survives exactly until someone moves the validation. The
+    # uuid is already unique, so the prefix bought nothing that mattered.
+    tmp = ARTIFACT_TMP_DIR / f"pull-{uuid.uuid4().hex}.tmp"
     deadline = time.monotonic() + ARTIFACT_TRANSFER_TIMEOUT
     running = hashlib.sha256()
     total = 0
@@ -1613,12 +1624,17 @@ class Handler(BaseHTTPRequestHandler):
         if not verify_artifact_grant(self.headers.get(ARTIFACT_GRANT_HEADER, ""), digest):
             # One undifferentiated answer for every verification failure.
             return self._text(403, "forbidden")
-        path = artifact_rootfs(digest)
+        path, stored_digest = artifact_rootfs(digest)
         size = path.stat().st_size
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
         self.send_header("Content-Length", str(size))
-        self.send_header("X-Fuse-Artifact-Digest", digest)
+        # The stored digest, not the requested one. Both are the same string by
+        # the time we are here, but echoing request data straight into a header
+        # is a response-splitting shape whether or not the validation upstream
+        # happens to make it unreachable. Emitting the value that came off disk
+        # means there is no path from the request line into the headers at all.
+        self.send_header("X-Fuse-Artifact-Digest", stored_digest)
         self.end_headers()
         # Bounded chunks with an exact Content-Length: an artifact is hundreds
         # of MB to tens of GB and must never be materialized in memory. The
