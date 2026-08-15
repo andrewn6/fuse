@@ -9,9 +9,13 @@
 coverage/
 *.out
 
-# Stray binaries from `go build ./cmd/...` at the repo root
+# Stray binaries from `go build ./cmd/...` at the repo root. the source
+# packages share these names, so re-include the directories: without this
+# every new file under fused/ or orchestrator/ is silently unstageable.
 /fused
 /orchestrator
+!/fused/
+!/orchestrator/
 
 # OS / editor
 .DS_Store
