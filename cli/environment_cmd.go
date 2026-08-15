@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/huh"
 	"github.com/spf13/cobra"
@@ -128,13 +130,28 @@ func newEnvGetCmd() *cobra.Command {
 			if app.isJSON() {
 				return printJSON(e)
 			}
-			renderEnvDetail(e)
+			renderEnvDetail(e, fetchDisplay(cmd, cl, args[0]))
 			return nil
 		},
 	}
 }
 
-func renderEnvDetail(e *fuse.EnvironmentInfo) {
+// fetchDisplay asks the environment for its display report, best effort and
+// tightly bounded: the detail view must not hang on a wedged guest, and an
+// environment with no desktop simply renders no row. Only `environment get`
+// pays this round trip; create/drain/fork render their detail with a nil
+// display, since a desktop is rarely up at those moments anyway.
+func fetchDisplay(cmd *cobra.Command, cl *fuse.Client, vmID string) *fuse.ComputerDisplay {
+	ctx, cancel := context.WithTimeout(cmd.Context(), 3*time.Second)
+	defer cancel()
+	d, err := cl.Environments.ComputerDisplay(ctx, vmID)
+	if err != nil {
+		return nil
+	}
+	return d
+}
+
+func renderEnvDetail(e *fuse.EnvironmentInfo, display *fuse.ComputerDisplay) {
 	pairs := [][2]string{
 		{"id", e.ID},
 		{"state", stateStyle(e.State)},
@@ -166,6 +183,20 @@ func renderEnvDetail(e *fuse.EnvironmentInfo) {
 			health += "  " + styleBad.Render(e.Health.Message)
 		}
 		pairs = append(pairs, [2]string{"health", health})
+	}
+	// the desktop is live state read from the guest, not a field of the
+	// environment record. a row appears when the display is up, or when it
+	// exists but is down (e.g. mid-restart after a geometry change); an image
+	// with no desktop stack at all renders nothing, so non-desktop
+	// environments keep their exact shape.
+	if display != nil {
+		switch {
+		case display.Up:
+			pairs = append(pairs, [2]string{"desktop",
+				fmt.Sprintf("%dx%d  (%s)", display.Width, display.Height, dash(display.Display))})
+		case strings.Contains(display.Error, "is not up"):
+			pairs = append(pairs, [2]string{"desktop", styleWarn.Render("down") + "  " + display.Error})
+		}
 	}
 	pairs = append(pairs, endpointPairs(e.Endpoints)...)
 	if e.Error != "" {
@@ -297,7 +328,7 @@ func newEnvCreateCmd() *cobra.Command {
 			if app.isJSON() {
 				return printJSON(e)
 			}
-			renderEnvDetail(e)
+			renderEnvDetail(e, nil)
 			infof("watch progress with: fuse environment watch %s", e.ID)
 			return nil
 		},
@@ -376,7 +407,7 @@ func newEnvDrainCmd() *cobra.Command {
 			if app.isJSON() {
 				return printJSON(e)
 			}
-			renderEnvDetail(e)
+			renderEnvDetail(e, nil)
 			return nil
 		},
 	}
@@ -407,7 +438,7 @@ func newEnvForkCmd() *cobra.Command {
 			if app.isJSON() {
 				return printJSON(e)
 			}
-			renderEnvDetail(e)
+			renderEnvDetail(e, nil)
 			return nil
 		},
 	}

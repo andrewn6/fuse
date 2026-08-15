@@ -1,0 +1,33 @@
+---
+title: Overview
+sidebar:
+  icon: monitor
+description: Drive a desktop environment's screen, mouse and keyboard by hand
+---
+
+`fuse computer` drives a desktop environment interactively: capture the
+screen, click, type, send key combos. It exists so a desktop session can be
+inspected by a human without writing an agent loop — the commands call the
+same `POST /v1/environments/{id}/computer` endpoint an agent loop uses through
+the SDKs.
+
+It requires an environment booted from a desktop image (see
+[desktop environments](/docs/guides/desktop-environments)); on any other image
+the server answers 503 with a reason.
+
+## Commands
+
+| Command | Purpose |
+| --- | --- |
+| [`fuse computer screenshot`](/reference/cli/computer/screenshot) | Capture the screen to a PNG |
+| [`fuse computer click`](/reference/cli/computer/click) | Left-click at a coordinate |
+| [`fuse computer type`](/reference/cli/computer/type) | Type text into the focused window |
+| [`fuse computer key`](/reference/cli/computer/key) | Send a key combo |
+
+Unlike [`fuse environment exec`](/reference/cli/environment/exec), these
+commands accept API keys: an action here is a mouse click on a display the
+image chose to run, not a root shell.
+
+The live desktop also appears on
+[`fuse environment get`](/reference/cli/environment/get) as a `desktop` row
+with its geometry and up/down state, next to the endpoint rows.

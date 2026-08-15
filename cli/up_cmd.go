@@ -297,7 +297,7 @@ func newUpCmd() *cobra.Command {
 			if app.isJSON() {
 				return printJSON(e)
 			}
-			renderEnvDetail(e)
+			renderEnvDetail(e, nil)
 			return nil
 		},
 	}
