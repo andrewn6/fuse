@@ -3,12 +3,12 @@
 # Idempotent. Requires: podman on host (for the desktop bundle extraction),
 # sudo, mount, truncate, e2fsck, resize2fs, tar, chroot.
 #
-# Inputs in the working directory:
-#   rootfs-fused.ext4      baked image from ./fc-bake-rootfs.sh
+# Inputs:
+#   rootfs-fused.ext4      baked image from ./fc-bake-rootfs.sh (working dir)
 #   fuse-display-run       xvfb runner script (ships in host-agent/firecracker/)
-#   fuse-display.service   systemd unit for the display
-#   fuse-wm.service        systemd unit for the window manager (mutter)
-#   fuse-panel.service     systemd unit for the panel (tint2)
+#   ops/systemd/fuse-display.service   systemd unit for the display
+#   ops/systemd/fuse-wm.service        systemd unit for the window manager (mutter)
+#   ops/systemd/fuse-panel.service     systemd unit for the panel (tint2)
 #
 # Output:
 #   rootfs-desktop.ext4    desktop image; place it in the images dir to use it
@@ -24,6 +24,9 @@ set -euo pipefail
 
 FC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$FC_DIR"
+
+# systemd units live with the repo's other service files
+OPS_SYSTEMD="$(cd "$FC_DIR/../../ops/systemd" && pwd)"
 
 BASE=rootfs-fused.ext4
 OUT=rootfs-desktop.ext4
@@ -49,8 +52,9 @@ need() { command -v "$1" >/dev/null 2>&1 || { echo "missing: $1" >&2; exit 1; };
 for c in sudo mount umount truncate e2fsck resize2fs tar podman chroot; do need "$c"; done
 
 [ -f "$BASE" ] || { echo "$BASE not found — run ./fc-bake-rootfs.sh first" >&2; exit 1; }
-for f in fuse-display-run fuse-display.service fuse-wm.service fuse-panel.service; do
-  [ -f "$f" ] || { echo "$f not found — it ships in host-agent/firecracker/; restore it" >&2; exit 1; }
+[ -f fuse-display-run ] || { echo "fuse-display-run not found — it ships in host-agent/firecracker/; restore it" >&2; exit 1; }
+for u in fuse-display fuse-wm fuse-panel; do
+  [ -f "$OPS_SYSTEMD/$u.service" ] || { echo "$u.service not found — it ships in ops/systemd/; restore it" >&2; exit 1; }
 done
 
 cleanup() {
@@ -140,7 +144,7 @@ fi
 log "inject display runner + systemd units"
 sudo -n install -m 0755 fuse-display-run "$MOUNT_POINT/usr/local/bin/fuse-display-run"
 for u in fuse-display fuse-wm fuse-panel; do
-  sudo -n install -m 0644 "$u.service" "$MOUNT_POINT/etc/systemd/system/$u.service"
+  sudo -n install -m 0644 "$OPS_SYSTEMD/$u.service" "$MOUNT_POINT/etc/systemd/system/$u.service"
   sudo -n ln -sf "/etc/systemd/system/$u.service" \
     "$MOUNT_POINT/etc/systemd/system/multi-user.target.wants/$u.service"
 done
