@@ -88,7 +88,17 @@ func newUpCmd() *cobra.Command {
 			// the only part of the pipeline that reads the filesystem. It runs
 			// before the --dry-run branch so a missing source or an oversized
 			// tree fails the dry run as well, which is the point of one.
-			copyFiles, err := collectCopyFiles(c.Copy, filepath.Dir(path), nil)
+			//
+			// The walk is filtered through the .fuseignore next to the
+			// Fusefile, which exists whether or not the author wrote one: the
+			// built-in defaults are what keep `from: .` from walking .git into
+			// a 512KiB request body. Ignored paths are dropped before they are
+			// sized, so what a pattern removes does not count against the cap.
+			ign, err := loadFuseignore(filepath.Dir(path))
+			if err != nil {
+				return err
+			}
+			copyFiles, _, err := collectCopy(c.Copy, filepath.Dir(path), ign.decide)
 			if err != nil {
 				return fmt.Errorf("%s: %w", path, err)
 			}
