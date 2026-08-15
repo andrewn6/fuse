@@ -29,6 +29,7 @@ func newUpCmd() *cobra.Command {
 		fromBuild         string
 		plan              bool
 		noCache           bool
+		showCopy          bool
 	)
 	cmd := &cobra.Command{
 		Use:   "up [path]",
@@ -98,9 +99,15 @@ func newUpCmd() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			copyFiles, _, err := collectCopy(c.Copy, filepath.Dir(path), ign.decide)
+			copyFiles, copyStats, err := collectCopy(c.Copy, filepath.Dir(path), ign.decide)
 			if err != nil {
 				return fmt.Errorf("%s: %w", path, err)
+			}
+			// printed before anything else can fail and long before the
+			// create, since the answer to "what am I about to upload" is only
+			// worth having while it can still change something.
+			if showCopy {
+				renderCopyReport(os.Stderr, copyStats)
 			}
 
 			var lp *layerPlan
@@ -273,6 +280,7 @@ func newUpCmd() *cobra.Command {
 	cmd.Flags().StringVar(&fromBuild, "from-build", "", "boot from a `fuse build` artifact instead of a base image (skips the setup phase)")
 	cmd.Flags().BoolVar(&plan, "plan", false, "print the derived setup layer cache plan and exit without creating anything")
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "ignore the Fusefile's cache block and run every setup step")
+	cmd.Flags().BoolVar(&showCopy, "show-copy", false, "print what the copy block ships, and what .fuseignore dropped, before creating anything")
 	return cmd
 }
 

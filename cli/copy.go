@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/base64"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path"
@@ -202,6 +203,60 @@ func encodeCopyFiles(files map[string][]byte) map[string]string {
 		out[path] = base64.StdEncoding.EncodeToString(data)
 	}
 	return out
+}
+
+// renderCopyReport prints what --show-copy exists for: what each entry
+// actually ships, and what was taken out of it, while the answer can still
+// change something.
+//
+// Skips are counted per path rather than per file, so an ignored directory
+// counts once no matter how much was under it. That is the point of pruning:
+// nothing here walked node_modules, so nothing here can say how big it was.
+func renderCopyReport(w io.Writer, stats []copyEntryStat) {
+	if len(stats) == 0 {
+		fmt.Fprintln(w, "copy: nothing, this Fusefile has no copy block")
+		return
+	}
+	var files int
+	var total int64
+	for _, s := range stats {
+		fmt.Fprintf(w, "copy %s -> %s\n", s.Spec.From, s.Spec.To)
+		fmt.Fprintf(w, "  %s, %s%s\n", copyFileCount(s.Files), copySize(s.Bytes), copySkipNote(s))
+		files += s.Files
+		total += s.Bytes
+	}
+	fmt.Fprintf(w, "total: %s, %s (limit %s)\n", copyFileCount(files), copySize(total), copySize(fusefile.MaxCopyBytes))
+}
+
+func copyFileCount(n int) string {
+	if n == 1 {
+		return "1 file"
+	}
+	return fmt.Sprintf("%d files", n)
+}
+
+// copySize is humanBytes with a real zero, since an entry that shipped nothing
+// shipped 0 B rather than an unknown size.
+func copySize(n int64) string {
+	if n == 0 {
+		return "0 B"
+	}
+	return humanBytes(n)
+}
+
+// copySkipNote reports the two kinds of skip apart, because "my file is
+// missing" has a different answer for each: edit your .fuseignore, or add a
+// `!` line to override a default you never wrote.
+func copySkipNote(s copyEntryStat) string {
+	switch {
+	case s.SkippedPattern > 0 && s.SkippedDefault > 0:
+		return fmt.Sprintf(" (%d skipped by %s, %d by the defaults)", s.SkippedPattern, fuseignoreName, s.SkippedDefault)
+	case s.SkippedPattern > 0:
+		return fmt.Sprintf(" (%d skipped by %s)", s.SkippedPattern, fuseignoreName)
+	case s.SkippedDefault > 0:
+		return fmt.Sprintf(" (%d skipped by the defaults)", s.SkippedDefault)
+	}
+	return ""
 }
 
 // copyCollector accumulates the walked files and enforces, as it goes, the two
