@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.24.0](https://github.com/folsomintel/fuse/compare/v0.23.0...v0.24.0) (2026-08-15)
+
+
+### Features
+
+* desktop block in the fusefile and the computer wire ([#191](https://github.com/folsomintel/fuse/issues/191)) ([fef55df](https://github.com/folsomintel/fuse/commit/fef55df8b27dc6049b4639792f17870b3aa5a4eb))
+* **sdks:** computer use adapter, worked example, and guide ([#193](https://github.com/folsomintel/fuse/issues/193)) ([52fdc23](https://github.com/folsomintel/fuse/commit/52fdc23dbd9df5ca7c9b5e180651a83311ca3a1a))
+
 ## [0.23.0](https://github.com/folsomintel/fuse/compare/v0.22.2...v0.23.0) (2026-08-15)
 
 
