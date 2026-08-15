@@ -289,7 +289,25 @@ func TestLayerKeysNoSetup(t *testing.T) {
 		t.Fatal(err)
 	}
 	if keys != nil {
-		t.Errorf("got %v, want nil for a Fusefile with no setup", keys)
+		t.Errorf("got %v, want nil for a Fusefile with no build steps", keys)
+	}
+}
+
+// renaming `setup:` to `build:` must not invalidate a single existing layer:
+// the key is derived from the steps, not from the key the author spelled them
+// under.
+func TestLayerKeysDoNotVaryByStepFieldName(t *testing.T) {
+	steps := []Step{{Run: "apt-get update -qq"}, {Run: "npm ci"}}
+	setup := keysOf(t, cached(steps...), nil)
+
+	f := cached(steps...)
+	f.Setup, f.Build = nil, steps
+	build := keysOf(t, f, nil)
+
+	for i := range setup {
+		if setup[i].Key != build[i].Key {
+			t.Errorf("step %d: setup key %s != build key %s", i, setup[i].Key, build[i].Key)
+		}
 	}
 }
 

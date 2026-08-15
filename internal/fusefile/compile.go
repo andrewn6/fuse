@@ -630,12 +630,12 @@ func (c Command) Render() string {
 	return c.Shell
 }
 
-// setupScripts returns the shell fragment emitted for each setup step, in
-// order. compileStartupScript concatenates exactly this, and layer key
-// derivation hashes exactly this, so the key and the emitted script cannot
-// drift apart. a step's fragment is its `run` string byte for byte: no
-// normalization, because guessing at semantic equivalence is how a cache
-// serves a stale rootfs.
+// setupScripts returns the shell fragment emitted for each build step, in
+// order (from `build:`, or the deprecated `setup:` alias; BuildSteps decides).
+// compileStartupScript concatenates exactly this, and layer key derivation
+// hashes exactly this, so the key and the emitted script cannot drift apart. a
+// step's fragment is its `run` string byte for byte: no normalization, because
+// guessing at semantic equivalence is how a cache serves a stale rootfs.
 //
 // a step with a `workdir` is the one exception: it is wrapped in a subshell,
 // `(cd <quoted>; <run>)`, so the directory change is scoped to that step and
@@ -647,11 +647,12 @@ func (c Command) Render() string {
 // the wrapper is part of the hashed fragment, so adding or changing a workdir
 // invalidates that step's layer, as it should.
 func setupScripts(f *Fusefile) []string {
-	if len(f.Setup) == 0 {
+	steps := f.BuildSteps()
+	if len(steps) == 0 {
 		return nil
 	}
-	out := make([]string, len(f.Setup))
-	for i, step := range f.Setup {
+	out := make([]string, len(steps))
+	for i, step := range steps {
 		if step.Workdir == "" {
 			out[i] = step.Run
 			continue
@@ -681,17 +682,21 @@ func scriptPrelude(f *Fusefile) string {
 	return b.String()
 }
 
-// compileBuildScript renders the file block and the setup steps, without the
-// run command. an empty setup phase yields "" rather than a bare prelude:
-// `fuse build` exists to bake setup, and files alone are re-materialized on
-// every boot anyway, so there is nothing to bake.
+// compileBuildScript renders the file block and the build steps, without the
+// run command. an empty build phase yields "" rather than a bare prelude:
+// `fuse build` exists to bake those steps, and files alone are re-materialized
+// on every boot anyway, so there is nothing to bake.
 //
 // after the file block it emits exactly the fragments layer keys are derived
 // from, so a `fuse build` runs the same bytes the plan hashed. the files
 // themselves are folded into the base key instead, since they are part of the
 // state the first step builds on rather than a step of their own.
+//
+// no phase markers are emitted here: this script is only ever the build phase,
+// and `fuse build` runs it on a path that already knows that, so the trap
+// compileStartupScript needs would say nothing new.
 func compileBuildScript(f *Fusefile) string {
-	if len(f.Setup) == 0 {
+	if len(f.BuildSteps()) == 0 {
 		return ""
 	}
 	var b strings.Builder
@@ -717,9 +722,9 @@ func compileBuildScript(f *Fusefile) string {
 // the first exec of a cold build. Files are folded into BaseKey, so any layer
 // artifact the build seeded from already contains them.
 //
-// SetupScriptRange(f, 0, len(f.Setup), true) is compileBuildScript(f) byte for
-// byte. That equivalence is what lets the stepped path and the single-blob path
-// coexist without drifting, and there is a test pinning it.
+// SetupScriptRange(f, 0, len(f.BuildSteps()), true) is compileBuildScript(f)
+// byte for byte. That equivalence is what lets the stepped path and the
+// single-blob path coexist without drifting, and there is a test pinning it.
 func SetupScriptRange(f *Fusefile, from, to int, includeFiles bool) string {
 	scripts := setupScripts(f)
 	if from < 0 {
@@ -744,7 +749,7 @@ func SetupScriptRange(f *Fusefile, from, to int, includeFiles bool) string {
 }
 
 // compileRunScript renders the file block and the run command, without the
-// setup steps.
+// build steps.
 //
 // Files are re-materialized here even though a `fuse build` artifact already
 // carries the copy written during the bake: they are authoring inputs that may
@@ -764,30 +769,81 @@ func compileRunScript(f *Fusefile) string {
 	return b.String()
 }
 
-// compileStartupScript joins the setup steps and the run command into a single
-// shell script with a strict-mode prelude. if there is nothing to run (no
-// setup steps and no run command), it returns "" rather than a bare prelude.
+// BuildPhaseExitStatus is the status the generated startup script exits with
+// when a build step fails.
+//
+// The two phases travel to the guest as one opaque script: the orchestrator
+// runs it as a single `sh -lc` with both streams sent to io.Discard, so the
+// exit status is the only channel left to say which phase died. The script
+// therefore traps a failure in the build phase and remaps it to this fixed
+// status, then clears the trap before the run command, so a run failure still
+// reports its own status unchanged.
+//
+// 90 is outside the statuses a shell assigns on its own behalf (126 for a
+// command that is not executable, 127 for one that is not found, 128+n for a
+// signal), so it is unlikely to collide with what a build step would return.
+// A build step that genuinely exits 90 is indistinguishable from the trap, and
+// the failing step's own status is not preserved: that is the honest cost of
+// having one integer to carry two facts.
+const BuildPhaseExitStatus = 90
+
+// buildPhaseOpen arms the trap, buildPhaseClose disarms it, and runPhaseMarker
+// labels what follows. The markers are shell comments, so they cost nothing at
+// runtime and give `fuse compile` output a visible seam between the phases.
+var (
+	buildPhaseOpen = fmt.Sprintf(
+		"# fuse: build phase (a failure here exits %d)\ntrap '[ $? -eq 0 ] || exit %d' EXIT\n",
+		BuildPhaseExitStatus, BuildPhaseExitStatus)
+	buildPhaseClose = "trap - EXIT\n"
+	runPhaseMarker  = "# fuse: run phase\n"
+)
+
+// writeBuildAndRun writes the build phase (the given step fragments, wrapped in
+// the phase markers) followed by the run command.
+//
+// A script with no build steps is written exactly as it always was, with no
+// markers at all: there is only one phase, so there is nothing to tell apart,
+// and a run-only Fusefile keeps compiling to the script it has always produced.
+func writeBuildAndRun(b *strings.Builder, scripts []string, run Command) {
+	if len(scripts) > 0 {
+		b.WriteString(buildPhaseOpen)
+		for _, script := range scripts {
+			b.WriteString(script)
+			b.WriteString("\n")
+		}
+		b.WriteString(buildPhaseClose)
+	}
+	if run.IsEmpty() {
+		return
+	}
+	if len(scripts) > 0 {
+		b.WriteString(runPhaseMarker)
+	}
+	b.WriteString(run.Render())
+	b.WriteString("\n")
+}
+
+// compileStartupScript joins the build steps and the run command into a single
+// shell script with a strict-mode prelude. if there is nothing to run (no build
+// steps and no run command), it returns "" rather than a bare prelude.
+//
+// the two phases are emitted as distinguishable halves rather than as a flat
+// concatenation: see BuildPhaseExitStatus for why the seam has to be visible in
+// the exit status and not just in a comment.
 func compileStartupScript(f *Fusefile) string {
-	if len(f.Setup) == 0 && f.Run.IsEmpty() && len(f.Files) == 0 {
+	if len(f.BuildSteps()) == 0 && f.Run.IsEmpty() && len(f.Files) == 0 {
 		return ""
 	}
 
 	var b strings.Builder
 	b.WriteString(scriptPrelude(f))
 	b.WriteString(renderFiles(f.Files))
-	for _, script := range setupScripts(f) {
-		b.WriteString(script)
-		b.WriteString("\n")
-	}
-	if !f.Run.IsEmpty() {
-		b.WriteString(f.Run.Render())
-		b.WriteString("\n")
-	}
+	writeBuildAndRun(&b, setupScripts(f), f.Run)
 	return b.String()
 }
 
 // StartupScriptFrom renders the boot script for an environment seeded from a
-// layer artifact that already covers setup steps [0, from).
+// layer artifact that already covers build steps [0, from).
 //
 // It is compileStartupScript with a head start: the steps the artifact baked in
 // are dropped, and everything after them still runs, followed by the run
@@ -814,14 +870,7 @@ func StartupScriptFrom(f *Fusefile, from int) string {
 	var b strings.Builder
 	b.WriteString(scriptPrelude(f))
 	b.WriteString(renderFiles(f.Files))
-	for _, script := range scripts[from:] {
-		b.WriteString(script)
-		b.WriteString("\n")
-	}
-	if !f.Run.IsEmpty() {
-		b.WriteString(f.Run.Render())
-		b.WriteString("\n")
-	}
+	writeBuildAndRun(&b, scripts[from:], f.Run)
 	return b.String()
 }
 

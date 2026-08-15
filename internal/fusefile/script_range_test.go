@@ -100,4 +100,22 @@ func TestStartupScriptFromSkipsCoveredSteps(t *testing.T) {
 	if !strings.Contains(script, "./start.sh") {
 		t.Errorf("run phase missing:\n%s", script)
 	}
+	// the steps that survived the seed are still a build phase, so they keep
+	// the trap that tells a build failure apart from a run failure.
+	if !strings.Contains(script, buildOpen) || !strings.Contains(script, buildClose) {
+		t.Errorf("remaining build steps lost their phase markers:\n%s", script)
+	}
+}
+
+// A seed that covers every build step leaves nothing but the run command, and
+// a script with one phase carries no markers at all.
+func TestStartupScriptFromFullCoverageDropsTheBuildPhase(t *testing.T) {
+	f := rangeFusefile(t)
+	script := StartupScriptFrom(f, len(f.BuildSteps()))
+	if strings.Contains(script, "trap") {
+		t.Errorf("fully covered boot still arms the build trap:\n%s", script)
+	}
+	if !strings.Contains(script, "./start.sh") {
+		t.Errorf("run phase missing:\n%s", script)
+	}
 }

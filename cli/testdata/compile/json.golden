@@ -9,7 +9,7 @@
   },
   "manifest_inline": "eyJ2ZXJzaW9uIjoiMSIsIm1hY2hpbmUiOnsid29ya3NwYWNlIjoiL3dvcmtzcGFjZSJ9LCJzZXJ2aWNlcyI6eyJwb3N0Z3JlcyI6eyJpbWFnZSI6InBvc3RncmVzOjE2IiwicG9ydHMiOls1NDMyXSwiZW52Ijp7IlBPU1RHUkVTX0RCIjp7InZhbHVlIjoiYXBwIn0sIlBPU1RHUkVTX1BBU1NXT1JEIjp7InNlY3JldCI6InBnX3Bhc3N3b3JkIn19fX19",
   "secrets": {},
-  "startup_script": "set -eu\nif (set -o pipefail) 2>/dev/null; then set -o pipefail; fi\nmkdir -p '/workspace'\ncd '/workspace'\napt-get update -qq\n./start.sh\n",
+  "startup_script": "set -eu\nif (set -o pipefail) 2>/dev/null; then set -o pipefail; fi\nmkdir -p '/workspace'\ncd '/workspace'\n# fuse: build phase (a failure here exits 90)\ntrap '[ $? -eq 0 ] || exit 90' EXIT\napt-get update -qq\ntrap - EXIT\n# fuse: run phase\n./start.sh\n",
   "expose": [
     {
       "port": 8080,

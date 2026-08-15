@@ -6,6 +6,8 @@
   "type": "object",
   "additionalProperties": false,
   "required": ["version"],
+  "$comment": "build and setup are the same field under two names, so setting both is rejected.",
+  "not": { "required": ["build", "setup"] },
   "properties": {
     "version": {
       "const": 1,
@@ -20,12 +22,18 @@
     "cache": { "$ref": "#/$defs/cache" },
     "files": {
       "type": "array",
-      "description": "Files materialized in the guest before setup runs. Total content is capped at 64KiB.",
+      "description": "Files materialized in the guest before the build steps run. Total content is capped at 64KiB.",
       "items": { "$ref": "#/$defs/file" }
+    },
+    "build": {
+      "type": "array",
+      "description": "Steps that prepare the environment. They run to completion, in the workspace, before run.",
+      "items": { "$ref": "#/$defs/step" }
     },
     "setup": {
       "type": "array",
-      "description": "Commands run once at boot, before run.",
+      "deprecated": true,
+      "description": "Deprecated alias for build, kept accepted so existing Fusefiles keep working. Setting both build and setup is an error.",
       "items": { "$ref": "#/$defs/step" }
     },
     "services": {
@@ -34,7 +42,7 @@
       "additionalProperties": { "$ref": "#/$defs/service" }
     },
     "run": {
-      "description": "The main entrypoint, compile into `startup_script` after `setup`. A string is interpreted by `sh -lc` (shell form); a list is an argv, each element shell-quoted into a single command line so no argument is subject to word splitting, globbing, or metacharacter reinterpretation (exec form). The exec form is not a true execve: the generated command still runs inside `sh -lc`. The shell form compiles to a byte-identical script; only the exec form adds per-argument quoting.",
+      "description": "The main entrypoint, compile into `startup_script` after `build`. A string is interpreted by `sh -lc` (shell form); a list is an argv, each element shell-quoted into a single command line so no argument is subject to word splitting, globbing, or metacharacter reinterpretation (exec form). The exec form is not a true execve: the generated command still runs inside `sh -lc`. The shell form compiles to a byte-identical script; only the exec form adds per-argument quoting.",
       "oneOf": [
         { "type": "string", "minLength": 1 },
         {
@@ -47,7 +55,7 @@
     },
     "workspace": {
       "type": "string",
-      "description": "Working directory inside the guest, created with mkdir -p; setup and run execute there. Must be an absolute path with no '..' segments. Defaults to /workspace.",
+      "description": "Working directory inside the guest, created with mkdir -p; the build steps and run execute there. Must be an absolute path with no '..' segments. Defaults to /workspace.",
       "pattern": "^/",
       "not": { "pattern": "(^|/)\\.\\.(/|$)" }
     },
@@ -64,7 +72,7 @@
     "healthcheck": { "$ref": "#/$defs/envHealthcheck" },
     "startup_timeout": {
       "allOf": [{ "$ref": "#/$defs/duration" }],
-      "description": "Go duration bounding setup + run. Omit for the orchestrator default (30s)."
+      "description": "Go duration bounding build + run. Omit for the orchestrator default (30s)."
     }
   },
   "$defs": {
@@ -153,7 +161,7 @@
       "properties": {
         "enabled": {
           "type": "boolean",
-          "description": "Opt in to the setup layer cache. Off by default."
+          "description": "Opt in to the build layer cache. Off by default."
         }
       }
     },
@@ -184,7 +192,7 @@
       }
     },
     "step": {
-      "description": "One setup step: either a bare command string or a mapping.",
+      "description": "One build step: either a bare command string or a mapping.",
       "oneOf": [
         { "type": "string" },
         {

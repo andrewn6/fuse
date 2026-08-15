@@ -89,9 +89,21 @@ func validate(f *Fusefile) error {
 		}
 	}
 
-	for i, step := range f.Setup {
+	// build and setup are two names for one phase, so setting both is rejected
+	// rather than resolved: concatenating them would run steps in an order
+	// nobody wrote, and picking a winner would silently drop the other half.
+	if len(f.Build) > 0 && len(f.Setup) > 0 {
+		errs = append(errs, fmt.Errorf(
+			"build and setup: setup is a deprecated alias for build, set one of them, not both"))
+	}
+
+	// the steps are validated under whichever key the author wrote, so the
+	// index in a message points into the list they can actually see. when both
+	// keys are set only build is checked; the file is already invalid above.
+	stepField := f.buildField()
+	for i, step := range f.BuildSteps() {
 		if strings.TrimSpace(step.Run) == "" {
-			errs = append(errs, fmt.Errorf("setup[%d].run: is required", i))
+			errs = append(errs, fmt.Errorf("%s[%d].run: is required", stepField, i))
 		}
 		// a workdir is emitted as `cd <workdir>` inside the step's subshell,
 		// under the same reasoning as workspace below: shellQuote stops it from
@@ -101,22 +113,22 @@ func validate(f *Fusefile) error {
 		if wd := step.Workdir; wd != "" {
 			switch {
 			case strings.ContainsAny(wd, "\x00\n"):
-				errs = append(errs, fmt.Errorf("setup[%d].workdir: must not contain newlines or NUL bytes", i))
+				errs = append(errs, fmt.Errorf("%s[%d].workdir: must not contain newlines or NUL bytes", stepField, i))
 			case containsDotDot(wd):
-				errs = append(errs, fmt.Errorf("setup[%d].workdir: must not contain %q segments, got %q", i, "..", wd))
+				errs = append(errs, fmt.Errorf("%s[%d].workdir: must not contain %q segments, got %q", stepField, i, "..", wd))
 			}
 		}
 		if !step.cacheable() && len(step.Inputs) > 0 {
-			errs = append(errs, fmt.Errorf("setup[%d].inputs: not allowed on a step with cache: false", i))
+			errs = append(errs, fmt.Errorf("%s[%d].inputs: not allowed on a step with cache: false", stepField, i))
 		}
 		for j, in := range step.Inputs {
 			switch {
 			case strings.TrimSpace(in) == "":
-				errs = append(errs, fmt.Errorf("setup[%d].inputs[%d]: must not be empty", i, j))
+				errs = append(errs, fmt.Errorf("%s[%d].inputs[%d]: must not be empty", stepField, i, j))
 			case path.IsAbs(in) || filepath.IsAbs(in):
-				errs = append(errs, fmt.Errorf("setup[%d].inputs[%d]: must be relative to the Fusefile, got %q", i, j, in))
+				errs = append(errs, fmt.Errorf("%s[%d].inputs[%d]: must be relative to the Fusefile, got %q", stepField, i, j, in))
 			case escapesRoot(in):
-				errs = append(errs, fmt.Errorf("setup[%d].inputs[%d]: must not traverse outside the Fusefile's directory, got %q", i, j, in))
+				errs = append(errs, fmt.Errorf("%s[%d].inputs[%d]: must not traverse outside the Fusefile's directory, got %q", stepField, i, j, in))
 			}
 		}
 	}

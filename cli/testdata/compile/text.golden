@@ -13,7 +13,11 @@ startup script
   if (set -o pipefail) 2>/dev/null; then set -o pipefail; fi
   mkdir -p '/workspace'
   cd '/workspace'
+  # fuse: build phase (a failure here exits 90)
+  trap '[ $? -eq 0 ] || exit 90' EXIT
   apt-get update -qq
+  trap - EXIT
+  # fuse: run phase
   ./start.sh
 
 manifest (decoded; sent base64 as manifest_inline)
