@@ -173,6 +173,25 @@ func TestComputerActionArgv(t *testing.T) {
 	}
 }
 
+func TestCoordinateJSONRoundTrip(t *testing.T) {
+	var a computerAction
+	body := `{"action":"left_click","coordinate":[100,200]}`
+	if err := json.Unmarshal([]byte(body), &a); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if a.Coordinate == nil || a.Coordinate.X != 100 || a.Coordinate.Y != 200 {
+		t.Fatalf("coordinate = %+v, want {100 200}", a.Coordinate)
+	}
+	out, err := json.Marshal(a)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	// the struct must keep encoding as the [x, y] array claude emits.
+	if string(out) != body {
+		t.Fatalf("marshal = %s, want %s", out, body)
+	}
+}
+
 func TestComputerActionValidation(t *testing.T) {
 	cases := []struct {
 		name string

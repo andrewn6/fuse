@@ -58,18 +58,42 @@ const (
 // rejected before it can become an argv element.
 var keyPattern = regexp.MustCompile(`^[A-Za-z0-9_+]{1,128}$`)
 
+// coordinate is an x/y pixel pair. on the wire it stays the two-element
+// [x, y] array Claude's tool_use input carries; only the go side gets named
+// fields.
+type coordinate struct {
+	X int
+	Y int
+}
+
+func (c coordinate) MarshalJSON() ([]byte, error) {
+	return json.Marshal([2]int{c.X, c.Y})
+}
+
+func (c *coordinate) UnmarshalJSON(data []byte) error {
+	var pair []int
+	if err := json.Unmarshal(data, &pair); err != nil {
+		return err
+	}
+	if len(pair) != 2 {
+		return fmt.Errorf("want [x, y], got %d elements", len(pair))
+	}
+	c.X, c.Y = pair[0], pair[1]
+	return nil
+}
+
 // computerAction is the request body of POST /v1/computer/action. The field
 // names mirror the tool_use input Claude emits so a caller's translation
 // layer stays mechanical.
 type computerAction struct {
-	Action          string  `json:"action"`
-	Coordinate      []int   `json:"coordinate,omitempty"`
-	StartCoordinate []int   `json:"start_coordinate,omitempty"`
-	Text            string  `json:"text,omitempty"`
-	Region          []int   `json:"region,omitempty"`
-	Duration        float64 `json:"duration,omitempty"`
-	ScrollDirection string  `json:"scroll_direction,omitempty"`
-	ScrollAmount    int     `json:"scroll_amount,omitempty"`
+	Action          string      `json:"action"`
+	Coordinate      *coordinate `json:"coordinate,omitempty"`
+	StartCoordinate *coordinate `json:"start_coordinate,omitempty"`
+	Text            string      `json:"text,omitempty"`
+	Region          []int       `json:"region,omitempty"`
+	Duration        float64     `json:"duration,omitempty"`
+	ScrollDirection string      `json:"scroll_direction,omitempty"`
+	ScrollAmount    int         `json:"scroll_amount,omitempty"`
 }
 
 // computerResult is the response body. Screenshot is a base64 PNG, present on
@@ -204,11 +228,11 @@ func badAction(format string, args ...any) error {
 }
 
 // validCoordinate checks an [x, y] pair.
-func validCoordinate(name string, c []int) error {
-	if len(c) != 2 {
-		return badAction("%s: want [x, y], got %d elements", name, len(c))
+func validCoordinate(name string, c *coordinate) error {
+	if c == nil {
+		return badAction("%s: want [x, y], got nothing", name)
 	}
-	for _, v := range c {
+	for _, v := range []int{c.X, c.Y} {
 		if v < 0 || v > maxCoordinate {
 			return badAction("%s: %d out of range 0..%d", name, v, maxCoordinate)
 		}
@@ -227,11 +251,11 @@ func validKeys(text string) error {
 
 // moveArgs returns the chained xdotool words that position the pointer, or
 // nothing when the action did not name a coordinate.
-func moveArgs(c []int) []string {
-	if len(c) != 2 {
+func moveArgs(c *coordinate) []string {
+	if c == nil {
 		return nil
 	}
-	return []string{"mousemove", "--sync", strconv.Itoa(c[0]), strconv.Itoa(c[1])}
+	return []string{"mousemove", "--sync", strconv.Itoa(c.X), strconv.Itoa(c.Y)}
 }
 
 // clickButtons maps the click actions to their X button and repeat count.
