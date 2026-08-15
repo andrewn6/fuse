@@ -80,6 +80,7 @@ func newRootCmd() *cobra.Command {
 		newHostsCmd(),
 		newHostCmd(),
 		newEnvironmentCmd(),
+		newComputerCmd(),
 		newSnapshotCmd(),
 		newAPIKeysCmd(),
 		newMetricsCmd(),
