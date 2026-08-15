@@ -1,0 +1,40 @@
+version: 1
+
+# the layer cache. each build step is a layer keyed by that step and every step
+# before it, so an unchanged prefix is reused rather than rerun. `inputs` folds
+# a file's contents into the key, so editing the file invalidates the step even
+# though its command text never changed.
+#
+# the runner drives this three ways: --plan to read the derived plan without
+# building, a real `fuse build` to produce a snapshot, and `fuse up --from-build`
+# to boot from that snapshot with the build phase skipped.
+cache:
+  enabled: true
+
+resources:
+  cpus: 2
+  memory: 1GB
+  storage: 4GB
+  max_runtime: 20m
+
+build:
+  # the base rootfs has no /opt, and a build step gets no directory made for it
+  # beyond the workspace, so the first step has to create its own home.
+  - 'mkdir -p /var/lib/e2e && echo "layer one" > /var/lib/e2e/layer1.txt'
+  # step 2 is keyed on a file's contents as well as its command text: editing
+  # assets/seed.txt must invalidate this step even though the text is unchanged.
+  - run: 'echo "layer two" > /var/lib/e2e/layer2.txt'
+    inputs:
+      - assets/seed.txt
+  # step 3 records when it last actually executed, so a layer that was reused
+  # rather than rerun shows up as an unchanged stamp across two builds.
+  - 'date +%s%N > /var/lib/e2e/layer3-stamp.txt'
+
+run: |
+  {
+    cat /var/lib/e2e/layer1.txt
+    cat /var/lib/e2e/layer2.txt
+    echo "stamp=$(cat /var/lib/e2e/layer3-stamp.txt)"
+  } > /workspace/layers.txt
+
+workspace: /workspace

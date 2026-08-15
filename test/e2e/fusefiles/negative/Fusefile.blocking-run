@@ -1,0 +1,19 @@
+version: 1
+
+# a run that never returns. run executes synchronously during create, so this
+# must fail on the startup timeout rather than hang forever or come back
+# "running" with a create that never completed.
+#
+# startup_timeout is set short on purpose: the point is to observe the timeout
+# fire, and the orchestrator default (30s) plus boot makes the test slow for no
+# extra signal.
+resources:
+  cpus: 1
+  memory: 512MB
+  storage: 2GB
+  max_runtime: 10m
+
+startup_timeout: 15s
+
+run: |
+  sleep infinity

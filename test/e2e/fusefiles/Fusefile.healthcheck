@@ -1,0 +1,37 @@
+version: 1
+
+# the environment-level healthcheck plus expose.
+#
+# healthcheck: is the readiness verdict for the whole sandbox and is reported
+# back to the control plane, unlike services.*.healthcheck which governs one
+# container and never leaves the guest. the probe runs inside the guest, so the
+# port needs no expose entry; expose is here to test publishing separately.
+resources:
+  cpus: 1
+  memory: 512MB
+  storage: 2GB
+  max_runtime: 20m
+
+# the server has to outlive run, so it is backgrounded. a run that blocks hangs
+# create until the startup timeout.
+run: |
+  mkdir -p /srv/www
+  echo "healthy" > /srv/www/health
+  cd /srv/www && nohup python3 -m http.server 8080 >/tmp/http.log 2>&1 &
+  # give the listener a moment so the first probe is not a guaranteed miss.
+  sleep 1
+
+healthcheck:
+  http:
+    port: 8080
+    path: /health
+  interval: 5s
+  timeout: 2s
+  retries: 3
+  start_period: 15s
+
+expose:
+  - port: 8080
+    as: http
+
+workspace: /workspace

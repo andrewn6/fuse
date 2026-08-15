@@ -1,0 +1,15 @@
+version: 1
+
+# placement.host is a gate, not a preference: an id no host answers to must be
+# refused, never relaxed into "closest available host".
+placement:
+  host: no-such-host-exists
+
+resources:
+  cpus: 1
+  memory: 512MB
+  storage: 2GB
+  max_runtime: 10m
+
+run: |
+  echo "should never run" > /workspace/never.txt
