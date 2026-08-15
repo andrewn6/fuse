@@ -195,6 +195,13 @@ func (h *Handler) register(r chi.Router) {
 	// returns a JSON response.
 	r.Get("/v1/environments/{vmId}/attach", h.attachEnvironment)
 
+	// The computer surface is a sub-path like snapshots: a JSON call with a
+	// body and a JSON response, scoped to one environment. POST relays an
+	// action to the guest agent; GET reports the guest display so a caller
+	// can size its tool definition. See computer.go.
+	r.Post("/v1/environments/{vmId}/computer", h.computerAction)
+	r.Get("/v1/environments/{vmId}/computer", h.computerDisplay)
+
 	r.Post("/v1/environments/{vmId}/snapshots", h.createSnapshot)
 	r.Get("/v1/snapshots", h.listSnapshots)
 	// A fixed sub-path rather than a filter on the collection above: this
@@ -284,6 +291,10 @@ func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, CodeInvalidArgument, err.Error(), nil)
 		return
 	}
+	if err := validateDesktop(req.Desktop); err != nil {
+		writeError(w, http.StatusBadRequest, CodeInvalidArgument, err.Error(), nil)
+		return
+	}
 	// A negative bound would reach the fleet as "unset" and quietly restore
 	// the default, so it is refused here where the sign is still visible.
 	// The upper bound is the fleet's to enforce, since it owns the ceiling.
@@ -349,6 +360,7 @@ func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		GatewayToken:         req.GatewayToken,
 		Expose:               toOrchestratorExpose(req.Expose),
 		Healthcheck:          toOrchestratorHealthcheck(req.Healthcheck),
+		Desktop:              toOrchestratorDesktop(req.Desktop),
 
 		Files: files,
 	})
@@ -496,6 +508,25 @@ func validateHealthcheck(hc *HealthcheckSpec) error {
 	if hc.IntervalSeconds > 0 && hc.TimeoutSeconds > hc.IntervalSeconds {
 		return fmt.Errorf("healthcheck.timeout_seconds (%d) must not exceed healthcheck.interval_seconds (%d)",
 			hc.TimeoutSeconds, hc.IntervalSeconds)
+	}
+	return nil
+}
+
+// validateDesktop enforces the desktop geometry's bounds at the API boundary
+// so raw SDK callers are held to the same rules as Fusefile authors. The
+// bounds mirror internal/fusefile's: 320 to 3840 on each axis, both required.
+//
+// A nil desktop is the common case and always valid: the block is optional
+// and its absence means the environment declares no desktop.
+func validateDesktop(d *DesktopSpec) error {
+	if d == nil {
+		return nil
+	}
+	if d.Width < 320 || d.Width > 3840 {
+		return fmt.Errorf("desktop.width must be between 320 and 3840, got %d", d.Width)
+	}
+	if d.Height < 320 || d.Height > 3840 {
+		return fmt.Errorf("desktop.height must be between 320 and 3840, got %d", d.Height)
 	}
 	return nil
 }
