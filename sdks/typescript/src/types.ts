@@ -156,6 +156,34 @@ export interface ComputerDisplay {
   error?: string;
 }
 
+/** ToolResultImageSource is a Messages-API base64 image source. */
+export interface ToolResultImageSource {
+  type: "base64";
+  media_type: "image/png";
+  data: string;
+}
+
+/**
+ * ToolResultBlock is one content block of a Messages API tool_result. The
+ * field names match the Messages API, so the blocks can be sent back verbatim
+ * as the tool_result content.
+ */
+export interface ToolResultBlock {
+  type: "text" | "image";
+  text?: string;
+  source?: ToolResultImageSource;
+}
+
+/**
+ * ComputerToolResult is what goes back to Claude for one computer tool_use:
+ * the content blocks and whether they describe an error. Map it onto the
+ * tool_result block for the tool_use's id and the loop is closed.
+ */
+export interface ComputerToolResult {
+  content: ToolResultBlock[];
+  is_error?: boolean;
+}
+
 /**
  * Health is the last verdict of an environment's healthcheck.
  *

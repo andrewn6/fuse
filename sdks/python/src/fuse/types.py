@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -164,6 +164,18 @@ class ComputerDisplay(_Model):
     height: int = 0
     # why the display is down, when it is.
     error: str = ""
+
+
+class ComputerToolResult(_Model):
+    # what goes back to claude for one computer tool_use: the content blocks
+    # and whether they describe an error. the blocks are plain dicts already
+    # in the messages api shape, so they can be placed on a tool_result block
+    # verbatim:
+    #
+    #   {"type": "tool_result", "tool_use_id": block.id,
+    #    "content": result.content, "is_error": result.is_error}
+    content: list[dict[str, Any]] = Field(default_factory=list)
+    is_error: bool = False
 
 
 class Health(_Model):

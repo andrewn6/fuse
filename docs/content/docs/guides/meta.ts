@@ -7,6 +7,7 @@ export default defineMeta({
     "local-development",
     "agent-sandboxes",
     "desktop-environments",
+    "computer-use",
     "ci-runners",
     "gpu-workloads",
     "interactive-debugging",

@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from typing import Any
 from urllib.parse import quote
 
 from .._transport import Transport
+from ..errors import ApiError
 from ..types import (
     ComputerAction,
     ComputerDisplay,
     ComputerResult,
+    ComputerToolResult,
     CreateRequest,
     EnvironmentInfo,
     EnvironmentPage,
@@ -102,6 +105,61 @@ class EnvironmentsService:
         path = f"/v1/environments/{quote(vm_id, safe='')}/computer"
         resp = self._t.request("POST", path, body=action)
         return ComputerResult.model_validate(resp.json())
+
+    def computer_tool_result(
+        self, vm_id: str, tool_input: dict[str, Any]
+    ) -> ComputerToolResult:
+        # executes one computer tool_use against the environment and shapes
+        # the answer for the messages api. tool_input is the tool_use block's
+        # input, verbatim: it is already the wire shape the computer endpoint
+        # takes, and it is forwarded untouched so action fields this sdk has
+        # not learned yet still reach the guest.
+        #
+        # an action the environment refuses (a malformed coordinate, a
+        # display that is not up) comes back as is_error content rather than
+        # raising: the agent loop should feed it to the model, which is the
+        # party that can correct it. a raise is reserved for failures the
+        # model cannot fix - transport, auth, an unknown environment.
+        if not vm_id:
+            raise ValueError("vm id is required")
+        if not tool_input.get("action"):
+            return ComputerToolResult(
+                content=[{"type": "text", "text": "tool input names no action"}],
+                is_error=True,
+            )
+        path = f"/v1/environments/{quote(vm_id, safe='')}/computer"
+        try:
+            resp = self._t.request("POST", path, body=tool_input)
+        except ApiError as err:
+            if err.status in (400, 409, 503):
+                return ComputerToolResult(
+                    content=[
+                        {
+                            "type": "text",
+                            "text": err.message or "the computer action failed",
+                        }
+                    ],
+                    is_error=True,
+                )
+            raise
+        data = resp.json()
+        content: list[dict[str, Any]] = []
+        if data.get("output"):
+            content.append({"type": "text", "text": data["output"]})
+        if data.get("screenshot"):
+            content.append(
+                {
+                    "type": "image",
+                    "source": {
+                        "type": "base64",
+                        "media_type": "image/png",
+                        "data": data["screenshot"],
+                    },
+                }
+            )
+        if not content:
+            content.append({"type": "text", "text": "done"})
+        return ComputerToolResult(content=content)
 
     def computer_display(self, vm_id: str) -> ComputerDisplay:
         # reports whether the environment has a live display and at what
