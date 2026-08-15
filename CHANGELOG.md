@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.2](https://github.com/folsomintel/fuse/compare/v0.22.1...v0.22.2) (2026-08-15)
+
+
+### Bug Fixes
+
+* **ci:** always clear the release label, without needing read:org ([09b968f](https://github.com/folsomintel/fuse/commit/09b968f741ca6262ed160df8d22ba8241d86ddef))
+
 ## [0.22.1](https://github.com/folsomintel/fuse/compare/v0.22.0...v0.22.1) (2026-08-15)
 
 
