@@ -155,13 +155,20 @@ func newUpCmd() *cobra.Command {
 				return fmt.Errorf("missing required secrets: %s (pass --allow-empty-secrets to accept empty values)", strings.Join(missing, ", "))
 			}
 
+			// --task-id wins, then the Fusefile's name:, then the parent
+			// directory. only the last one is a guess, so it is the only one
+			// announced: a declared name is what the author asked for and
+			// does not need narrating back at them.
+			if taskID == "" && f.Name != "" {
+				taskID = f.Name
+			}
 			if taskID == "" {
 				taskID = defaultTaskID(path)
-				// the Fusefile has no task id field, so the cli invents one
-				// from the parent directory name. say so before the create,
-				// since two checkouts of the same repo derive the same id and
-				// the second one collides.
-				infof("no --task-id: using %q, derived from the Fusefile's directory", taskID)
+				// nothing declared a name, so the cli invents one from the
+				// parent directory. say so before the create, since two
+				// checkouts of the same repo derive the same id and the
+				// second one collides.
+				infof("no --task-id and no `name:` in the Fusefile: using %q, derived from the Fusefile's directory", taskID)
 			}
 
 			// a build artifact already carries the setup phase's result baked
