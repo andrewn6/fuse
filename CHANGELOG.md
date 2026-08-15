@@ -1,5 +1,14 @@
 # Changelog
 
+## [0.22.1](https://github.com/folsomintel/fuse/compare/v0.22.0...v0.22.1) (2026-08-15)
+
+
+### Bug Fixes
+
+* **host-agent:** point compose at podman's socket so services can start ([25b5692](https://github.com/folsomintel/fuse/commit/25b56928dca808d0e0c4bb9fb1015d65f8d93665))
+* **host-agent:** write /fuse credentials readable by root only ([25cbd9c](https://github.com/folsomintel/fuse/commit/25cbd9cfd8159925eddcf9c2ce38b4eeab666f4a))
+* **orchestrator:** name the gpu when a gpu-less fleet refuses a gpu request ([2d16005](https://github.com/folsomintel/fuse/commit/2d160053ba75ee904536656e2e240fbdc3f8d832))
+
 ## [0.22.0](https://github.com/folsomintel/fuse/compare/v0.21.0...v0.22.0) (2026-08-15)
 
 
