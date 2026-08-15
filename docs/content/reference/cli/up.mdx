@@ -39,6 +39,7 @@ which streams until the environment is destroyed or fails.
 | `--from-build` | Boot from a [`fuse build`](/reference/cli/build) artifact instead of a base image. Skips the `setup:` phase. |
 | `--plan` | Print the derived [setup layer cache](/docs/concepts/fusefile#the-setup-layer-cache) plan and exit without creating anything. |
 | `--no-cache` | Ignore the Fusefile's `cache` block and run every setup step. |
+| `--show-copy` | Print what the `copy:` block ships, and what [`.fuseignore`](/docs/concepts/fusefile#fuseignore) dropped, before creating anything. |
 
 `--from-build` is mutually exclusive with both `--plan` and `--no-cache`: a
 `--from-build` boot runs no setup steps, so there is no layer plan for it to
@@ -81,6 +82,34 @@ Everything that can go wrong with a source therefore fails locally, naming the
 entry: a path that does not exist, a symlink (never followed), or a block over
 the 512 KiB total. `--dry-run` runs the same walk, so it catches all three
 without contacting the orchestrator.
+
+The walk is filtered through the
+[`.fuseignore`](/docs/concepts/fusefile#fuseignore) next to the Fusefile, which
+applies whether or not you wrote one: `.git/`, `node_modules/`, `.env` and a
+handful of others are dropped by default. An ignored directory is pruned rather
+than walked, so what it holds counts against neither the 512 KiB cap nor the
+time the walk takes.
+
+## Seeing what `copy:` ships
+
+`--show-copy` prints the result of that walk before anything is created:
+
+```bash
+$ fuse up --show-copy
+copy ./src -> /workspace/src
+  412 files, 311.4 KB (4 skipped by .fuseignore, 2 by the defaults)
+copy ./start.sh -> /workspace/start.sh
+  1 file, 842 B
+total: 413 files, 312.2 KB (limit 512.0 KB)
+```
+
+It is a report, not a mode: `up` goes on to create the environment. Pair it
+with `--dry-run` to stop before the orchestrator is contacted at all.
+
+The skip counts are per **path**, not per file, because an ignored directory is
+never walked: pruning `node_modules/` counts as one skip whatever is inside it.
+A missing file with a count next to `.fuseignore` means a pattern you wrote; one
+counted against the defaults means a `!` line will bring it back.
 
 ## Path resolution
 
