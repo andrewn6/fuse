@@ -375,3 +375,67 @@ func (s *EnvironmentsService) action(ctx context.Context, vmID, action string) (
 	}
 	return &env, nil
 }
+
+// Computer relays one computer-use action to the environment's desktop and
+// returns the result, usually carrying a screenshot. It requires an
+// environment booted from a desktop image; on any other image the server
+// answers 503 with a reason. Screenshots ride back base64-encoded, so the
+// stream client with no overall timeout carries the call.
+func (s *EnvironmentsService) Computer(ctx context.Context, vmID string, action ComputerActionRequest) (*ComputerActionResponse, error) {
+	if s == nil || s.t == nil {
+		return nil, errors.New("environments service is not configured")
+	}
+	if vmID == "" {
+		return nil, errors.New("vm id is required")
+	}
+	if action.Action == "" {
+		return nil, errors.New("action is required")
+	}
+	path := "/v1/environments/" + url.PathEscape(vmID) + "/computer"
+	req, err := s.t.newRequest(ctx, http.MethodPost, path, nil, action)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.t.doStream(req)
+	if err != nil {
+		return nil, err
+	}
+	if err := CheckResponse(resp); err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var res ComputerActionResponse
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, fmt.Errorf("decode computer response: %w", err)
+	}
+	return &res, nil
+}
+
+// ComputerDisplay reports whether the environment has a live display and at
+// what geometry. Up is false with a reason on an image with no desktop.
+func (s *EnvironmentsService) ComputerDisplay(ctx context.Context, vmID string) (*ComputerDisplay, error) {
+	if s == nil || s.t == nil {
+		return nil, errors.New("environments service is not configured")
+	}
+	if vmID == "" {
+		return nil, errors.New("vm id is required")
+	}
+	path := "/v1/environments/" + url.PathEscape(vmID) + "/computer"
+	req, err := s.t.newRequest(ctx, http.MethodGet, path, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := s.t.do(req)
+	if err != nil {
+		return nil, err
+	}
+	if err := CheckResponse(resp); err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	var res ComputerDisplay
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return nil, fmt.Errorf("decode display report: %w", err)
+	}
+	return &res, nil
+}

@@ -132,7 +132,7 @@ wheels = [
 
 [[package]]
 name = "folsom-fuse"
-version = "0.18.0"
+version = "0.21.0"
 source = { editable = "." }
 dependencies = [
     { name = "httpx" },

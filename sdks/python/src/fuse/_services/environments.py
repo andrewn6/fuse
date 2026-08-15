@@ -5,6 +5,9 @@ from urllib.parse import quote
 
 from .._transport import Transport
 from ..types import (
+    ComputerAction,
+    ComputerDisplay,
+    ComputerResult,
     CreateRequest,
     EnvironmentInfo,
     EnvironmentPage,
@@ -86,6 +89,28 @@ class EnvironmentsService:
             "POST", path, params={"action": "fork"}, body=options or ForkOptions()
         )
         return EnvironmentInfo.model_validate(resp.json())
+
+    def computer(self, vm_id: str, action: ComputerAction) -> ComputerResult:
+        # relays one computer-use action to the environment's desktop and
+        # returns the result, usually carrying a base64 png screenshot.
+        # requires an environment booted from a desktop image; on any other
+        # image the server answers 503 with a reason.
+        if not vm_id:
+            raise ValueError("vm id is required")
+        if not action.action:
+            raise ValueError("action is required")
+        path = f"/v1/environments/{quote(vm_id, safe='')}/computer"
+        resp = self._t.request("POST", path, body=action)
+        return ComputerResult.model_validate(resp.json())
+
+    def computer_display(self, vm_id: str) -> ComputerDisplay:
+        # reports whether the environment has a live display and at what
+        # geometry. up is false with a reason on an image with no desktop.
+        if not vm_id:
+            raise ValueError("vm id is required")
+        path = f"/v1/environments/{quote(vm_id, safe='')}/computer"
+        resp = self._t.request("GET", path)
+        return ComputerDisplay.model_validate(resp.json())
 
     def exec(self, vm_id: str, request: ExecRequest) -> ExecResult:
         # runs a command inside a running environment's guest. requires the

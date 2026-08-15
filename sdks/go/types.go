@@ -75,6 +75,53 @@ type HealthcheckHTTP struct {
 	Path string `json:"path,omitempty"`
 }
 
+// DesktopSpec is the geometry of the environment's graphical session (the
+// Fusefile's `desktop:` block). It requires an image that carries the desktop
+// stack; on any other image the declaration is inert and the computer surface
+// reports the display as absent.
+//
+// Both fields are required, 320 to 3840 each: a guessed dimension would
+// silently shift every coordinate a computer-use model emits.
+type DesktopSpec struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
+// ComputerActionRequest is one computer-use action, in the same shape
+// Anthropic's computer tool emits as tool_use input, so translating a
+// tool_use block into a call is mechanical. Only Action is required; which
+// other fields apply depends on the action, and the guest agent enforces the
+// full schema.
+type ComputerActionRequest struct {
+	Action          string  `json:"action"`
+	Coordinate      []int   `json:"coordinate,omitempty"`
+	StartCoordinate []int   `json:"start_coordinate,omitempty"`
+	Text            string  `json:"text,omitempty"`
+	Region          []int   `json:"region,omitempty"`
+	Duration        float64 `json:"duration,omitempty"`
+	ScrollDirection string  `json:"scroll_direction,omitempty"`
+	ScrollAmount    int     `json:"scroll_amount,omitempty"`
+}
+
+// ComputerActionResponse is the guest's answer to one action. Screenshot is
+// a base64 PNG, present on every action that implies one; for zoom it is the
+// cropped region at full resolution.
+type ComputerActionResponse struct {
+	Output     string `json:"output,omitempty"`
+	Screenshot string `json:"screenshot,omitempty"`
+}
+
+// ComputerDisplay reports the environment's display: whether it is up and at
+// what geometry, so a caller can populate display_width_px /
+// display_height_px in its computer tool definition without hardcoding them.
+type ComputerDisplay struct {
+	Display string `json:"display,omitempty"`
+	Up      bool   `json:"up"`
+	Width   int    `json:"width"`
+	Height  int    `json:"height"`
+	Error   string `json:"error,omitempty"`
+}
+
 // Health is the last verdict of an environment's healthcheck. State is one of
 // the Health* constants below.
 //
@@ -120,6 +167,11 @@ type CreateRequest struct {
 	// never populated. It is not evaluated inside Create: the call returns as
 	// soon as the VM is up, and the verdict arrives on later reads.
 	Healthcheck *HealthcheckSpec `json:"healthcheck,omitempty"`
+
+	// Desktop is the graphical session's geometry. Omit it for an
+	// environment with no desktop, in which case a desktop image keeps its
+	// baked default geometry.
+	Desktop *DesktopSpec `json:"desktop,omitempty"`
 
 	// Files are guest files written before StartupScript runs, keyed by
 	// absolute guest path with base64-encoded content. It is what a
