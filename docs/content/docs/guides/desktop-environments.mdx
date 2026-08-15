@@ -1,0 +1,70 @@
+---
+title: Desktop environments
+sidebar:
+  icon: monitor
+description: Bake a rootfs that boots to a working X session, so an environment has a screen to drive
+---
+
+Most Fuse environments are headless: a guest agent, a workload, no pixels.
+A computer-use agent needs the opposite — a display to screenshot, a pointer to
+move, a browser to open. The desktop image provides that: it boots straight to
+a running X session with a window manager, a panel, and Firefox installed,
+inside the same Firecracker isolation every other environment gets.
+
+The display is Xvfb, a software framebuffer. It needs no GPU and no extra
+virtual devices, so a desktop environment schedules onto any Firecracker host
+like any other environment.
+
+## Baking the image
+
+The desktop is a second image variant, layered on the standard baked rootfs on
+the host:
+
+```bash
+cd host-agent/firecracker
+./fc-bake-rootfs.sh           # the base image, if you have not baked it yet
+./fc-bake-desktop-rootfs.sh   # layers the desktop on top -> rootfs-desktop.ext4
+mkdir -p images && cp rootfs-desktop.ext4 images/desktop.ext4
+```
+
+The bake installs the desktop stack (Xvfb, mutter, tint2, xdotool, scrot,
+xclip, Firefox ESR, pcmanfm) by resolving it in an `ubuntu:22.04` container on
+the host and extracting the result into the image — the guest itself cannot run
+`apt-get`. It finishes by booting the display inside a chroot and capturing a
+screenshot, so a broken bundle fails at bake time rather than at first boot.
+
+What comes up at boot, in order: `fuse-display` (Xvfb on `:1`), `fuse-wm`
+(mutter), `fuse-panel` (tint2), then `fused`. The agent is deliberately ordered
+last so nothing can reach the environment before the screen it would be
+driving exists.
+
+## Using the image
+
+Name it from a Fusefile like any other host-baked image:
+
+```yaml
+version: 1
+image: desktop
+
+resources:
+  cpus: 2
+  memory: 4GB # a browser session does not fit the 1GB default
+```
+
+The display geometry defaults to 1024x768. It can be changed at bake time with
+`FC_DESKTOP_GEOMETRY=1280x800x24 ./fc-bake-desktop-rootfs.sh`.
+
+## Sizing and cost
+
+A desktop image lands in the 1.5–2 GB range against the base image's few
+hundred MB. That is fine once it is on a host, but it is 2 GB crossing the wire
+the first time an environment lands somewhere new. Memory matters more:
+Firefox needs real RAM, so budget 2–4 GB where a headless environment gets by
+on the 1 GB default.
+
+## Read next
+
+- [Agent sandboxes](/docs/guides/agent-sandboxes) — the isolation story this
+  builds on
+- [Interactive remote debugging](/docs/guides/interactive-debugging) — exec
+  into the environment to poke at the session by hand

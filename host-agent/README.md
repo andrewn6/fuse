@@ -268,6 +268,48 @@ Built on top of the Firecracker CI Ubuntu 22.04 rootfs. Contents injected:
   of the config. Bridged per-container networks are not supported.
 - Kernel lacks fuse and nftables (see above).
 
+## Baking the desktop rootfs (`rootfs-desktop.ext4`)
+
+`./fc-bake-desktop-rootfs.sh` layers a graphical session onto `rootfs-fused.ext4`
+(bake that first). It exists so a Fuse environment can be driven by a computer-use
+agent: something has to render pixels, take clicks, and answer screenshots.
+
+Contents added on top of the base image:
+
+- Xvfb on display `:1` (software framebuffer — no GPU, no extra devices), default
+  geometry `1024x768x24`, override at bake time with `FC_DESKTOP_GEOMETRY`
+- mutter (window manager) and tint2 (panel), matching Anthropic's computer-use
+  reference image so behaviour is comparable
+- `xdotool`, `scrot`, `xclip` — the input/capture/clipboard primitives
+- Firefox ESR (from the mozillateam PPA; the archive `firefox` on 22.04 is a
+  snap shim and snaps cannot run in the guest), pcmanfm, xterm
+- systemd units `fuse-display` / `fuse-wm` / `fuse-panel`, enabled at boot, with
+  a `fused.service` drop-in ordering the agent after the desktop
+
+The guest cannot `apt-get` (see the known limitations above), so the desktop
+stack is resolved inside an `ubuntu:22.04` container on the host and the
+resulting files are extracted into the image — the same trick the base bake uses
+for iptables, just bigger. Expect the image to land in the 1.5–2 GB range
+against the base's few hundred MB, and budget it accordingly on first
+distribution to a new host.
+
+The bake ends by booting Xvfb inside a chroot of the image and capturing a real
+screenshot, so a bundle with a missing library fails at bake time instead of at
+first VM boot (`FC_DESKTOP_SKIP_DISPLAY_CHECK=1` skips this on hosts where
+chroot X refuses to start).
+
+To use it, place it in the images dir and name it from a Fusefile:
+
+```bash
+mkdir -p images && cp rootfs-desktop.ext4 images/desktop.ext4
+```
+
+```yaml
+image: desktop
+resources:
+  memory: 4GB # a browser session does not fit the 1GB default
+```
+
 ## Re-baking
 
 Re-run `./fc-bake-rootfs.sh` — it rebuilds `rootfs-fused.ext4` idempotently from

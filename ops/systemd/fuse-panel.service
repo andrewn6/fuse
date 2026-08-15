@@ -1,0 +1,14 @@
+[Unit]
+Description=Fuse desktop panel (tint2 on :1)
+After=fuse-wm.service
+Requires=fuse-display.service
+
+[Service]
+Type=simple
+Environment=DISPLAY=:1
+ExecStart=/usr/bin/tint2
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

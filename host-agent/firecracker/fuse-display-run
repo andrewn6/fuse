@@ -1,0 +1,31 @@
+#!/bin/sh
+# starts the fuse desktop display (xvfb on :1).
+#
+# geometry resolution order:
+#   1. /fuse/desktop.json          uploaded by the orchestrator when the
+#                                  fusefile declared a desktop block
+#   2. /etc/default/fuse-desktop   baked default (FUSE_DISPLAY_GEOMETRY)
+#   3. 1024x768x24
+#
+# the json is machine-written by the orchestrator ({"width":1280,"height":800}),
+# so a flat sed extraction is enough; anything unparseable falls through to the
+# baked default rather than refusing to start a display at all.
+
+geometry=""
+if [ -f /fuse/desktop.json ]; then
+  w=$(sed -n 's/.*"width"[^0-9]*\([0-9][0-9]*\).*/\1/p' /fuse/desktop.json)
+  h=$(sed -n 's/.*"height"[^0-9]*\([0-9][0-9]*\).*/\1/p' /fuse/desktop.json)
+  if [ -n "$w" ] && [ -n "$h" ]; then
+    geometry="${w}x${h}x24"
+  fi
+fi
+
+if [ -z "$geometry" ]; then
+  [ -f /etc/default/fuse-desktop ] && . /etc/default/fuse-desktop
+  geometry="${FUSE_DISPLAY_GEOMETRY:-1024x768x24}"
+fi
+
+# a stale lock from an unclean stop would keep the display down forever
+rm -f /tmp/.X1-lock /tmp/.X11-unix/X1
+
+exec /usr/bin/Xvfb :1 -screen 0 "$geometry" -nolisten tcp
