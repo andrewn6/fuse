@@ -1,0 +1,32 @@
+---
+title: fuse computer screenshot
+sidebar:
+  icon: camera
+  label: screenshot
+description: Capture a desktop environment's screen to a PNG
+---
+
+```bash
+fuse computer screenshot <id>
+fuse computer screenshot <id> --out shot.png
+fuse computer screenshot <id> --out - > shot.png
+```
+
+## Flags
+
+| Flag | Purpose |
+| --- | --- |
+| `--out` | File to write the PNG to. Defaults to `screenshot.png`; `-` writes the raw PNG to stdout for piping. |
+
+The flag is `--out` rather than `-o` because `-o` is the global output-format
+flag.
+
+With `-o json`, the file is still written and its location is reported as one
+object:
+
+```json
+{ "path": "screenshot.png", "bytes": 48213 }
+```
+
+Screenshots are captured guest-side by the agent and travel base64-encoded
+through the orchestrator; nothing is stored server-side.
