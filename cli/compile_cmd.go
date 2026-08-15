@@ -91,8 +91,14 @@ type compiledRequest struct {
 	Spec           compiledSpec      `json:"spec" yaml:"spec"`
 	ManifestInline string            `json:"manifest_inline,omitempty" yaml:"manifest_inline,omitempty"`
 	Secrets        map[string]string `json:"secrets" yaml:"secrets"`
-	StartupScript  string            `json:"startup_script,omitempty" yaml:"startup_script,omitempty"`
-	Expose         []compiledExpose  `json:"expose,omitempty" yaml:"expose,omitempty"`
+	// Files is the compiled `copy` block: guest path to base64 body. It is
+	// only ever populated by `fuse up --dry-run`, which has already walked
+	// the sources; `fuse compile` leaves it empty for the same reason it
+	// leaves a `files:` entry's `source` unread, which is that it reports
+	// what a Fusefile compiles to and never reads what sits next to it.
+	Files         map[string]string `json:"files,omitempty" yaml:"files,omitempty"`
+	StartupScript string            `json:"startup_script,omitempty" yaml:"startup_script,omitempty"`
+	Expose        []compiledExpose  `json:"expose,omitempty" yaml:"expose,omitempty"`
 	// Healthcheck is the environment-level readiness probe, absent when the
 	// Fusefile declared none.
 	Healthcheck    *compiledHealthcheck `json:"healthcheck,omitempty" yaml:"healthcheck,omitempty"`

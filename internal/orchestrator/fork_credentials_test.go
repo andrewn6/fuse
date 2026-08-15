@@ -25,6 +25,11 @@ type credForkEnv struct {
 	authToken       string
 	startAgentCalls []AgentSpec
 
+	// uploadedPaths records what was written into this guest over the wire,
+	// as opposed to what it inherited from the source's disk. The two are
+	// indistinguishable in files, since CreateFromCheckpoint seeds it.
+	uploadedPaths []string
+
 	// onUpload runs before each Upload records its file, so a test can drive
 	// something concurrent-looking (a reconcile tick) from inside the fork's
 	// credential-upload window.
@@ -63,6 +68,7 @@ func (e *credForkEnv) Upload(_ context.Context, data []byte, path string) error 
 	cp := make([]byte, len(data))
 	copy(cp, data)
 	e.files[path] = cp
+	e.uploadedPaths = append(e.uploadedPaths, path)
 	return nil
 }
 

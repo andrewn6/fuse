@@ -1626,6 +1626,19 @@ components:
         startup_script:
           type: string
           description: Optional script run inside the guest at boot.
+        files:
+          type: object
+          additionalProperties:
+            type: string
+          description: |
+            Guest files written before `startup_script` runs, keyed by
+            absolute guest path with base64-encoded content. This is
+            what a Fusefile's `copy` block compiles to. A path must be
+            absolute and clean, and must not be under `/fuse`, which
+            holds the guest agent's manifest, secrets and credentials;
+            the total decoded size is capped at 512 KiB and a larger
+            request is rejected with 413. Permissions are not carried,
+            so an executable arrives without its bit.
         startup_script_timeout_seconds:
           type: integer
           format: int64

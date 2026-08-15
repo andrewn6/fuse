@@ -121,6 +121,14 @@ type CreateRequest struct {
 	// soon as the VM is up, and the verdict arrives on later reads.
 	Healthcheck *HealthcheckSpec `json:"healthcheck,omitempty"`
 
+	// Files are guest files written before StartupScript runs, keyed by
+	// absolute guest path with base64-encoded content. It is what a
+	// Fusefile's `copy` block compiles to. Paths under /fuse are rejected
+	// (that is the guest agent's own directory), and the total decoded size
+	// is capped at 512 KiB, since these travel inside the create body.
+	// Permissions are not carried: chmod in the startup script.
+	Files map[string]string `json:"files,omitempty"`
+
 	// StartupScriptTimeoutSeconds bounds StartupScript. Zero uses the
 	// orchestrator's default. A value above the orchestrator's configured
 	// maximum is rejected rather than clamped.

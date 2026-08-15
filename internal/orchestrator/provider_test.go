@@ -21,6 +21,11 @@ type bootMockEnv struct {
 	execCalls    [][]string
 	checkpoints  []Checkpoint
 
+	// uploadsAtFirstExec is how many files had been uploaded when the first
+	// ExecStream ran, so a test can assert that guest files land before the
+	// startup script rather than merely that both happened.
+	uploadsAtFirstExec int
+
 	// blockExec makes ExecStream run until its context is done, modelling a
 	// startup script that never terminates (a foreground server).
 	blockExec bool
@@ -33,6 +38,11 @@ func (e *bootMockEnv) Exec(_ context.Context, _ []string, _ ExecOptions) (ExecRe
 	return ExecResult{}, nil
 }
 func (e *bootMockEnv) ExecStream(ctx context.Context, _, _ io.Writer, name string, args ...string) error {
+	if len(e.execCalls) == 0 {
+		e.mu.Lock()
+		e.uploadsAtFirstExec = len(e.uploads)
+		e.mu.Unlock()
+	}
 	e.execCalls = append(e.execCalls, append([]string{name}, args...))
 	if e.blockExec {
 		<-ctx.Done()

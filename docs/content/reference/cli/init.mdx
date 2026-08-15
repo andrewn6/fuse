@@ -14,6 +14,12 @@ disk, documenting the common v1 fields with an explanatory comment on each. The
 GPU fields under `resources` (`gpu`, `gpu_kind`, `gpu_profile`) are not part of
 the scaffold, see [Fusefile](/docs/concepts/fusefile) for those.
 
+It also writes a [`.fuseignore`](/docs/concepts/fusefile#fuseignore) next to it,
+which bounds what a `copy:` block ships. Every line in it is a comment: the
+default ignores (`.git/`, `node_modules/`, `.env` and friends) apply with or
+without the file, so the scaffold exists to show you what they are and where to
+override one, not to change anything.
+
 The scaffold is deliberately larger than a working file. It names every field so
 you can see what exists, which also means it is not runnable as written: it
 declares a secret you have to supply at `up` time, and an `image` that must
@@ -26,19 +32,19 @@ boot with a bare `fuse up`, see
 | Flag | Purpose |
 | --- | --- |
 | `-f, --file` | Path to write. Default: `./Fusefile`. |
-| `--force` | Overwrite an existing file at the target path. |
+| `--force` | Overwrite an existing Fusefile or `.fuseignore` at the target path. |
 
 ## Examples
 
 ```bash
 fuse init
-# writes ./Fusefile
+# writes ./Fusefile and ./.fuseignore
 
 fuse init ./services/api/Fusefile
 # the positional argument is the file to write, not a directory
 
 fuse init --force
-# overwrites an existing ./Fusefile
+# overwrites an existing ./Fusefile and ./.fuseignore
 ```
 
 Without `--force`, `init` refuses to overwrite an existing file at the target
@@ -46,6 +52,10 @@ path, protecting any edits you've already made. Passing a directory path is not
 a shortcut for the Fusefile inside it, it aborts with
 `a Fusefile already exists at ./services/api (use --force to overwrite)`
 because the directory itself exists.
+
+An existing `.fuseignore` stops it the same way, naming that file instead. Both
+are checked before either is written, so a refusal never leaves you half
+scaffolded.
 
 After scaffolding, edit the file to match your workload, then run
 [`fuse up`](/reference/cli/up) to bring it up.

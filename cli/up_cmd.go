@@ -31,6 +31,7 @@ func newUpCmd() *cobra.Command {
 		noCache           bool
 		waitHealthy       bool
 		healthTimeout     time.Duration
+		showCopy          bool
 	)
 	cmd := &cobra.Command{
 		Use:   "up [path]",
@@ -95,6 +96,32 @@ func newUpCmd() *cobra.Command {
 				return fmt.Errorf("--wait-healthy needs a `healthcheck:` block in %s: without one the environment reports no verdict to wait for", path)
 			}
 
+			// `copy` entries name sources relative to the Fusefile too, and
+			// the walk happens here rather than at compile time because it is
+			// the only part of the pipeline that reads the filesystem. It runs
+			// before the --dry-run branch so a missing source or an oversized
+			// tree fails the dry run as well, which is the point of one.
+			//
+			// The walk is filtered through the .fuseignore next to the
+			// Fusefile, which exists whether or not the author wrote one: the
+			// built-in defaults are what keep `from: .` from walking .git into
+			// a 512KiB request body. Ignored paths are dropped before they are
+			// sized, so what a pattern removes does not count against the cap.
+			ign, err := loadFuseignore(filepath.Dir(path))
+			if err != nil {
+				return err
+			}
+			copyFiles, copyStats, err := collectCopy(c.Copy, filepath.Dir(path), ign.decide)
+			if err != nil {
+				return fmt.Errorf("%s: %w", path, err)
+			}
+			// printed before anything else can fail and long before the
+			// create, since the answer to "what am I about to upload" is only
+			// worth having while it can still change something.
+			if showCopy {
+				renderCopyReport(os.Stderr, copyStats)
+			}
+
 			var lp *layerPlan
 			if fromBuild == "" {
 				// derive layer keys when caching is on (so a bad `inputs` entry
@@ -157,7 +184,11 @@ func newUpCmd() *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return writeCompiled(cmd.OutOrStdout(), format, c, newCompiledRequest(taskID, fromBuild, c))
+				req := newCompiledRequest(taskID, fromBuild, c)
+				// the walk already happened, so a dry run can show the copied
+				// files exactly as the create would carry them.
+				req.Files = encodeCopyFiles(copyFiles)
+				return writeCompiled(cmd.OutOrStdout(), format, c, req)
 			}
 
 			manifestInline := base64.StdEncoding.EncodeToString(c.ManifestJSON)
@@ -209,6 +240,7 @@ func newUpCmd() *cobra.Command {
 					Labels:             c.Spec.Labels,
 				},
 				ManifestInline:              manifestInline,
+				Files:                       encodeCopyFiles(copyFiles),
 				Secrets:                     secretMap,
 				StartupScript:               startupScript,
 				StartupScriptTimeoutSeconds: c.StartupTimeoutSeconds,
@@ -275,6 +307,7 @@ func newUpCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "ignore the Fusefile's cache block and run every setup step")
 	cmd.Flags().BoolVar(&waitHealthy, "wait-healthy", false, "after the environment is running, keep waiting until its `healthcheck` reports passing")
 	cmd.Flags().DurationVar(&healthTimeout, "health-timeout", 2*time.Minute, "how long --wait-healthy waits for a passing verdict before giving up")
+	cmd.Flags().BoolVar(&showCopy, "show-copy", false, "print what the copy block ships, and what .fuseignore dropped, before creating anything")
 	return cmd
 }
 
