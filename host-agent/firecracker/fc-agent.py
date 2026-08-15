@@ -1119,6 +1119,30 @@ def do_exec(vm_id: str, cmd: list[str], timeout_ms: int = 0) -> dict:
     }
 
 
+# The guest has no docker. The rootfs bakes in docker's compose v2 binary as a
+# compose *provider* and drives podman through podman.socket (fc-bake-rootfs.sh
+# enables the socket for exactly this reason). Compose still defaults to
+# /var/run/docker.sock, which does not exist in the guest, so DOCKER_HOST has to
+# name podman's socket explicitly. Without it compose cannot reach a runtime and
+# fails the whole create, not just the service: `docker compose up` runs before
+# fused starts, under `set -e`.
+PODMAN_SOCKET = "/run/podman/podman.sock"
+
+
+def compose_up_command() -> str:
+    """Shell that starts the compose project, for a guest that declared services.
+
+    Guarded on the file's presence: an environment with no `services` in its
+    Fusefile has no compose.yaml and this is a no-op.
+    """
+    return (
+        "if [ -f /fuse/compose.yaml ]; then "
+        f"DOCKER_HOST=unix://{PODMAN_SOCKET} "
+        "/usr/local/bin/docker-compose -f /fuse/compose.yaml up -d; "
+        "fi; "
+    )
+
+
 def do_start_agent(vm_id: str, manifest_path: str, secrets_path: str,
                    gateway: str | None = None, extra_args: str | None = None,
                    tls_cert_path: str | None = None, tls_key_path: str | None = None,
@@ -1178,17 +1202,10 @@ def do_start_agent(vm_id: str, manifest_path: str, secrets_path: str,
         "[Install]\n"
         "WantedBy=multi-user.target\n"
     )
-    # Bring up any declared services before starting the main task. Guarded on
-    # the compose file's presence, so environments with no `services` in their
-    # Fusefile (including every existing caller of this function, and the
-    # FROZEN /start-surfd path which never passes one) see no change at all.
-    # `docker-compose` here is the baked podman compose provider (see
-    # fc-bake-rootfs.sh) — the guest has no docker CLI.
-    compose_up = (
-        "if [ -f /fuse/compose.yaml ]; then "
-        "/usr/local/bin/docker-compose -f /fuse/compose.yaml up -d; "
-        "fi; "
-    )
+    # Bring up any declared services before starting the main task. Environments
+    # with no `services` (including the FROZEN /start-surfd path, which never
+    # passes one) write no compose.yaml and so see no change at all.
+    compose_up = compose_up_command()
     remote = (
         "export LC_ALL=C; set -e; "
         # Check the absolute binary path, not `command -v fused`: a
