@@ -1,5 +1,32 @@
 # Changelog
 
+## [0.21.0](https://github.com/folsomintel/fuse/compare/v0.20.0...v0.21.0) (2026-08-15)
+
+
+### Features
+
+* **api:** accept a files map on create and upload it before the startup script ([b674e5c](https://github.com/folsomintel/fuse/commit/b674e5c17ec95e4050f69703d156548bb4bec8dc))
+* **cli:** add .fuseignore to bound what the copy block ships ([#177](https://github.com/folsomintel/fuse/issues/177)) ([02888f7](https://github.com/folsomintel/fuse/commit/02888f7d3037d3050a3f9e4fb72495e3fffb2476))
+* **cli:** scaffold the build block and label steps from it ([8f6f9b2](https://github.com/folsomintel/fuse/commit/8f6f9b2af401f02194c43f35958d73b6967d2edb))
+* **cli:** walk copy sources into guest files and send them with create ([5823893](https://github.com/folsomintel/fuse/commit/5823893647f0e8be7b02fbac2f9d67a76d1b8923))
+* **fusefile:** add a copy block for shipping local files into the guest ([ddce129](https://github.com/folsomintel/fuse/commit/ddce1297cf189ec613b6a619b3982cad0298d9f8))
+* **fusefile:** add a copy block with from/to entries to the schema and validator ([a84bda5](https://github.com/folsomintel/fuse/commit/a84bda545bf1668b5385ea49388247be1ad08499))
+* **fusefile:** add a top-level build block ([72ded77](https://github.com/folsomintel/fuse/commit/72ded7764558e5b8207357b177b64b75c574e9bc))
+* **fusefile:** add a top-level build block with setup as a deprecated alias ([b60c23b](https://github.com/folsomintel/fuse/commit/b60c23bff0e3a758a7c81795b563f58799e4f80c))
+* **fusefile:** add a top-level env block for setup and run ([96764b7](https://github.com/folsomintel/fuse/commit/96764b75913a525f0e66e89d35d01f874e554a0b))
+* **fusefile:** add a top-level env block to the authoring schema ([fde8b8e](https://github.com/folsomintel/fuse/commit/fde8b8e7a6b114dbcc31172af10bb690d282b220))
+* **fusefile:** add an environment-level healthcheck probe ([#176](https://github.com/folsomintel/fuse/issues/176)) ([6921acb](https://github.com/folsomintel/fuse/commit/6921acb6ae7927771e6a8de4c0883ee3cc1858f0))
+* **fusefile:** carry the env block in the manifest and source it from the boot script ([19c0616](https://github.com/folsomintel/fuse/commit/19c06161f8ba46f0a0bf45058f2c1045d5ed74a6))
+* **fusefile:** compile the build steps as a distinct phase of the startup script ([256b792](https://github.com/folsomintel/fuse/commit/256b792377a2be4e0a0a1da9d24e40299b1d449c))
+* **fusefile:** resolve copy entries into absolute guest paths at compile time ([d91c9b8](https://github.com/folsomintel/fuse/commit/d91c9b8516bbb3dede95e7240c6d08770c845fe1))
+* **fusefile:** validate top-level env keys and the value-or-secret pair ([23ef188](https://github.com/folsomintel/fuse/commit/23ef188c99beb4982fe45e58dfa7aa94329b58ed))
+* **orchestrator:** render the manifest env block to /fuse/env with secrets resolved ([269ed90](https://github.com/folsomintel/fuse/commit/269ed901c6c040d304debeb5d0b0a8a70b823bcf))
+
+
+### Bug Fixes
+
+* **orchestrator:** re-attach in-flight provisions on restart + reclaim orphaned host allocation ([#68](https://github.com/folsomintel/fuse/issues/68)) ([#172](https://github.com/folsomintel/fuse/issues/172)) ([4ab7590](https://github.com/folsomintel/fuse/commit/4ab759064b27fc1c0fc3b0a0678b92d6f6ba2ec0))
+
 ## [0.20.0](https://github.com/folsomintel/fuse/compare/v0.19.0...v0.20.0) (2026-08-14)
 
 
