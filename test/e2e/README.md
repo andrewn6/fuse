@@ -33,6 +33,27 @@ The orchestrator has to be current too. The `env` block is resolved
 orchestrator-side, so a stale orchestrator silently drops it while the CLI
 happily compiles it.
 
+## In CI
+
+`.github/workflows/e2e.yml` runs this suite on every `v*.*.*` tag, and on demand
+via `workflow_dispatch`. CI cannot host a microVM, so it runs against a
+long-lived test fleet rather than the runner, configured through two secrets:
+
+| Secret           | Value                                                 |
+| ---------------- | ----------------------------------------------------- |
+| `E2E_ORCH_URL`   | Orchestrator base url, e.g. `http://51.79.19.90:8080` |
+| `E2E_ORCH_TOKEN` | A master token for it                                 |
+
+With `E2E_ORCH_URL` unset the job skips rather than failing, so a fork or a
+fresh clone does not get a red X meaning "there is nowhere to test this". The
+workflow scopes to the first active host unless `workflow_dispatch` is given a
+`host_id`, and sets `E2E_PREFIX=ci<run-number>` so concurrent runs cannot
+collide on environment ids.
+
+Running per release is the point of it: every bug this suite has caught lived
+past where the unit tests stop, in the seam between the compiler and the guest,
+and was invisible until something actually booted a VM.
+
 ## Cleanup
 
 Every environment is created with a task id under `E2E_PREFIX` (default `e2e`),

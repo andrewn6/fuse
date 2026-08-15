@@ -1,0 +1,101 @@
+name: E2E
+
+# The Fusefile end-to-end suite, which needs a real orchestrator and a real
+# host: it creates environments and reads the guests back. CI cannot host a
+# microVM, so this runs against a long-lived test fleet instead of a runner.
+#
+# It fires on a release tag, which is the point of it. Every bug this suite has
+# caught so far lived past where the unit tests stop, in the seam between the
+# compiler and the guest, and was invisible until something booted a VM. Running
+# it per release is what closes that gap.
+#
+# workflow_dispatch is the same thing on demand, for a host that was down at
+# release time or a fix you want to confirm before tagging.
+on:
+  workflow_dispatch:
+    inputs:
+      host_id:
+        description: "Host to scope to (default: the first active host)"
+        required: false
+        type: string
+  push:
+    tags: ["v*.*.*"]
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    name: Fusefile e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Absent secrets mean no test fleet is configured. That is a normal state
+      # for a fork or a fresh clone, so it skips rather than failing: a red X
+      # here would say "the release is broken" when it means "there is nowhere
+      # to test it".
+      - name: Check for a configured test fleet
+        id: fleet
+        env:
+          ORCH_URL: ${{ secrets.E2E_ORCH_URL }}
+        run: |
+          if [ -z "${ORCH_URL:-}" ]; then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::E2E_ORCH_URL is not set; skipping the e2e suite."
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Set up Go
+        if: steps.fleet.outputs.configured == 'true'
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Built from this ref, not installed from a release. A released CLI can be
+      # behind the Fusefiles here: `env`, `build`, `copy` and `healthcheck` all
+      # shipped in the schema before they were in a release tarball, and a stale
+      # CLI rejects them at parse time.
+      - name: Build the CLI
+        if: steps.fleet.outputs.configured == 'true'
+        run: go build -o "${RUNNER_TEMP}/fuse" ./cli
+
+      - name: Connect to the test fleet
+        if: steps.fleet.outputs.configured == 'true'
+        env:
+          ORCH_URL: ${{ secrets.E2E_ORCH_URL }}
+          ORCH_TOKEN: ${{ secrets.E2E_ORCH_TOKEN }}
+          HOST_ID: ${{ inputs.host_id }}
+        run: |
+          set -euo pipefail
+          FUSE="${RUNNER_TEMP}/fuse"
+          "$FUSE" connect "$ORCH_URL" --token "$ORCH_TOKEN" --master --name e2e
+
+          # A host has to be selected or every environment command silently
+          # scopes to nothing and reports success over an empty list.
+          if [ -z "${HOST_ID:-}" ]; then
+            HOST_ID="$("$FUSE" hosts -o json \
+              | jq -r '[.hosts[] | select(.state == "active")][0].id // empty')"
+          fi
+          if [ -z "${HOST_ID}" ]; then
+            echo "no active host in the fleet" >&2
+            exit 1
+          fi
+          "$FUSE" host "$HOST_ID"
+          echo "scoped to host ${HOST_ID}"
+
+      - name: Run the suite
+        if: steps.fleet.outputs.configured == 'true'
+        # The suite destroys everything it creates on exit, including on a
+        # failure, but give it room to finish that cleanup rather than having
+        # the runner kill it mid-run and leak environments onto a shared host.
+        timeout-minutes: 45
+        env:
+          FUSE_BIN: ${{ runner.temp }}/fuse
+          # Namespaced per run so two releases tagged close together cannot
+          # collide on environment ids, and so a leaked environment is
+          # traceable to the run that made it.
+          E2E_PREFIX: ci${{ github.run_number }}
+        run: ./test/e2e/run.sh
