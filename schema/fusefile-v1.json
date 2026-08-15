@@ -86,6 +86,7 @@
       "items": { "type": "string" }
     },
     "healthcheck": { "$ref": "#/$defs/envHealthcheck" },
+    "desktop": { "$ref": "#/$defs/desktop" },
     "startup_timeout": {
       "allOf": [{ "$ref": "#/$defs/duration" }],
       "description": "Go duration bounding build + run. Omit for the orchestrator default (30s)."
@@ -353,6 +354,26 @@
         "start_period": {
           "allOf": [{ "$ref": "#/$defs/duration" }],
           "description": "Grace window from the first attempt during which failures are not counted. Ends for good once the probe passes once."
+        }
+      }
+    },
+    "desktop": {
+      "type": "object",
+      "description": "The geometry of the environment's graphical session. Requires an image that carries the desktop stack; on any other image the declaration is inert. The display number is fixed at :1.",
+      "additionalProperties": false,
+      "required": ["width", "height"],
+      "properties": {
+        "width": {
+          "type": "integer",
+          "minimum": 320,
+          "maximum": 3840,
+          "description": "Display width in pixels."
+        },
+        "height": {
+          "type": "integer",
+          "minimum": 320,
+          "maximum": 3840,
+          "description": "Display height in pixels."
         }
       }
     },
