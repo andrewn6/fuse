@@ -1083,6 +1083,49 @@ def pull_artifact(digest: str, peer_url: str, grant: str, snapshot_id: str = "")
 
 # -- Upload / Exec / start-agent ---------------------------------------------
 
+# Everything under this directory belongs to the guest agent rather than the
+# caller: the manifest, the resolved secrets, the rendered env file, the auth
+# token and the TLS key all land here. Both the API and the Fusefile compiler
+# already refuse a caller file addressed into it.
+RESERVED_GUEST_DIR = "/fuse"
+
+
+def is_reserved_guest_path(path: str) -> bool:
+    """Whether an already-normalized path lives under the reserved directory."""
+    return path == RESERVED_GUEST_DIR or path.startswith(RESERVED_GUEST_DIR + "/")
+
+
+def upload_remote_command(path: str) -> str:
+    """Shell that writes one uploaded file, taking its content on stdin.
+
+    Files under the reserved directory hold credentials in cleartext: the
+    resolved secrets in `env`, the guest agent's own `auth-token`, the TLS key.
+    The upload wire carries no mode, so every one of them used to land at the
+    session's default 0644 and any unprivileged process in the guest could read
+    them. They are written root-only here instead.
+
+    The path is normalized first so a `..` segment cannot make an ordinary
+    destination look reserved and turn the chmod loose on a directory outside
+    /fuse. Callers cannot reach that today, since the API rejects both `..` and
+    reserved paths, so this is the second line of defence rather than the only
+    one.
+    """
+    path = os.path.normpath(path)
+    parent = str(Path(path).parent)
+    if not is_reserved_guest_path(path):
+        return f"mkdir -p {shlex.quote(parent)} && cat > {shlex.quote(path)}"
+    # The umask covers the file and any directory mkdir creates. The explicit
+    # chmods cover directories that already exist, which is the common case:
+    # /fuse is created by whichever upload happens to land first, and a baked
+    # rootfs may ship it world readable.
+    targets = " ".join(shlex.quote(d) for d in sorted({RESERVED_GUEST_DIR, parent}))
+    return (
+        f"umask 0077 && mkdir -p {shlex.quote(parent)} && "
+        f"chmod 0700 {targets} && "
+        f"cat > {shlex.quote(path)} && chmod 0600 {shlex.quote(path)}"
+    )
+
+
 def do_upload(vm_id: str, path: str, content_b64: str) -> None:
     meta = load_meta(vm_id)
     if not meta:
@@ -1091,9 +1134,7 @@ def do_upload(vm_id: str, path: str, content_b64: str) -> None:
         data = base64.b64decode(content_b64)
     except Exception as e:
         raise HTTPError(400, f"bad base64: {e}")
-    remote = (
-        f"mkdir -p {shlex.quote(str(Path(path).parent))} && cat > {shlex.quote(path)}"
-    )
+    remote = upload_remote_command(path)
     rc, out, err = ssh_exec(meta["guest_ip"], remote, stdin=data, timeout=60.0)
     if rc != 0:
         raise HTTPError(500, f"upload failed: {err.decode(errors='replace')}")
