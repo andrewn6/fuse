@@ -1,0 +1,51 @@
+version: 1
+
+# files, copy and workspace resolution.
+#
+# files are embedded in the create request (64KiB cap across all of them);
+# copy uploads alongside it (512KiB cap) and does not preserve permissions,
+# so anything that needs a mode bit gets chmod'd in build. both land before
+# the build steps run.
+resources:
+  cpus: 1
+  memory: 512MB
+  storage: 2GB
+  max_runtime: 20m
+
+# a non-default workspace, to prove relative paths resolve against it and not
+# against /workspace or /.
+workspace: /srv/work
+
+files:
+  # absolute path: lands exactly here.
+  - path: /etc/app/config.yaml
+    mode: "0644"
+    content: |
+      listen: 0.0.0.0:8080
+      log_level: info
+  # relative path: must resolve against workspace, i.e. /srv/work/relative.txt.
+  - path: relative.txt
+    content: "relative ok"
+  # a mode that is observable: 0600 is distinguishable from any default.
+  - path: /etc/app/secret.conf
+    mode: "0600"
+    content: "mode check"
+
+copy:
+  - from: assets/app
+    to: /opt/app
+
+build:
+  # copy does not preserve the executable bit, so restore it here.
+  - 'chmod 0755 /opt/app/entrypoint.sh'
+
+run: |
+  {
+    echo "workspace=$PWD"
+    echo "config=$(cat /etc/app/config.yaml | head -1)"
+    echo "relative=$(cat /srv/work/relative.txt)"
+    echo "mode=$(stat -c %a /etc/app/secret.conf)"
+    echo "copied=$(cat /opt/app/version.txt)"
+    echo "nested=$(cat /opt/app/lib/helper.txt)"
+    echo "entrypoint=$(/opt/app/entrypoint.sh)"
+  } > /srv/work/report.txt 2>&1

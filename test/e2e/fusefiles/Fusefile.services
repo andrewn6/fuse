@@ -1,0 +1,46 @@
+version: 1
+
+# in-VM services and secret-backed service env.
+#
+# the guest has no docker: the baked rootfs ships podman with docker's compose
+# v2 binary installed as the compose provider (/usr/local/bin/docker-compose)
+# and podman.socket enabled for it to talk to. so `docker compose up` in the
+# guest agent is really compose-on-podman.
+#
+# redis:7-alpine is deliberately the only image: it is a few MB, and the pull
+# happens on the create path where a heavier image would risk the timeout.
+resources:
+  cpus: 2
+  memory: 1GB
+  storage: 4GB
+  max_runtime: 20m
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports: [6379]
+    restart: unless-stopped
+    env:
+      # a service env secret ref: resolved into the compose project, not into
+      # the startup script. distinct from the top-level env block.
+      REDIS_ARGS:
+        secret: redis_args
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
+
+expose:
+  - port: 6379
+    as: redis
+
+secrets:
+  - redis_args
+
+# pulling and starting the container is the guest agent's job at boot, so run
+# only has to not block. the runner polls for readiness afterwards.
+run: |
+  echo "services env up" > /workspace/services.marker
+
+workspace: /workspace
