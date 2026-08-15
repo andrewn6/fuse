@@ -93,6 +93,20 @@ type HealthcheckHTTP struct {
 	Path string `json:"path,omitempty"`
 }
 
+// DesktopSpec is the geometry of the environment's graphical session (the
+// Fusefile's `desktop:` block). It requires an image that carries the
+// desktop stack; on any other image the declaration is inert and the
+// computer endpoint reports the display as absent.
+//
+// Both fields are required. There is no "omitted means default" here: a
+// guessed dimension would silently shift every coordinate a computer-use
+// model emits, which presents as model failure rather than as the config
+// error it is.
+type DesktopSpec struct {
+	Width  int `json:"width"`
+	Height int `json:"height"`
+}
+
 // Health is the last verdict of an environment's healthcheck.
 //
 // State is one of "starting", "passing", "failing". It is deliberately not
@@ -130,6 +144,11 @@ type CreateEnvironmentRequest struct {
 	// absent. It is not evaluated inside this request: the create call
 	// returns as soon as the VM is up, and the verdict arrives on later reads.
 	Healthcheck *HealthcheckSpec `json:"healthcheck,omitempty"`
+
+	// Desktop is the graphical session's geometry. Omit it for an
+	// environment with no desktop, in which case the image's baked default
+	// applies if the image has a desktop at all.
+	Desktop *DesktopSpec `json:"desktop,omitempty"`
 
 	// Files are caller-supplied guest files written before StartupScript
 	// runs, keyed by absolute guest path with base64-encoded content (the
@@ -348,6 +367,48 @@ type ExecEnvironmentResponse struct {
 	ExitCode int    `json:"exit_code"`
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`
+}
+
+// ── Computer types ─────────────────────────────────────────────────
+
+// ComputerActionRequest is the JSON body accepted by
+// POST /v1/environments/{vmId}/computer. The field names mirror the tool_use
+// input Anthropic's computer tool emits, so a caller's translation layer
+// stays mechanical.
+//
+// The orchestrator validates only that an action was named; the full action
+// schema is owned and enforced by the guest agent, which is baked into the
+// image and versioned separately, so a field this struct has not learned yet
+// still reaches a newer guest intact.
+type ComputerActionRequest struct {
+	Action          string  `json:"action"`
+	Coordinate      []int   `json:"coordinate,omitempty"`
+	StartCoordinate []int   `json:"start_coordinate,omitempty"`
+	Text            string  `json:"text,omitempty"`
+	Region          []int   `json:"region,omitempty"`
+	Duration        float64 `json:"duration,omitempty"`
+	ScrollDirection string  `json:"scroll_direction,omitempty"`
+	ScrollAmount    int     `json:"scroll_amount,omitempty"`
+}
+
+// ComputerActionResponse is the guest's answer to an action. Screenshot is a
+// base64 PNG, present on every action that implies one (which is most of
+// them; a computer-use loop wants pixels back after each step).
+type ComputerActionResponse struct {
+	Output     string `json:"output,omitempty"`
+	Screenshot string `json:"screenshot,omitempty"`
+}
+
+// ComputerDisplay reports the guest display: whether it is up and at what
+// geometry, so a caller can populate display_width_px / display_height_px in
+// its tool definition without hardcoding them. Up is false with a reason in
+// Error on an image with no desktop.
+type ComputerDisplay struct {
+	Display string `json:"display,omitempty"`
+	Up      bool   `json:"up"`
+	Width   int    `json:"width"`
+	Height  int    `json:"height"`
+	Error   string `json:"error,omitempty"`
 }
 
 // ── API key types ──────────────────────────────────────────────────

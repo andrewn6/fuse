@@ -249,6 +249,7 @@ you can stop reading at [The setup layer cache](#the-setup-layer-cache).
 | `healthcheck.timeout` | string | Go duration bounding one attempt. Omit for the guest agent's default (`2s`). Attempts run one at a time, so a value above `interval` is rejected rather than silently stretching the interval. |
 | `healthcheck.retries` | int | Consecutive failures that flip the verdict to `failing`. Omit for the guest agent's default (`3`). A single failed attempt is never a verdict. |
 | `healthcheck.start_period` | string | Go duration measured from the first attempt, during which failures are not counted. It ends for good once the probe passes once. |
+| `desktop` | `{width, height}` | The geometry of the environment's graphical session, both required, 320 to 3840 each. Requires an image baked with the desktop stack; on any other image the block is inert. Omit the whole block to keep a desktop image's baked default. See [Desktop](#desktop). |
 | `secrets` | list of strings | Secret *names* this environment requires. An empty name is rejected: nothing you could pass to `--secret` would satisfy it. Values are supplied out-of-band via `--secret key=value` or `--secrets-file`, never written into the Fusefile itself. |
 
 ## Naming an environment
@@ -483,6 +484,36 @@ unhealthy *inside the guest*: nothing about it reaches the orchestrator.
 The top-level `healthcheck:` is about the environment as a whole, is evaluated
 by the guest agent, and its verdict travels back to the control plane. Both can
 be set on the same Fusefile; they do not interact.
+
+## Desktop
+
+```yaml
+image: desktop
+
+desktop:
+  width: 1280
+  height: 800
+
+resources:
+  memory: 4GB # a browser session does not fit the 1GB default
+```
+
+`desktop:` sets the geometry of the environment's graphical session, for
+environments meant to be driven by a computer-use agent. It requires an image
+baked with the desktop stack (see the
+[desktop environments guide](/docs/guides/desktop-environments)); on any other
+image the block is inert and the computer surface reports the display as
+absent.
+
+Both dimensions are required. A guessed dimension would silently shift every
+coordinate a computer-use model emits, which presents as model failure rather
+than as the config error it is — so there is deliberately no default to fall
+back to. Omitting the whole block is different: that keeps the desktop image's
+baked default (1024x768).
+
+The geometry travels to the guest as `/fuse/desktop.json`, and the guest agent
+restarts the display at the declared size if it came up at a different one.
+The display number is fixed at `:1`.
 
 ## Base images are not OCI images
 

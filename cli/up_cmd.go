@@ -253,6 +253,7 @@ func newUpCmd() *cobra.Command {
 				StartupScriptTimeoutSeconds: c.StartupTimeoutSeconds,
 				Expose:                      toSDKExpose(c.Expose),
 				Healthcheck:                 toSDKHealthcheck(c.Healthcheck),
+				Desktop:                     toSDKDesktop(c.Desktop),
 				SeedSnapshotID:              seedID,
 				// the gateway carries a credential, so it is a flag rather
 				// than a Fusefile field. matching `fuse environment create`
@@ -456,6 +457,16 @@ func toSDKHealthcheck(in *fusefile.HealthcheckSpec) *fuse.HealthcheckSpec {
 		out.HTTP = &fuse.HealthcheckHTTP{Port: in.HTTP.Port, Path: in.HTTP.Path}
 	}
 	return out
+}
+
+// toSDKDesktop converts the compiler's desktop block into the SDK wire type.
+// Nil in, nil out: a Fusefile with no `desktop:` block must send no desktop,
+// which is what tells the server to ship no geometry file into the guest.
+func toSDKDesktop(in *fusefile.DesktopSpec) *fuse.DesktopSpec {
+	if in == nil {
+		return nil
+	}
+	return &fuse.DesktopSpec{Width: in.Width, Height: in.Height}
 }
 
 // missingSecrets returns the entries of required that have does not supply a

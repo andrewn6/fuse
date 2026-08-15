@@ -74,6 +74,12 @@ type compiledHealthcheckHTTP struct {
 	Path string `json:"path,omitempty" yaml:"path,omitempty"`
 }
 
+// compiledDesktop mirrors fuse.DesktopSpec with yaml tags added.
+type compiledDesktop struct {
+	Width  int `json:"width" yaml:"width"`
+	Height int `json:"height" yaml:"height"`
+}
+
 // compiledRequest is the create-environment body a Fusefile compiles into. it
 // mirrors fuse.CreateRequest so the output is directly comparable to what the
 // orchestrator receives, with two deliberate differences:
@@ -101,8 +107,11 @@ type compiledRequest struct {
 	Expose        []compiledExpose  `json:"expose,omitempty" yaml:"expose,omitempty"`
 	// Healthcheck is the environment-level readiness probe, absent when the
 	// Fusefile declared none.
-	Healthcheck    *compiledHealthcheck `json:"healthcheck,omitempty" yaml:"healthcheck,omitempty"`
-	SeedSnapshotID string               `json:"seed_snapshot_id,omitempty" yaml:"seed_snapshot_id,omitempty"`
+	Healthcheck *compiledHealthcheck `json:"healthcheck,omitempty" yaml:"healthcheck,omitempty"`
+	// Desktop is the graphical session's geometry, absent when the Fusefile
+	// declared none.
+	Desktop        *compiledDesktop `json:"desktop,omitempty" yaml:"desktop,omitempty"`
+	SeedSnapshotID string           `json:"seed_snapshot_id,omitempty" yaml:"seed_snapshot_id,omitempty"`
 	// StartupScriptTimeoutSeconds bounds setup + run. Zero means the author
 	// asked for no bound and the orchestrator's default applies.
 	StartupScriptTimeoutSeconds int64    `json:"startup_script_timeout_seconds,omitempty" yaml:"startup_script_timeout_seconds,omitempty"`
@@ -250,6 +259,9 @@ func newCompiledRequest(taskID, seedSnapshotID string, c *fusefile.Compiled) com
 			req.Healthcheck.HTTP = &compiledHealthcheckHTTP{Port: hc.HTTP.Port, Path: hc.HTTP.Path}
 		}
 	}
+	if d := c.Desktop; d != nil {
+		req.Desktop = &compiledDesktop{Width: d.Width, Height: d.Height}
+	}
 	return req
 }
 
@@ -364,6 +376,11 @@ func writeCompiledText(w io.Writer, c *fusefile.Compiled, req compiledRequest) e
 		} {
 			_, _ = fmt.Fprintf(w, "  %-15s %s\n", r[0], r[1])
 		}
+	}
+
+	if d := req.Desktop; d != nil {
+		_, _ = fmt.Fprintf(w, "\ndesktop\n")
+		_, _ = fmt.Fprintf(w, "  %-15s %dx%d\n", "geometry", d.Width, d.Height)
 	}
 
 	if len(c.RequiredSecrets) > 0 {

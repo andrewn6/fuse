@@ -79,6 +79,13 @@ type Fusefile struct {
 	// sandbox has a single verdict.
 	Healthcheck *HealthProbe `yaml:"healthcheck,omitempty"`
 
+	// Desktop declares that the environment boots a graphical session and at
+	// what geometry. It requires an image that carries the desktop stack
+	// (see fc-bake-desktop-rootfs.sh); on any other image the declaration is
+	// inert and the computer surface answers 503. Nil means no desktop, and
+	// stays nil all the way down, the same contract Healthcheck has.
+	Desktop *Desktop `yaml:"desktop,omitempty"`
+
 	// StartupTimeout bounds the generated startup script (build + run) as a
 	// go duration, e.g. "45s". Empty means the orchestrator's default. The
 	// orchestrator rejects a value above its configured ceiling rather than
@@ -463,6 +470,19 @@ type HealthProbeHTTP struct {
 	Port int `yaml:"port"`
 	// Path is the request path, which must start with "/". Empty means "/".
 	Path string `yaml:"path,omitempty"`
+}
+
+// Desktop is the geometry of the environment's graphical session. Both
+// fields are required: a desktop with a guessed dimension would silently
+// shift every coordinate a computer-use model emits, which presents as model
+// failure rather than as the config error it is. The display number is fixed
+// at :1 and deliberately not authorable until something needs a second
+// display.
+type Desktop struct {
+	// Width is the display width in pixels.
+	Width int `yaml:"width"`
+	// Height is the display height in pixels.
+	Height int `yaml:"height"`
 }
 
 // EnvValue is either a literal value or a secret reference. exactly one is set.

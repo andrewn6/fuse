@@ -76,6 +76,14 @@ type HealthcheckHTTP struct {
 	Path string
 }
 
+// DesktopSpec is the compiled desktop block. It mirrors
+// internal/api.DesktopSpec field-for-field, the same arrangement
+// HealthcheckSpec uses.
+type DesktopSpec struct {
+	Width  int
+	Height int
+}
+
 // Compiled is the result of compiling a Fusefile: the resource spec, the
 // manifest json to upload to the guest, the startup script to run, the
 // secrets the environment needs at create time, and any ports to expose.
@@ -90,6 +98,12 @@ type Compiled struct {
 	// author declared none. It does not travel in the manifest: the manifest
 	// describes services, and this probe is about the environment.
 	Healthcheck *HealthcheckSpec
+
+	// Desktop is the graphical session's geometry, or nil when the author
+	// declared none. Like Healthcheck it rides beside the manifest, not in
+	// it: the manifest describes services, and the desktop is about the
+	// environment.
+	Desktop *DesktopSpec
 
 	// Copy is the compiled `copy` block: one entry per authored entry, with
 	// its guest path resolved against the workspace. The sources are named,
@@ -502,8 +516,19 @@ func Compile(f *Fusefile) (*Compiled, error) {
 		Copy:                  copySpecs,
 		Expose:                compileExpose(f),
 		Healthcheck:           healthcheck,
+		Desktop:               compileDesktop(f),
 		StartupTimeoutSeconds: startupTimeoutSeconds,
 	}, nil
+}
+
+// compileDesktop turns the authored desktop block into its wire form. It
+// returns nil when the author declared none; validation already held the
+// geometry to its bounds, so there is nothing to fail here.
+func compileDesktop(f *Fusefile) *DesktopSpec {
+	if f.Desktop == nil {
+		return nil
+	}
+	return &DesktopSpec{Width: f.Desktop.Width, Height: f.Desktop.Height}
 }
 
 // compileHealthcheck turns the authored healthcheck block into its wire form,

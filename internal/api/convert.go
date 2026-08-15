@@ -60,6 +60,16 @@ func toOrchestratorHealthcheck(hc *HealthcheckSpec) *orchestrator.HealthcheckSpe
 	return out
 }
 
+// toOrchestratorDesktop converts a wire desktop block into the orchestrator
+// type. Nil in, nil out: a create request with no desktop must produce a nil
+// spec, since that is what tells the boot path to ship no geometry file.
+func toOrchestratorDesktop(d *DesktopSpec) *orchestrator.DesktopSpec {
+	if d == nil {
+		return nil
+	}
+	return &orchestrator.DesktopSpec{Width: d.Width, Height: d.Height}
+}
+
 // toAPIResourceSpec converts an orchestrator.Spec into the wire shape.
 // The duration → seconds coercion here is one-way intentional: the
 // wire contract uses seconds for ergonomics (no Go-specific parser).

@@ -54,6 +54,10 @@ type config struct {
 
 	// display is the X display the computer routes drive. See computer.go.
 	display string
+
+	// desktop is the declared desktop geometry's path, uploaded by the
+	// orchestrator like the healthcheck config. See desktop.go.
+	desktop string
 }
 
 func parseFlags() config {
@@ -70,6 +74,7 @@ func parseFlags() config {
 	flag.StringVar(&c.healthcheck, "healthcheck", "/fuse/healthcheck.json", "path to the environment healthcheck config (absent means no probe)")
 	flag.StringVar(&c.healthState, "health-state", "/fuse/health.json", "path to write the healthcheck verdict for the orchestrator to read")
 	flag.StringVar(&c.display, "display", ":1", "X display the computer routes drive (desktop images only)")
+	flag.StringVar(&c.desktop, "desktop", "/fuse/desktop.json", "path to the declared desktop geometry (absent means the image default)")
 	flag.BoolVar(&c.insecure, "insecure", false, "run without TLS/auth (dev only)")
 	flag.BoolVar(&c.showVersion, "version", false, "print version and exit")
 	flag.Parse()
@@ -134,6 +139,11 @@ func main() {
 	// The probe loop shares the shutdown context, so SIGTERM stops it along
 	// with the server. A nil prober returns immediately.
 	go probe.run(ctx)
+
+	// Reconcile the display with the declared desktop geometry, off the
+	// serving path: a restarting display answers 503 on the computer routes
+	// until it is back, which is the contract those routes already have.
+	go applyDesktop(c.desktop, c.display)
 
 	errCh := make(chan error, 1)
 	go func() {

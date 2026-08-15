@@ -1,5 +1,8 @@
 import type { CallOptions, Transport } from "./transport.js";
 import type {
+  ComputerAction,
+  ComputerDisplay,
+  ComputerResult,
   CreateRequest,
   EnvironmentInfo,
   Event,
@@ -146,6 +149,43 @@ export class EnvironmentsService {
       "POST",
       `/v1/environments/${encodeURIComponent(vmId)}`,
       { query: { action: "exec" }, body, signal: opts.signal },
+    );
+  }
+
+  /**
+   * Relay one computer-use action to the environment's desktop and return the
+   * result, usually carrying a base64 PNG screenshot. Requires an environment
+   * booted from a desktop image; on any other image the server answers 503
+   * with a reason.
+   *
+   * @example
+   * const res = await client.environments.computer(id, {
+   *   action: "left_click",
+   *   coordinate: [512, 384],
+   * });
+   */
+  async computer(
+    vmId: string,
+    action: ComputerAction,
+    opts: CallOptions = {},
+  ): Promise<ComputerResult> {
+    requireArg(vmId, "vm id");
+    requireArg(action?.action, "action");
+    return this.t.json<ComputerResult>(
+      "POST",
+      `/v1/environments/${encodeURIComponent(vmId)}/computer`,
+      { body: action, signal: opts.signal },
+    );
+  }
+
+  /** Report whether the environment has a live display and at what geometry.
+   * up is false with a reason on an image with no desktop. */
+  async computerDisplay(vmId: string, opts: CallOptions = {}): Promise<ComputerDisplay> {
+    requireArg(vmId, "vm id");
+    return this.t.json<ComputerDisplay>(
+      "GET",
+      `/v1/environments/${encodeURIComponent(vmId)}/computer`,
+      { signal: opts.signal },
     );
   }
 
