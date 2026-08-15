@@ -261,6 +261,20 @@ func ValidLabel(s string) bool {
 // hostname component can carry rather than to arbitrary text.
 var exposeNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
+// namePattern is the accepted form for the top-level name: a DNS label, the
+// same shape as expose[].as.
+//
+// The rule is not cosmetic. The orchestrator names the vm `<prefix><task id>`,
+// so this string ends up as a vm identity that the host agent puts into file
+// paths and iptables rules. A task id is unvalidated at the API today, so the
+// Fusefile is the layer that can still hold it to something safe to render.
+var namePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+
+// ValidName reports whether s is a well-formed top-level name.
+func ValidName(s string) bool {
+	return namePattern.MatchString(s)
+}
+
 // ValidExposeName reports whether s is a well-formed expose[].as name.
 func ValidExposeName(s string) bool {
 	return exposeNamePattern.MatchString(s)
