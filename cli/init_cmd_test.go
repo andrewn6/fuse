@@ -94,6 +94,71 @@ func TestInitScaffoldCarriesSchemaModeline(t *testing.T) {
 	}
 }
 
+// The scaffolded .fuseignore has to be a file the matcher accepts, and its
+// comment list of defaults has to still be the defaults: one nobody can see is
+// one nobody knows to override.
+func TestInitWritesAUsableFuseignore(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+
+	_, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{"--config", cfg, "init", "-f", filepath.Join(dir, "Fusefile")})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(dir, fuseignoreName)); err != nil {
+		t.Fatalf("init did not scaffold a %s: %v", fuseignoreName, err)
+	}
+	ig, err := loadFuseignore(dir)
+	if err != nil {
+		t.Fatalf("loadFuseignore rejected the scaffold: %v", err)
+	}
+	// every line in it is a comment, so the scaffold changes nothing.
+	if !ig.Match("node_modules", true) || ig.Match("src/main.go", false) {
+		t.Error("the scaffolded .fuseignore is not inert")
+	}
+
+	for _, p := range defaultIgnorePatterns {
+		if !strings.Contains(initIgnoreScaffold, p) {
+			t.Errorf("the scaffold does not name the default %q", p)
+		}
+	}
+}
+
+// The refusal covers the ignore file too, and it names which one is in the way.
+func TestInitRefusesToOverwriteTheFuseignore(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "config.yaml")
+	target := filepath.Join(dir, "Fusefile")
+
+	sentinel := "*.log\n"
+	if err := os.WriteFile(filepath.Join(dir, fuseignoreName), []byte(sentinel), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	root := newRootCmd()
+	root.SetArgs([]string{"--config", cfg, "init", "-f", target})
+	err := root.Execute()
+	if err == nil || !strings.Contains(err.Error(), fuseignoreName) {
+		t.Fatalf("want a %s already-exists error, got %v", fuseignoreName, err)
+	}
+	// the refusal happens before either file is written.
+	if _, err := os.Stat(target); !os.IsNotExist(err) {
+		t.Error("the Fusefile was written even though init refused")
+	}
+	data, err := os.ReadFile(filepath.Join(dir, fuseignoreName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != sentinel {
+		t.Fatalf("%s changed without --force: %q", fuseignoreName, data)
+	}
+}
+
 func TestInitRefusesOverwrite(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "Fusefile")
