@@ -141,6 +141,15 @@ func FusedAgentSpec(manifest []byte, secretMap map[string]string, creds *secrets
 		}
 	}
 
+	// ship the desktop geometry the same way and for the same reason. an
+	// environment with no desktop block writes no file, which is what tells
+	// the image to keep its baked default geometry.
+	if opts.Desktop != nil {
+		if desktop, err := json.Marshal(opts.Desktop); err == nil {
+			files[GuestDesktopPath] = desktop
+		}
+	}
+
 	// the machine-wide env block, resolved here for the same reason compose is:
 	// upload time is where the secret map already lives. the generated startup
 	// script sources this file by path rather than carrying the values, so a
@@ -178,6 +187,7 @@ func buildFusedCommand(creds *secrets.VMCredentials, opts BootOptions) string {
 	// that does run Command carries the same paths the file upload used.
 	fmt.Fprintf(&b, " --healthcheck %s", GuestHealthcheckPath)
 	fmt.Fprintf(&b, " --health-state %s", GuestHealthStatePath)
+	fmt.Fprintf(&b, " --desktop %s", GuestDesktopPath)
 	if creds != nil {
 		fmt.Fprintf(&b, " --auth-token-file %s", fuseAuthTokenPath)
 		fmt.Fprintf(&b, " --tls-cert %s", fuseTLSCertPath)

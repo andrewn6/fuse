@@ -73,6 +73,13 @@ var (
 	// capability gap, not a server fault.
 	ErrSnapshotUnsupported = errors.New("snapshot not supported by provider")
 
+	// ErrComputerUnsupported is returned by ComputerAction and
+	// ComputerDisplay when the environment has no reachable guest agent
+	// address to proxy to (e.g. the in-memory stub, whose URL is a fc://
+	// placeholder rather than a dialable authority). Like ErrExecUnsupported
+	// this is a provider capability gap, not a server fault.
+	ErrComputerUnsupported = errors.New("computer not supported by provider")
+
 	// ErrGPUUnsupported is returned by CreateSnapshot and ForkEnvironment
 	// when the target vm holds a gpu passthrough device. A vfio device
 	// cannot be checkpointed (d4), so this is a permanent property of the

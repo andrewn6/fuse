@@ -321,6 +321,12 @@ type BootOptions struct {
 	// verdict back. See health.go.
 	Healthcheck *HealthcheckSpec
 
+	// Desktop is the graphical session's geometry, or nil when the caller
+	// declared none. It is shipped into the guest as a file (see
+	// FusedAgentSpec) and applied there; the orchestrator never renders
+	// anything. See desktop.go.
+	Desktop *DesktopSpec
+
 	// Files are caller-supplied guest files (a Fusefile's `copy` block),
 	// keyed by absolute guest path. The agent profile merges them into
 	// AgentSpec.Files ahead of its own entries, so they are uploaded on the
