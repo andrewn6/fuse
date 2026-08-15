@@ -36,9 +36,7 @@ describe("environments.computer", () => {
       expect(req.method).toBe("GET");
       expect(pathOf(req)).toBe("/v1/environments/vm-1/computer");
       res.setHeader("content-type", "application/json");
-      res.end(
-        JSON.stringify({ display: ":1", up: true, width: 1280, height: 800 }),
-      );
+      res.end(JSON.stringify({ display: ":1", up: true, width: 1280, height: 800 }));
     });
 
     const res = await current.client.environments.computerDisplay("vm-1");
