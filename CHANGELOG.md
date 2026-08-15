@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.22.0](https://github.com/folsomintel/fuse/compare/v0.21.0...v0.22.0) (2026-08-15)
+
+
+### Features
+
+* **fusefile:** add a top-level name that sets the task id ([#179](https://github.com/folsomintel/fuse/issues/179)) ([b712c06](https://github.com/folsomintel/fuse/commit/b712c0643503cf68e095b59f90a84e51c043b591))
+
 ## [0.21.0](https://github.com/folsomintel/fuse/compare/v0.20.0...v0.21.0) (2026-08-15)
 
 
