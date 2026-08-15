@@ -72,6 +72,14 @@ func validate(f *Fusefile) error {
 		errs = append(errs, fmt.Errorf("version: must be 1"))
 	}
 
+	// name is optional. an explicit `name: ""` is indistinguishable from an
+	// absent key on a plain string field, so both mean "fall back to the
+	// directory" rather than one of them being an error.
+	if f.Name != "" && !ValidName(f.Name) {
+		errs = append(errs, fmt.Errorf(
+			"name: invalid name %q, must be lowercase letters, digits and dashes, alphanumeric at both ends, 63 chars max", f.Name))
+	}
+
 	// placement labels: keys are sorted first so the joined message is stable
 	// regardless of map iteration order.
 	labelKeys := make([]string, 0, len(f.Placement.Labels))
