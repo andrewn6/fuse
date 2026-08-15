@@ -588,9 +588,23 @@ func SchedulePreferring(spec Spec, hosts []*Host, policy PlacementPolicy, hints 
 				"%w: %s matched none of %d schedulable hosts",
 				ErrNoLabelMatch, formatLabels(spec.Labels), countSchedulable(hosts))
 		}
+		// A fleet that serves no GPUs at all is the same kind of mistake, and
+		// the generic message is actively misleading about it: every host is
+		// excluded by the backend gate while its cpu and ram sit idle, so the
+		// reader is told they are short of resources they in fact have. A fleet
+		// whose GPUs are merely all busy is a real shortfall and falls through
+		// to the capacity message below.
+		if spec.GPUs > 0 && !anyHostServesGPUs(hosts) {
+			return nil, PlacementDecision{}, fmt.Errorf(
+				"%w: need %s, and none of %d schedulable hosts serves gpus",
+				ErrNoCapacity, formatGPURequest(spec), countSchedulable(hosts))
+		}
+		// Naming the gpu here too: on a fleet that does serve gpus, an
+		// unqualified cpu/ram/disk message would still hide which dimension
+		// actually ran out.
 		return nil, PlacementDecision{}, fmt.Errorf(
-			"%w: need %dCPU/%dMB/%dGB, no eligible host fits",
-			ErrNoCapacity, spec.CPUs, spec.RamMB, spec.StorageGB)
+			"%w: need %dCPU/%dMB/%dGB%s, no eligible host fits",
+			ErrNoCapacity, spec.CPUs, spec.RamMB, spec.StorageGB, gpuSuffix(spec))
 	}
 
 	// Pick by policy, with artifact locality as the outer comparison.
@@ -710,6 +724,55 @@ func anyHostMatchesLabels(hosts []*Host, selector map[string]string) bool {
 
 // countSchedulable returns how many hosts cleared the state gate, which is
 // the "hosts considered" number an unmatched selector reports.
+// anyHostServesGPUs reports whether any schedulable host is in the gpu business
+// at all, ignoring what is currently allocated.
+//
+// The question is deliberately "could this fleet ever serve a gpu", not "is one
+// free right now". The first is a permanent property of the fleet and worth
+// naming in an error; the second is an ordinary capacity shortfall that the
+// generic message already describes correctly. Both pools count: whole devices
+// (GPUs/GPUDevices) and MIG instances, which are independent of each other (D5).
+func anyHostServesGPUs(hosts []*Host) bool {
+	for _, h := range hosts {
+		// Mirrors the backend gate in hostRejection: a non-qemu host cannot
+		// serve a gpu environment whatever its inventory claims.
+		if !h.schedulable() || h.Backend != BackendQEMU {
+			continue
+		}
+		if h.Capacity.GPUs > 0 || len(h.Capacity.GPUDevices) > 0 ||
+			len(h.Capacity.MIGInstances) > 0 || len(h.Capacity.MIGProfiles) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// formatGPURequest renders the gpu part of a spec the way the Fusefile asked
+// for it: a MIG profile means the count is instances of that profile, not whole
+// devices (D5).
+func formatGPURequest(spec Spec) string {
+	s := fmt.Sprintf("%d gpu", spec.GPUs)
+	if spec.GPUProfile != "" {
+		s = fmt.Sprintf("%d %s mig instance", spec.GPUs, spec.GPUProfile)
+	}
+	if spec.GPUs != 1 {
+		s += "s"
+	}
+	if spec.GPUKind != "" {
+		s += fmt.Sprintf(" of kind %q", spec.GPUKind)
+	}
+	return s
+}
+
+// gpuSuffix appends the gpu request to a capacity message, and nothing at all
+// for the overwhelmingly common cpu-only spec.
+func gpuSuffix(spec Spec) string {
+	if spec.GPUs == 0 {
+		return ""
+	}
+	return " + " + formatGPURequest(spec)
+}
+
 func countSchedulable(hosts []*Host) int {
 	n := 0
 	for _, h := range hosts {
