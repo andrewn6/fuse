@@ -13,6 +13,11 @@
       "const": 1,
       "description": "Fusefile format version. Always 1."
     },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$",
+      "description": "Task id this Fusefile boots under, and through it the environment's name: the orchestrator prefixes it, so `name: sandbox` is the environment `fuse-sandbox`. Optional; `fuse up --task-id` overrides it, and with neither the CLI falls back to the parent directory's name. A DNS label: lowercase letters, digits and dashes, alphanumeric at both ends, 63 chars max."
+    },
     "image": {
       "type": "string",
       "description": "Name of a rootfs pre-baked on the host, not an OCI reference. Omit for the host's default base rootfs."
