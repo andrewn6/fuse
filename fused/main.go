@@ -51,6 +51,9 @@ type config struct {
 	// pass a flag added after the wire was frozen. See health.go.
 	healthcheck string
 	healthState string
+
+	// display is the X display the computer routes drive. See computer.go.
+	display string
 }
 
 func parseFlags() config {
@@ -66,6 +69,7 @@ func parseFlags() config {
 	flag.StringVar(&c.vmID, "vm-id", "", "VM identifier assigned by the orchestrator")
 	flag.StringVar(&c.healthcheck, "healthcheck", "/fuse/healthcheck.json", "path to the environment healthcheck config (absent means no probe)")
 	flag.StringVar(&c.healthState, "health-state", "/fuse/health.json", "path to write the healthcheck verdict for the orchestrator to read")
+	flag.StringVar(&c.display, "display", ":1", "X display the computer routes drive (desktop images only)")
 	flag.BoolVar(&c.insecure, "insecure", false, "run without TLS/auth (dev only)")
 	flag.BoolVar(&c.showVersion, "version", false, "print version and exit")
 	flag.Parse()
@@ -186,6 +190,14 @@ func newHandler(c config, authToken string, manifestBytes []byte, secretCount in
 			"tls":            useTLS,
 		})
 	}))
+
+	// The computer control surface. Bearer-protected like /v1/info; on an
+	// image with no display the routes answer 503 with a reason, so
+	// registering them unconditionally is safe. See computer.go.
+	comp := newComputer(c.display)
+	mux.HandleFunc("/v1/computer/action", protect(authToken, comp.handleAction))
+	mux.HandleFunc("/v1/computer/screenshot", protect(authToken, comp.handleScreenshot))
+	mux.HandleFunc("/v1/computer/display", protect(authToken, comp.handleDisplay))
 	return mux
 }
 
