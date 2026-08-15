@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"encoding/json"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -139,5 +140,43 @@ func TestComposeFromManifestDeterministic(t *testing.T) {
 	}
 	if string(out1) != string(out2) {
 		t.Errorf("composeFromManifest not deterministic:\n%s\n---\n%s", out1, out2)
+	}
+}
+
+// The probe reaches the guest as a file and nothing else: the firecracker host
+// agent ignores AgentSpec.Command, so Files is the only channel that gets
+// there.
+func TestFusedAgentSpecWritesHealthcheckFile(t *testing.T) {
+	probe := &HealthcheckSpec{
+		HTTP:               &HealthcheckHTTP{Port: 8080, Path: "/healthz"},
+		IntervalSeconds:    5,
+		TimeoutSeconds:     2,
+		Retries:            12,
+		StartPeriodSeconds: 10,
+	}
+	spec := FusedAgentSpec(DefaultFusedManifest, nil, nil, BootOptions{Healthcheck: probe})
+
+	raw, ok := spec.Files[GuestHealthcheckPath]
+	if !ok {
+		t.Fatalf("expected a healthcheck file at %s", GuestHealthcheckPath)
+	}
+	var got HealthcheckSpec
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("healthcheck file is not valid json: %v", err)
+	}
+	if got.HTTP == nil || got.HTTP.Port != 8080 || got.HTTP.Path != "/healthz" {
+		t.Errorf("http = %+v, want port 8080 path /healthz", got.HTTP)
+	}
+	if got.IntervalSeconds != 5 || got.TimeoutSeconds != 2 || got.Retries != 12 || got.StartPeriodSeconds != 10 {
+		t.Errorf("timings = %+v, want 5/2/12/10", got)
+	}
+}
+
+// No probe means no file: its absence is what tells the guest agent not to
+// probe at all, so writing an empty one would start a probe nobody asked for.
+func TestFusedAgentSpecNoHealthcheckFileWhenUnset(t *testing.T) {
+	spec := FusedAgentSpec(DefaultFusedManifest, nil, nil, BootOptions{})
+	if _, ok := spec.Files[GuestHealthcheckPath]; ok {
+		t.Errorf("wrote %s for an environment with no healthcheck", GuestHealthcheckPath)
 	}
 }

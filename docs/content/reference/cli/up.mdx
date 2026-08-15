@@ -39,6 +39,8 @@ which streams until the environment is destroyed or fails.
 | `--from-build` | Boot from a [`fuse build`](/reference/cli/build) artifact instead of a base image. Skips the `setup:` phase. |
 | `--plan` | Print the derived [setup layer cache](/docs/concepts/fusefile#the-setup-layer-cache) plan and exit without creating anything. |
 | `--no-cache` | Ignore the Fusefile's `cache` block and run every setup step. |
+| `--wait-healthy` | After the environment is running, keep waiting until its [`healthcheck`](/docs/concepts/fusefile#healthcheck) reports `passing`. |
+| `--health-timeout` | How long `--wait-healthy` waits for a passing verdict before giving up. Default `2m`. |
 
 `--from-build` is mutually exclusive with both `--plan` and `--no-cache`: a
 `--from-build` boot runs no setup steps, so there is no layer plan for it to
@@ -50,6 +52,36 @@ print and exit, and they print different things.
 The gateway carries a credential, so it is a flag rather than a Fusefile
 field. Setting it here is the only difference that remained between the
 Fusefile path and `fuse environment create`.
+
+## Waiting for healthy
+
+Reaching `running` means the VM booted and the startup script returned. It does
+**not** mean your app is serving: nothing has dialled it. `--wait-healthy` closes
+that gap by keeping `up` waiting until the environment-level
+[`healthcheck`](/docs/concepts/fusefile#healthcheck) you declared reports
+`passing`.
+
+```bash
+fuse up --wait-healthy --health-timeout 5m
+```
+
+It needs a `healthcheck:` block in the Fusefile; without one there is no verdict
+to wait for and `up` says so instead of hanging until the timeout. It is also
+mutually exclusive with `--no-wait`, which returns before the environment is even
+running.
+
+A `failing` verdict along the way is not a failure. A probe can legitimately fail
+while the app is still coming up, which is what `start_period` exists for, so only
+the timeout ends the wait unhappily, and the error carries the last verdict and
+its reason:
+
+```
+environment fuse-api did not report healthy within 2m0s (failing: GET http://127.0.0.1:8080/healthz returned 502)
+```
+
+The verdict is produced in the guest and read back by the orchestrator on its
+reconcile tick (30s by default), so expect up to a tick of lag between the probe
+passing and `up` returning.
 
 ## The layer cache
 

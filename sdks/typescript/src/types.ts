@@ -48,6 +48,64 @@ export interface Endpoint {
   port: number;
 }
 
+/** HealthcheckHttp is an HTTP GET against a port inside the guest. The probe
+ * runs in-guest, so the port needs no matching ExposeSpec. */
+export interface HealthcheckHttp {
+  port: number;
+  /** Request path, which must start with a slash. Defaults to "/". */
+  path?: string;
+}
+
+/**
+ * HealthcheckSpec is the environment-level readiness probe (the Fusefile's
+ * `healthcheck:` block). Exactly one of http and exec must be set; the server
+ * rejects a request that sets both or neither.
+ *
+ * It is not the per-service compose healthcheck that can appear inside a
+ * manifest: that one governs a single container and never reaches the control
+ * plane. This one is evaluated by the guest agent over the environment as a
+ * whole and its verdict comes back on EnvironmentInfo.health.
+ *
+ * Every duration is in seconds, and 0 means "omitted, use the guest agent's
+ * default". The server substitutes no defaults of its own, because the probe
+ * executes in the guest.
+ */
+export interface HealthcheckSpec {
+  http?: HealthcheckHttp;
+  /** An argv run inside the guest. Exit status 0 passes. */
+  exec?: string[];
+  /** Seconds between attempts. 0 for the guest agent default (10s). */
+  interval_seconds?: number;
+  /** Bound on one attempt, in seconds. 0 for the guest agent default (2s).
+   * Attempts run one at a time, so a value above interval_seconds is
+   * rejected rather than silently stretching the interval. */
+  timeout_seconds?: number;
+  /** Consecutive failures that flip the verdict to failing. 0 for the guest
+   * agent default (3). */
+  retries?: number;
+  /** Grace window from the first attempt during which failures are not
+   * counted. It ends for good once the probe passes once. */
+  start_period_seconds?: number;
+}
+
+/**
+ * Health is the last verdict of an environment's healthcheck.
+ *
+ * It is deliberately not folded into EnvironmentInfo.state: that vocabulary is
+ * a closed set clients reason about, and an unhealthy environment is still a
+ * running one. Nothing tears an environment down for a failing probe.
+ */
+export interface Health {
+  /** "starting", "passing" or "failing". */
+  state: string;
+  /** When the probe entered this state. */
+  since?: string;
+  /** Consecutive failed attempts. Zero while passing. */
+  failures?: number;
+  /** The last attempt's failure detail. Empty while passing. */
+  message?: string;
+}
+
 /** CreateRequest is the body for environments.create. */
 export interface CreateRequest {
   task_id: string;
@@ -58,6 +116,11 @@ export interface CreateRequest {
   gateway_url?: string;
   gateway_token?: string;
   expose?: ExposeSpec[];
+  /** Environment-level readiness probe. Omit it for an environment with no
+   * probe, in which case EnvironmentInfo.health is never populated. It is not
+   * evaluated inside create: the call returns as soon as the VM is up, and
+   * the verdict arrives on later reads. */
+  healthcheck?: HealthcheckSpec;
 }
 
 /** EnvironmentInfo is the server's view of a single microVM. */
@@ -72,6 +135,11 @@ export interface EnvironmentInfo {
   updated_at: string;
   error?: string;
   endpoints?: Endpoint[];
+  /** Last verdict of the environment-level healthcheck. Absent when the
+   * environment declared no healthcheck, and absent until the first verdict
+   * has been read back from the guest. The server refreshes it on its
+   * reconcile tick (30s by default), so it lags the guest by up to a tick. */
+  health?: Health;
 }
 
 /** ForkOptions is the optional body for environments.fork. */
@@ -335,3 +403,20 @@ export type State = (typeof State)[keyof typeof State];
 export function isTerminalState(state: string): boolean {
   return state === State.Destroyed || state === State.Failed;
 }
+
+/**
+ * Verdicts carried in Health.state. Separate from State on purpose: a failing
+ * probe reports, it does not move the environment anywhere new.
+ */
+export const HealthState = {
+  /** The probe has not passed yet and is still inside its start period, so
+   * failures are not being counted. */
+  Starting: "starting",
+  /** The most recent attempt succeeded. */
+  Passing: "passing",
+  /** The probe failed its configured retries in a row after the start period
+   * ended. */
+  Failing: "failing",
+} as const;
+
+export type HealthState = (typeof HealthState)[keyof typeof HealthState];

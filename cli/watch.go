@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/progress"
 	"github.com/charmbracelet/bubbles/spinner"
@@ -56,6 +57,62 @@ func waitForEnvironmentReady(ctx context.Context, cl *fuse.Client, vmID string, 
 		return fmt.Errorf("environment %s: event stream ended with no events, so the environment never reached %s", vmID, fuse.StateRunning)
 	default:
 		return fmt.Errorf("environment %s: event stream ended in state %q before the environment reached %s", vmID, state, fuse.StateRunning)
+	}
+}
+
+// healthPollInterval is how often waitForEnvironmentHealthy re-reads the
+// environment. The server refreshes the verdict on its reconcile tick (30s by
+// default), so polling faster than that mostly re-reads the same answer; 2s is
+// chosen so the wait ends promptly once the verdict does move, not because the
+// verdict moves that often.
+const healthPollInterval = 2 * time.Second
+
+// waitForEnvironmentHealthy polls the environment until its healthcheck
+// reports passing, giving up after timeout.
+//
+// It polls rather than watching the event stream because the health verdict is
+// not carried on that stream: the stream is lifecycle transitions, and a
+// failing probe is deliberately not a lifecycle transition (see the note on
+// api.Health). Polling `get` keeps the health signal out of a wire contract
+// every SDK reasons about.
+//
+// A failing verdict is not an immediate failure. The probe can legitimately
+// fail while the app is still coming up, which is exactly what `start_period`
+// exists for, so only the timeout ends the wait unhappily. What it reports on
+// the way out is the last verdict, which is the detail an author needs.
+func waitForEnvironmentHealthy(ctx context.Context, cl *fuse.Client, vmID string, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	tick := time.NewTicker(healthPollInterval)
+	defer tick.Stop()
+
+	last := "no verdict yet"
+	for {
+		e, err := cl.Environments.Get(ctx, vmID)
+		if err != nil {
+			return friendly(err)
+		}
+		switch {
+		case e.Health == nil:
+			// the environment declared a probe (up checked that before
+			// waiting), so this is the window before the first verdict has
+			// been read back off the guest.
+		case e.Health.State == fuse.HealthPassing:
+			return nil
+		default:
+			last = e.Health.State
+			if e.Health.Message != "" {
+				last += ": " + e.Health.Message
+			}
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("environment %s did not report healthy within %s (%s)", vmID, timeout, last)
+		}
+
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-tick.C:
+		}
 	}
 }
 

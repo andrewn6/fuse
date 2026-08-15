@@ -8,7 +8,7 @@ import (
 )
 
 func TestHandler_HealthIsUnauthenticated(t *testing.T) {
-	srv := httptest.NewServer(newHandler(config{vmID: "fuse-1"}, "secret-token", []byte("{}"), 0, false))
+	srv := httptest.NewServer(newHandler(config{vmID: "fuse-1"}, "secret-token", []byte("{}"), 0, false, nil))
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/health")
@@ -28,7 +28,7 @@ func TestHandler_HealthIsUnauthenticated(t *testing.T) {
 
 func TestHandler_InfoRequiresToken(t *testing.T) {
 	manifest := []byte(`{"version":"1"}`)
-	srv := httptest.NewServer(newHandler(config{vmID: "fuse-1"}, "secret-token", manifest, 3, false))
+	srv := httptest.NewServer(newHandler(config{vmID: "fuse-1"}, "secret-token", manifest, 3, false, nil))
 	defer srv.Close()
 
 	// No token -> 401.
@@ -62,7 +62,7 @@ func TestHandler_InfoRequiresToken(t *testing.T) {
 // TestHandler_InfoOpenWhenNoToken verifies that with no auth token configured
 // (dev/insecure), /v1/info is reachable without a header.
 func TestHandler_InfoOpenWhenNoToken(t *testing.T) {
-	srv := httptest.NewServer(newHandler(config{vmID: "fuse-1"}, "", nil, 0, false))
+	srv := httptest.NewServer(newHandler(config{vmID: "fuse-1"}, "", nil, 0, false, nil))
 	defer srv.Close()
 	resp, err := http.Get(srv.URL + "/v1/info")
 	if err != nil {

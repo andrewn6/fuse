@@ -1,6 +1,7 @@
 package api
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -155,6 +156,121 @@ func TestValidateTimeoutSpec(t *testing.T) {
 			err := validateTimeoutSpec(tc.spec)
 			if tc.wantErr != (err != nil) {
 				t.Fatalf("err = %v, wantErr = %v", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestToOrchestratorHealthcheck checks the create-request probe reaches the
+// orchestrator intact, and that a request without one produces a nil spec:
+// nil is what tells the boot path to ship no probe file and the reconcile loop
+// not to poll the guest.
+func TestToOrchestratorHealthcheck(t *testing.T) {
+	got := toOrchestratorHealthcheck(&HealthcheckSpec{
+		HTTP:               &HealthcheckHTTP{Port: 8080, Path: "/healthz"},
+		IntervalSeconds:    5,
+		TimeoutSeconds:     2,
+		Retries:            12,
+		StartPeriodSeconds: 10,
+	})
+	if got == nil {
+		t.Fatal("healthcheck = nil, want a spec")
+	}
+	if got.HTTP == nil || got.HTTP.Port != 8080 || got.HTTP.Path != "/healthz" {
+		t.Errorf("http = %+v, want port 8080 path /healthz", got.HTTP)
+	}
+	if got.IntervalSeconds != 5 || got.TimeoutSeconds != 2 || got.Retries != 12 || got.StartPeriodSeconds != 10 {
+		t.Errorf("timings = %+v, want 5/2/12/10", got)
+	}
+
+	if toOrchestratorHealthcheck(nil) != nil {
+		t.Error("a nil healthcheck must convert to nil, not to an empty spec")
+	}
+}
+
+// TestToAPIHealth checks the guest's verdict reaches the wire, and that an
+// environment with no verdict omits the field rather than reporting an empty
+// state a client would have to defend against.
+func TestToAPIHealth(t *testing.T) {
+	since := time.Now().UTC().Truncate(time.Second)
+	got := toAPIHealth(&orchestrator.HealthStatus{
+		State:    orchestrator.HealthFailing,
+		Since:    since,
+		Failures: 3,
+		Message:  "connection refused",
+	})
+	if got == nil {
+		t.Fatal("health = nil, want a verdict")
+	}
+	if got.State != "failing" || got.Failures != 3 || got.Message != "connection refused" {
+		t.Errorf("health = %+v", got)
+	}
+	if !got.Since.Equal(since) {
+		t.Errorf("since = %s, want %s", got.Since, since)
+	}
+
+	if toAPIHealth(nil) != nil {
+		t.Error("a nil verdict must convert to nil so the field is omitted")
+	}
+}
+
+// TestValidateHealthcheck holds raw SDK callers to the same rules Fusefile
+// authors get, since the compiler's checks run client-side and are trivially
+// bypassed.
+func TestValidateHealthcheck(t *testing.T) {
+	cases := []struct {
+		name string
+		spec *HealthcheckSpec
+		want string
+	}{
+		{name: "absent", spec: nil},
+		{name: "http only", spec: &HealthcheckSpec{HTTP: &HealthcheckHTTP{Port: 80}}},
+		{name: "exec only", spec: &HealthcheckSpec{Exec: []string{"/ready"}}},
+		{
+			name: "both",
+			spec: &HealthcheckSpec{HTTP: &HealthcheckHTTP{Port: 80}, Exec: []string{"/ready"}},
+			want: "mutually exclusive",
+		},
+		{name: "neither", spec: &HealthcheckSpec{Retries: 3}, want: "http or exec is required"},
+		{
+			name: "port out of range",
+			spec: &HealthcheckSpec{HTTP: &HealthcheckHTTP{Port: 70000}},
+			want: "between 1 and 65535",
+		},
+		{
+			name: "path without a slash",
+			spec: &HealthcheckSpec{HTTP: &HealthcheckHTTP{Port: 80, Path: "healthz"}},
+			want: "must start with a slash",
+		},
+		{
+			name: "empty exec argument",
+			spec: &HealthcheckSpec{Exec: []string{"/ready", " "}},
+			want: "must not be empty",
+		},
+		{
+			name: "negative retries",
+			spec: &HealthcheckSpec{Exec: []string{"/ready"}, Retries: -1},
+			want: "must not be negative",
+		},
+		{
+			name: "timeout above interval",
+			spec: &HealthcheckSpec{Exec: []string{"/ready"}, IntervalSeconds: 2, TimeoutSeconds: 5},
+			want: "must not exceed",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := validateHealthcheck(tc.spec)
+			switch {
+			case tc.want == "" && err != nil:
+				t.Fatalf("rejected a valid healthcheck: %v", err)
+			case tc.want == "":
+				return
+			case err == nil:
+				t.Fatalf("accepted %s", tc.name)
+			case !strings.Contains(err.Error(), tc.want):
+				t.Errorf("error = %v, want it to contain %q", err, tc.want)
 			}
 		})
 	}

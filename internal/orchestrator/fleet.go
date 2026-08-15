@@ -159,6 +159,16 @@ type vm struct {
 	// never idle, however quiet the stream is.
 	attachSessions int
 	err            string
+	// healthcheck is the environment-level probe this VM was created with, or
+	// nil when it was created without one. It is what makes reconcileHealth
+	// poll this VM at all. Not persisted: it is only ever used to decide
+	// whether to read a live signal back, and a restarted orchestrator that
+	// stops polling a VM is a smaller problem than one that keeps reporting a
+	// verdict nobody is refreshing.
+	healthcheck *HealthcheckSpec
+	// health is the last verdict read back from the guest, or nil before the
+	// first successful read. Live state, never persisted (see health.go).
+	health *HealthStatus
 }
 
 func (v *vm) toInfo() VMInfo {
@@ -177,6 +187,12 @@ func (v *vm) toInfo() VMInfo {
 	if v.env != nil {
 		info.URL = v.env.URL()
 	}
+	// copied rather than aliased so a reader of the snapshot can never observe
+	// the next reconcile tick rewriting the verdict underneath it.
+	if v.health != nil {
+		health := *v.health
+		info.Health = &health
+	}
 	return info
 }
 
@@ -192,6 +208,10 @@ type VMInfo struct {
 	UpdatedAt time.Time
 	Error     string
 	Endpoints []Endpoint
+	// Health is the environment-level probe's last verdict, or nil when the
+	// environment declared no probe or none has been read back yet. See
+	// health.go.
+	Health *HealthStatus
 }
 
 // ReconcileMetrics is an optional callback invoked at the end of every
@@ -214,7 +234,12 @@ type ReconcileSummary struct {
 	IdleVMsSuspected    int
 	IdleVMsFailed       int
 	VMsMissingProvider  int
-	Duration            time.Duration
+	// HealthChecked counts VMs whose guest returned a usable health verdict
+	// this cycle; HealthFailing is how many of those were failing. Neither
+	// causes a teardown: the environment-level probe reports, it does not act.
+	HealthChecked int
+	HealthFailing int
+	Duration      time.Duration
 }
 
 // FleetConfig configures the fleet manager.
@@ -631,6 +656,7 @@ func (fm *FleetManager) ProvisionAndAssign(ctx context.Context, taskID string, s
 		createdAt:      now,
 		updatedAt:      now,
 		lastActivityAt: now,
+		healthcheck:    opts.Healthcheck,
 	}
 
 	fm.mu.Lock()
@@ -1348,6 +1374,7 @@ func (fm *FleetManager) reconcile(ctx context.Context) {
 	fm.reconcileOrphans(ctx, envs, envProviders, tracked, &summary)
 	fm.reconcileStuckTasks(ctx, &summary)
 	fm.reconcileIdleVMs(ctx, &summary)
+	fm.reconcileHealth(ctx, &summary)
 	fm.reconcileSnapshots(ctx)
 	fm.reconcileArtifacts(ctx)
 

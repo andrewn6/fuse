@@ -12,7 +12,8 @@ that destroys resources you did not explicitly ask it to.
 
 The most important thing to know up front: **it is a leak detector, not a
 supervisor.** It never restarts, reschedules, or heals anything. Every action it
-takes is destructive or garbage collection. If you come from Kubernetes, this is
+takes is destructive, garbage collection, or read-only reporting. If you come
+from Kubernetes, this is
 the sharpest difference, there is no desired-state controller driving things back
 to health, and a failed task stays failed.
 
@@ -29,8 +30,10 @@ Each cycle, in order:
    `destroying` and its task is failed.
 3. **Destroy orphans**, VMs the provider has that Fuse does not track.
 4. **Fail stuck tasks** that have exceeded their runtime ceiling.
-5. **Garbage-collect snapshots** past the retention window.
-6. **Reap** destroyed VMs and return their capacity to the host.
+5. **Read health verdicts** back from the guests of environments that declared a
+   [`healthcheck`](/docs/concepts/fusefile#healthcheck).
+6. **Garbage-collect snapshots** past the retention window.
+7. **Reap** destroyed VMs and return their capacity to the host.
 
 :::warning[Known limitation]
 A failure listing VMs from any host aborts the entire cycle, it does not isolate
@@ -106,6 +109,35 @@ its task (if any) is failed, and an `idle_timeout` dead letter is recorded.
 The activity clock lives in memory only. Restarting the orchestrator restarts
 every environment's idle window rather than inheriting a stale one.
 
+## Health verdicts
+
+This is the one pass that is **not** a detector. It reads and reports; it never
+destroys anything.
+
+An environment created with a [`healthcheck`](/docs/concepts/fusefile#healthcheck)
+runs that probe inside its guest, and the guest agent leaves the current verdict
+in a file. Each cycle the loop reads that file back over the same exec channel
+the host agents already expose, and records the verdict on the VM, where it
+surfaces as the `health` field on the environment. A change of verdict emits a
+`vm.health_changed` event.
+
+Only environments that declared a probe are read, so a fleet that declares none
+pays nothing for this pass. The reads are issued concurrently and each is bounded
+at 5 seconds, so one sick guest does not hold up the tick.
+
+A read that fails is **not** a failing probe. An unreachable guest could equally
+be a host agent hiccup, and this pass has none of the two-strike structure the
+destructive detectors have, so the last known verdict is left in place and the
+next cycle tries again. The same is true of a guest that has not written a
+verdict yet.
+
+Nothing acts on `failing`. The environment stays `running`, its task stays
+assigned, and no dead letter is recorded. The only destructive predicates in this
+loop remain the age ceiling and the idle window. Verdicts live in memory only, so
+restarting the orchestrator drops them until each guest is read again; a VM
+recovered across a restart is not polled at all, because the probe it was created
+with is not persisted.
+
 ## Dead letters
 
 Orphans that exhaust their retries, tasks failed for being stuck, and
@@ -146,6 +178,8 @@ visible rather than silent:
 | `orchestrator_reconcile_stuck_tasks_suspected_total` | First-strike suspicions. |
 | `orchestrator_reconcile_stuck_tasks_failed_total` | Tasks actually failed. |
 | `orchestrator_reconcile_vms_missing_provider_total` | Tracked VMs the provider lost. |
+| `orchestrator_reconcile_health_checked_vms` | Environments that answered their healthcheck this cycle. |
+| `orchestrator_reconcile_health_failing_vms` | Environments whose healthcheck reported `failing` this cycle. |
 
 A persistent gap between `fleet_tracked_vms` and `fleet_provider_vms` is the
 signal worth alerting on, it means the two views of the world are diverging.

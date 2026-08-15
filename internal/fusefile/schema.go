@@ -25,6 +25,11 @@ type Fusefile struct {
 	Expose    []Expose           `yaml:"expose,omitempty"`
 	Secrets   []string           `yaml:"secrets,omitempty"`
 
+	// Healthcheck is the environment-level readiness probe. It is optional
+	// and there is at most one: the point of the block is that the whole
+	// sandbox has a single verdict.
+	Healthcheck *HealthProbe `yaml:"healthcheck,omitempty"`
+
 	// StartupTimeout bounds the generated startup script (setup + run) as a
 	// go duration, e.g. "45s". Empty means the orchestrator's default. The
 	// orchestrator rejects a value above its configured ceiling rather than
@@ -289,6 +294,65 @@ type HealthCheck struct {
 	Interval string   `yaml:"interval,omitempty"`
 	Timeout  string   `yaml:"timeout,omitempty"`
 	Retries  int      `yaml:"retries,omitempty"`
+}
+
+// HealthProbe is the environment-level readiness probe: one verdict for
+// whether the sandbox as a whole is doing its job, visible to the control
+// plane.
+//
+// It is deliberately NOT the service-level HealthCheck above, and the two are
+// not interchangeable. That one is compose-native, governs a single container,
+// and is evaluated by the guest's `docker compose`; a container it marks
+// unhealthy never signals the orchestrator. This one is evaluated by the guest
+// agent (fused) over the environment as a whole, and its verdict travels back
+// to the fleet, which is what makes `fuse up --wait-healthy` mean anything.
+//
+// Exactly one of HTTP and Exec is set. Two probes would produce two verdicts,
+// and a block whose whole purpose is a single answer must not have to
+// reconcile them.
+type HealthProbe struct {
+	// HTTP probes a port inside the guest. Successful means a response with
+	// a 2xx or 3xx status.
+	HTTP *HealthProbeHTTP `yaml:"http,omitempty"`
+
+	// Exec is an argv run inside the guest. Successful means exit status 0.
+	// It is an argv rather than a shell string so an argument can never be
+	// reinterpreted by a shell, matching the exec form of `run`.
+	Exec []string `yaml:"exec,omitempty"`
+
+	// Interval is how long the guest agent waits between attempts, as a go
+	// duration ("5s"). Empty means the guest agent's default.
+	Interval string `yaml:"interval,omitempty"`
+
+	// Timeout bounds one attempt, as a go duration ("2s"). Empty means the
+	// guest agent's default. It may not exceed Interval: attempts are run one
+	// at a time, so a timeout longer than the interval would silently stretch
+	// the interval instead of overlapping attempts.
+	Timeout string `yaml:"timeout,omitempty"`
+
+	// Retries is how many consecutive failed attempts flip the verdict from
+	// passing to failing. Zero means the guest agent's default. A single
+	// failed attempt is not a verdict: a probe that is retried is the only
+	// kind worth reporting on.
+	Retries int `yaml:"retries,omitempty"`
+
+	// StartPeriod is a grace window measured from the first attempt during
+	// which failures do not count against Retries, as a go duration ("10s").
+	// It covers the gap between "the process was started" and "the process
+	// is serving", which is exactly the gap this probe exists to close. Once
+	// the probe passes once, the window is over for good: a service that came
+	// up and then fell over is failing, not still starting.
+	StartPeriod string `yaml:"start_period,omitempty"`
+}
+
+// HealthProbeHTTP is an HTTP GET against a port inside the guest. The probe
+// runs in-guest, so the port needs no `expose` entry: this asks whether the
+// app is serving, not whether anyone outside can reach it.
+type HealthProbeHTTP struct {
+	// Port is the guest-side port to dial, 1 to 65535.
+	Port int `yaml:"port"`
+	// Path is the request path, which must start with "/". Empty means "/".
+	Path string `yaml:"path,omitempty"`
 }
 
 // EnvValue is either a literal value or a secret reference. exactly one is set.

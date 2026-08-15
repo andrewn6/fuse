@@ -315,6 +315,12 @@ type BootOptions struct {
 	GatewayToken  string
 	Expose        []ExposeSpec
 
+	// Healthcheck is the environment-level readiness probe, or nil when the
+	// caller declared none. It is shipped into the guest as a file (see
+	// FusedAgentSpec) and evaluated there; the orchestrator only reads the
+	// verdict back. See health.go.
+	Healthcheck *HealthcheckSpec
+
 	// StartupScriptTimeout bounds StartupScript. Zero means
 	// DefaultStartupScriptTimeout. The script runs synchronously inside the
 	// create request, so this must stay comfortably under the orchestrator's

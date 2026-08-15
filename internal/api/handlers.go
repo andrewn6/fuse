@@ -278,6 +278,10 @@ func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, CodeInvalidArgument, err.Error(), nil)
 		return
 	}
+	if err := validateHealthcheck(req.Healthcheck); err != nil {
+		writeError(w, http.StatusBadRequest, CodeInvalidArgument, err.Error(), nil)
+		return
+	}
 	// A negative bound would reach the fleet as "unset" and quietly restore
 	// the default, so it is refused here where the sign is still visible.
 	// The upper bound is the fleet's to enforce, since it owns the ceiling.
@@ -332,6 +336,7 @@ func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 		GatewayURL:           req.GatewayURL,
 		GatewayToken:         req.GatewayToken,
 		Expose:               toOrchestratorExpose(req.Expose),
+		Healthcheck:          toOrchestratorHealthcheck(req.Healthcheck),
 	})
 	if err != nil {
 		writeFleetErrorRedacted(w, err, req.Secrets)
@@ -362,6 +367,62 @@ func validateGPUSpec(s ResourceSpec) error {
 		if !fusefile.KindSupportsMIG(s.GPUKind) {
 			return fmt.Errorf("spec.gpu_profile %q is not valid for gpu_kind %q (that gpu does not support MIG)", s.GPUProfile, s.GPUKind)
 		}
+	}
+	return nil
+}
+
+// validateHealthcheck enforces the environment-level probe's invariants at the
+// API boundary so raw SDK callers are held to the same rules as Fusefile
+// authors. The fusefile compiler validates too, but it runs client-side and is
+// trivially bypassed.
+//
+// A nil healthcheck is the common case and always valid: the block is optional
+// and its absence means the environment declares no probe.
+func validateHealthcheck(hc *HealthcheckSpec) error {
+	if hc == nil {
+		return nil
+	}
+	switch {
+	case hc.HTTP != nil && len(hc.Exec) > 0:
+		return errors.New("healthcheck: http and exec are mutually exclusive")
+	case hc.HTTP == nil && len(hc.Exec) == 0:
+		return errors.New("healthcheck: http or exec is required")
+	}
+	if hc.HTTP != nil {
+		if hc.HTTP.Port < 1 || hc.HTTP.Port > 65535 {
+			return errors.New("healthcheck.http.port must be between 1 and 65535")
+		}
+		// the guest builds the probe URL by concatenation, so a path without a
+		// leading slash would silently probe a different one.
+		if p := hc.HTTP.Path; p != "" && !strings.HasPrefix(p, "/") {
+			return fmt.Errorf("healthcheck.http.path must start with a slash, got %q", p)
+		}
+	}
+	for i, arg := range hc.Exec {
+		if strings.TrimSpace(arg) == "" {
+			return fmt.Errorf("healthcheck.exec[%d] must not be empty", i)
+		}
+	}
+	// zero means "omitted, use the guest agent's default" for each of these,
+	// so only a negative value, which no default could stand in for, is
+	// refused.
+	switch {
+	case hc.IntervalSeconds < 0:
+		return errors.New("healthcheck.interval_seconds must not be negative")
+	case hc.TimeoutSeconds < 0:
+		return errors.New("healthcheck.timeout_seconds must not be negative")
+	case hc.StartPeriodSeconds < 0:
+		return errors.New("healthcheck.start_period_seconds must not be negative")
+	case hc.Retries < 0:
+		return errors.New("healthcheck.retries must not be negative")
+	}
+	// attempts run one at a time in the guest, so a timeout above the interval
+	// stretches the interval rather than overlapping attempts. only checked
+	// when the caller set both: a default filled in guest-side is never in
+	// conflict with an explicit value here.
+	if hc.IntervalSeconds > 0 && hc.TimeoutSeconds > hc.IntervalSeconds {
+		return fmt.Errorf("healthcheck.timeout_seconds (%d) must not exceed healthcheck.interval_seconds (%d)",
+			hc.TimeoutSeconds, hc.IntervalSeconds)
 	}
 	return nil
 }
