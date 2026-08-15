@@ -31,6 +31,7 @@ func newUpCmd() *cobra.Command {
 		noCache           bool
 		waitHealthy       bool
 		healthTimeout     time.Duration
+		showCopy          bool
 	)
 	cmd := &cobra.Command{
 		Use:   "up [path]",
@@ -100,9 +101,25 @@ func newUpCmd() *cobra.Command {
 			// the only part of the pipeline that reads the filesystem. It runs
 			// before the --dry-run branch so a missing source or an oversized
 			// tree fails the dry run as well, which is the point of one.
-			copyFiles, err := collectCopyFiles(c.Copy, filepath.Dir(path), nil)
+			//
+			// The walk is filtered through the .fuseignore next to the
+			// Fusefile, which exists whether or not the author wrote one: the
+			// built-in defaults are what keep `from: .` from walking .git into
+			// a 512KiB request body. Ignored paths are dropped before they are
+			// sized, so what a pattern removes does not count against the cap.
+			ign, err := loadFuseignore(filepath.Dir(path))
+			if err != nil {
+				return err
+			}
+			copyFiles, copyStats, err := collectCopy(c.Copy, filepath.Dir(path), ign.decide)
 			if err != nil {
 				return fmt.Errorf("%s: %w", path, err)
+			}
+			// printed before anything else can fail and long before the
+			// create, since the answer to "what am I about to upload" is only
+			// worth having while it can still change something.
+			if showCopy {
+				renderCopyReport(os.Stderr, copyStats)
 			}
 
 			var lp *layerPlan
@@ -290,6 +307,7 @@ func newUpCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&noCache, "no-cache", false, "ignore the Fusefile's cache block and run every setup step")
 	cmd.Flags().BoolVar(&waitHealthy, "wait-healthy", false, "after the environment is running, keep waiting until its `healthcheck` reports passing")
 	cmd.Flags().DurationVar(&healthTimeout, "health-timeout", 2*time.Minute, "how long --wait-healthy waits for a passing verdict before giving up")
+	cmd.Flags().BoolVar(&showCopy, "show-copy", false, "print what the copy block ships, and what .fuseignore dropped, before creating anything")
 	return cmd
 }
 

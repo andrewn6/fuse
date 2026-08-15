@@ -588,6 +588,7 @@ Copied files travel inside the create request, so their combined size is capped
 at **512 KiB**. Going over is an error at `fuse up` naming the size and the
 limit, before anything is uploaded. Datasets, model weights, and `node_modules`
 do not belong here: fetch them from `setup`, or bake them in with `fuse build`.
+`node_modules/` and `.git/` are dropped for you, see [.fuseignore](#fuseignore).
 :::
 
 Two other limits worth knowing before you reach for it:
@@ -599,6 +600,61 @@ Two other limits worth knowing before you reach for it:
   starts from a copy of the source's disk, so it already has the files. A
   restored environment does get them again, since it may have been edited since
   the snapshot.
+
+## .fuseignore
+
+`copy: {from: .}` on a real checkout would ship `.git/`, `node_modules/` and
+`.env` if nothing stopped it. A `.fuseignore` next to the Fusefile is what
+stops it, and a set of defaults is applied whether or not you write one:
+
+```
+.git/  node_modules/  __pycache__/  .venv/  venv/  target/  dist/  build/
+.DS_Store  *.pyc  .env  .env.*  *.pem  *.key
+```
+
+The first group is size. The last four are secrecy: a Fusefile names its
+secrets without carrying their values, so a `copy` that quietly uploaded `.env`
+or a private key would undo that on its first use.
+
+The syntax is gitignore's:
+
+| Pattern | Matches |
+| --- | --- |
+| `*.log` | that name at any depth, so both `app.log` and `logs/app.log` |
+| `build/` | directories only, never a file called `build` |
+| `/tmp-scratch` | only at the top of the copy source, not `src/tmp-scratch` |
+| `docs/drafts` | the same: a `/` anywhere in a pattern anchors it |
+| `build/**/*.o` | `**` spans any number of directories, `*` stops at one |
+| `!keep-this.log` | re-includes something an earlier pattern dropped |
+| `# a comment` | nothing. Blank lines are skipped too |
+
+**The last pattern that matches decides**, and the defaults are matched before
+anything in your file. That is what makes overriding one a single line:
+
+```
+# yes, I really do want the env file in the guest
+!.env
+```
+
+Four things worth stating outright:
+
+- **An ignored directory is pruned, not filtered.** Nothing under it is walked,
+  read, or counted, which is why `.fuseignore` can bring a tree back under the
+  512 KiB cap rather than just hiding part of it from the guest.
+- **Ignores only bound a directory source.** A `from` that names one file
+  copies that file, `.env` included: you asked for it by name.
+- **Patterns anchor to the copy entry's source**, which for the usual
+  `from: .` is the Fusefile's directory. With `from: ./src`, `/main.go` means
+  `src/main.go`.
+- **Only the one file next to the Fusefile is read.** Nested `.fuseignore`
+  files are not, and neither is `.gitignore`: it excludes build outputs an
+  environment often does need, and reading it would make a Fusefile's behavior
+  change when someone edits a file that has nothing to do with it.
+
+To see what all of this leaves, run
+[`fuse up --show-copy`](/reference/cli/up#seeing-what-copy-ships), which prints
+each entry's file count and size, and how much was dropped by your patterns
+versus by the defaults, before anything is created.
 
 ## Startup timeout
 
@@ -777,8 +833,9 @@ fuse init
 ```
 
 writes a commented starter Fusefile to `./Fusefile` (or a path passed via
-`-f`/`--file`). Pass `--force` to overwrite an existing file. The scaffold covers the
-common CPU case and omits the GPU fields, add them by hand from the reference above.
+`-f`/`--file`), and a [`.fuseignore`](#fuseignore) next to it. Pass `--force` to
+overwrite an existing file. The scaffold covers the common CPU case and omits
+the GPU fields, add them by hand from the reference above.
 
 The scaffold is intentionally maximal: its value is naming every field with a
 comment, not being the shortest thing that runs. It is not a working file as

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -232,6 +233,88 @@ func TestEncodeCopyFiles(t *testing.T) {
 	got := encodeCopyFiles(map[string][]byte{"/workspace/a": []byte("hi\n")})
 	if got["/workspace/a"] != "aGkK" {
 		t.Errorf("/workspace/a = %q, want base64 of \"hi\\n\"", got["/workspace/a"])
+	}
+}
+
+func TestRenderCopyReport(t *testing.T) {
+	var buf bytes.Buffer
+	renderCopyReport(&buf, []copyEntryStat{
+		{
+			Spec:           fusefile.CopySpec{From: "./src", To: "/workspace/src"},
+			Files:          2,
+			Bytes:          2048,
+			SkippedPattern: 3,
+			SkippedDefault: 4,
+		},
+		{Spec: fusefile.CopySpec{From: "./start.sh", To: "/workspace/start.sh"}, Files: 1, Bytes: 842},
+	})
+	got := buf.String()
+
+	for _, want := range []string{
+		"copy ./src -> /workspace/src",
+		"2 files, 2.0 KB (3 skipped by .fuseignore, 4 by the defaults)",
+		"copy ./start.sh -> /workspace/start.sh",
+		"1 file, 842 B",
+		"total: 3 files, 2.8 KB",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("report does not contain %q:\n%s", want, got)
+		}
+	}
+
+	buf.Reset()
+	renderCopyReport(&buf, nil)
+	if !strings.Contains(buf.String(), "no copy block") {
+		t.Errorf("empty report = %q", buf.String())
+	}
+}
+
+// --show-copy reports and then goes on to create: it is a look at what is
+// about to be uploaded, not a --dry-run.
+func TestUpShowCopyPrintsAndStillCreates(t *testing.T) {
+	created := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		created = true
+		fmt.Fprint(w, `{"id":"vm1","state":"pending","task_id":"t","url":"","spec":{}}`)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "src", "main.go"), "package main\n")
+	mustWrite(t, filepath.Join(dir, "src", "app.log"), "noise\n")
+	mustWrite(t, filepath.Join(dir, "src", "node_modules", "pkg", "index.js"), "module.exports = {}\n")
+	mustWrite(t, filepath.Join(dir, ".fuseignore"), "*.log\n")
+	mustWrite(t, filepath.Join(dir, "Fusefile"), `version: 1
+copy:
+  - from: ./src
+    to: src
+run: ./start.sh
+`)
+	cfg := writeConfig(t, srv.URL)
+
+	_, stderr, err := captureBoth(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{
+			"--config", cfg, "-o", "json",
+			"up", "-f", filepath.Join(dir, "Fusefile"), "--task-id", "t", "--no-wait", "--show-copy",
+		})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !created {
+		t.Error("--show-copy skipped the create")
+	}
+	for _, want := range []string{
+		"copy ./src -> /workspace/src",
+		"1 file",
+		"1 skipped by .fuseignore",
+		"1 by the defaults",
+	} {
+		if !strings.Contains(stderr, want) {
+			t.Errorf("--show-copy output does not contain %q:\n%s", want, stderr)
+		}
 	}
 }
 
