@@ -1,6 +1,6 @@
 {
   "name": "@folsom/fuse",
-  "version": "0.22.2",
+  "version": "0.23.0",
   "description": "TypeScript SDK for the Fuse microVM control plane",
   "license": "MIT",
   "author": "andrewn6",

@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.23.0](https://github.com/folsomintel/fuse/compare/v0.22.2...v0.23.0) (2026-08-15)
+
+
+### Features
+
+* **fused:** computer control surface for the desktop image ([#190](https://github.com/folsomintel/fuse/issues/190)) ([6a72abd](https://github.com/folsomintel/fuse/commit/6a72abd77baba08e8e5f6d48ce2b94b8fcc2eaa5))
+* **host-agent:** bake a desktop rootfs for computer use ([#189](https://github.com/folsomintel/fuse/issues/189)) ([141c1e0](https://github.com/folsomintel/fuse/commit/141c1e0d7062dd19c5302934eeb560df875d8071))
+
 ## [0.22.2](https://github.com/folsomintel/fuse/compare/v0.22.1...v0.22.2) (2026-08-15)
 
 
