@@ -88,6 +88,32 @@ func TestParseRejectsBadVersion(t *testing.T) {
 	}
 }
 
+// TestParseName covers the accepted shapes of the top-level name, including
+// the omitted case that leaves the CLI to fall back to the directory.
+func TestParseName(t *testing.T) {
+	cases := []struct {
+		name string
+		src  string
+		want string
+	}{
+		{"declared", "version: 1\nname: sandbox\n", "sandbox"},
+		{"with dashes and digits", "version: 1\nname: ci-runner-7\n", "ci-runner-7"},
+		{"omitted", "version: 1\n", ""},
+		{"explicitly empty is the same as omitted", "version: 1\nname: \"\"\n", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f, err := Parse([]byte(tc.src))
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if f.Name != tc.want {
+				t.Fatalf("name = %q, want %q", f.Name, tc.want)
+			}
+		})
+	}
+}
+
 func TestParseRejectsAmbiguousEnv(t *testing.T) {
 	src := "version: 1\nservices:\n  db:\n    image: x\n    env:\n      K: { value: a, secret: b }\n"
 	if _, err := Parse([]byte(src)); err == nil {
@@ -611,6 +637,21 @@ func TestParseStructuralRules(t *testing.T) {
 			name:        "empty env name",
 			src:         "version: 1\nservices:\n  db:\n    image: postgres:16\n    env:\n      \"\": { value: x }\n",
 			wantContain: "services.db.env: environment variable name must not be empty",
+		},
+		{
+			name:        "name with uppercase",
+			src:         "version: 1\nname: Sandbox\n",
+			wantContain: `name: invalid name "Sandbox"`,
+		},
+		{
+			name:        "name with a leading dash",
+			src:         "version: 1\nname: -sandbox\n",
+			wantContain: `name: invalid name "-sandbox"`,
+		},
+		{
+			name:        "name with a slash",
+			src:         "version: 1\nname: team/sandbox\n",
+			wantContain: `name: invalid name "team/sandbox"`,
 		},
 		{
 			name:        "duplicate expose port",
