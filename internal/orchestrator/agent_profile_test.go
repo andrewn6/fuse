@@ -2,8 +2,11 @@ package orchestrator
 
 import (
 	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/folsomintel/fuse/internal/fusefile"
 	"gopkg.in/yaml.v3"
 )
 
@@ -125,6 +128,102 @@ func TestFusedAgentSpecNoComposeWhenNoServices(t *testing.T) {
 	spec := FusedAgentSpec(DefaultFusedManifest, nil, nil, BootOptions{})
 	if _, ok := spec.Files[fuseComposePath]; ok {
 		t.Fatal("did not expect a compose file for a manifest with no services")
+	}
+}
+
+func TestFuseEnvPathConst(t *testing.T) {
+	if fuseEnvPath != "/fuse/env" {
+		t.Fatalf("fuseEnvPath = %q, want /fuse/env", fuseEnvPath)
+	}
+}
+
+func TestFusedAgentSpecWritesEnvFile(t *testing.T) {
+	manifest := []byte(`{"version":"1","machine":{"workspace":"/workspace",` +
+		`"env":{"NODE_ENV":{"value":"production"},"DATABASE_URL":{"secret":"db_url"},` +
+		`"QUOTED":{"value":"it's here"}}},"services":{}}`)
+	secretMap := map[string]string{"db_url": "postgres://u:p@h/db"}
+
+	spec := FusedAgentSpec(manifest, secretMap, nil, BootOptions{})
+
+	raw, ok := spec.Files[fuseEnvPath]
+	if !ok {
+		t.Fatalf("expected an env file at %s", fuseEnvPath)
+	}
+
+	// keys sorted, values single-quoted, one assignment per line.
+	want := "DATABASE_URL='postgres://u:p@h/db'\nNODE_ENV='production'\nQUOTED='it'\\''s here'\n"
+	if string(raw) != want {
+		t.Fatalf("env file =\n%q\nwant\n%q", raw, want)
+	}
+}
+
+func TestFusedAgentSpecNoEnvFileWhenNoEnv(t *testing.T) {
+	spec := FusedAgentSpec(DefaultFusedManifest, nil, nil, BootOptions{})
+	if _, ok := spec.Files[fuseEnvPath]; ok {
+		t.Fatal("did not expect an env file for a manifest with no machine.env")
+	}
+}
+
+// the manifest is caller-supplied on the raw create path, and a key cannot be
+// quoted the way a value can, so a key that is not a shell identifier is
+// dropped instead of becoming a statement the guest would source.
+func TestEnvFileFromManifestDropsMalformedKeys(t *testing.T) {
+	manifest := []byte(`{"machine":{"env":{"OK":{"value":"1"},` +
+		`"BAD=x; rm -rf /":{"value":"2"},"2FAST":{"value":"3"},"":{"value":"4"}}}}`)
+
+	raw, ok := envFileFromManifest(manifest, nil)
+	if !ok {
+		t.Fatal("expected an env file for the one well-formed key")
+	}
+	if string(raw) != "OK='1'\n" {
+		t.Fatalf("env file = %q, want %q", raw, "OK='1'\n")
+	}
+
+	// nothing well-formed left means no file at all.
+	if _, ok := envFileFromManifest([]byte(`{"machine":{"env":{"2FAST":{"value":"3"}}}}`), nil); ok {
+		t.Fatal("did not expect an env file when every key is malformed")
+	}
+}
+
+// end to end across the two packages that have to agree: a secret named in a
+// Fusefile's top-level env block is resolved into /fuse/env at upload time and
+// its value never appears in the script the orchestrator executes. The script
+// reaches ssh as a single argv element, so its text is visible in the host's
+// process table for the length of the boot.
+func TestTopLevelEnvSecretStaysOutOfTheStartupScript(t *testing.T) {
+	const secretValue = "postgres://user:hunter2@db.internal/app"
+
+	f := &fusefile.Fusefile{Version: 1,
+		Env:   map[string]fusefile.EnvValue{"DATABASE_URL": {Secret: "db_url"}},
+		Setup: []fusefile.Step{{Run: "npm ci"}},
+		Run:   fusefile.Command{Shell: "node server.js"}}
+	c, err := fusefile.Compile(f)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	if want := []string{"db_url"}; !reflect.DeepEqual(c.RequiredSecrets, want) {
+		t.Fatalf("required secrets = %v, want %v", c.RequiredSecrets, want)
+	}
+
+	if strings.Contains(c.StartupScript, secretValue) {
+		t.Fatalf("the startup script carries the secret value:\n%s", c.StartupScript)
+	}
+	if !strings.Contains(c.StartupScript, ". "+fuseEnvPath) {
+		t.Fatalf("the startup script does not source %s:\n%s", fuseEnvPath, c.StartupScript)
+	}
+
+	spec := FusedAgentSpec(c.ManifestJSON, map[string]string{"db_url": secretValue}, nil,
+		BootOptions{StartupScript: c.StartupScript})
+
+	raw, ok := spec.Files[fuseEnvPath]
+	if !ok {
+		t.Fatalf("expected an env file at %s", fuseEnvPath)
+	}
+	if !strings.Contains(string(raw), secretValue) {
+		t.Fatalf("env file does not carry the resolved secret: %q", raw)
+	}
+	if strings.Contains(spec.Command, secretValue) {
+		t.Fatalf("the fused command line carries the secret value: %s", spec.Command)
 	}
 }
 

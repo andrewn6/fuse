@@ -30,6 +30,12 @@
       "description": "Local files and directories shipped into the guest before the build steps run. Uploaded alongside the create request rather than embedded in the startup script, so the combined size is capped at 512KiB. Permissions are not preserved: chmod in build.",
       "items": { "$ref": "#/$defs/copyEntry" }
     },
+    "env": {
+      "type": "object",
+      "description": "Environment variables set for every build step and for run. Not inherited by services, which carry their own env. A name must be a shell identifier. A secret-backed value is resolved by the orchestrator into a file under /fuse that the startup script sources, so it never appears in the script text.",
+      "propertyNames": { "pattern": "^[A-Za-z_][A-Za-z0-9_]*$" },
+      "additionalProperties": { "$ref": "#/$defs/envValue" }
+    },
     "build": {
       "type": "array",
       "description": "Steps that prepare the environment. They run to completion, in the workspace, before run.",

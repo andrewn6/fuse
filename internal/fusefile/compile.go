@@ -174,6 +174,18 @@ type manifest struct {
 // consumer is a guest-agent change, not a compiler one.
 type manifestMachine struct {
 	Workspace string `json:"workspace"`
+
+	// Env is Fusefile.Env, carried to the orchestrator instead of being
+	// emitted into the startup script. The orchestrator resolves any secret
+	// reference against the same secret map the guest receives, renders the
+	// result to fuseEnvPath, and the script sources that path: only the path
+	// ends up in the script text, which is handed to ssh as a single argv
+	// element and is therefore readable in the host's process table.
+	//
+	// omitempty is load-bearing. An env-less Fusefile must still compile to
+	// bytes identical to DefaultFusedManifest
+	// (internal/orchestrator/agent_profile.go), which has no env key.
+	Env map[string]manifestEnv `json:"env,omitempty"`
 }
 
 type manifestService struct {
@@ -252,6 +264,22 @@ var exposeNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$
 // ValidExposeName reports whether s is a well-formed expose[].as name.
 func ValidExposeName(s string) bool {
 	return exposeNamePattern.MatchString(s)
+}
+
+// envKeyPattern is the accepted form for a top-level env key: a portable shell
+// identifier, a letter or underscore followed by letters, digits and
+// underscores.
+//
+// The rule is narrow because the key is not just a name. The orchestrator
+// renders the env block into a file of `KEY=<quoted value>` lines that the
+// generated script sources, and the key side of that line cannot be quoted the
+// way shellQuote protects the value. Anything but an identifier is therefore a
+// way to inject a second statement into a file the guest runs.
+var envKeyPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+
+// ValidEnvKey reports whether s is a well-formed environment variable name.
+func ValidEnvKey(s string) bool {
+	return envKeyPattern.MatchString(s)
 }
 
 // validRestartPolicies is the compose-native restart policy vocabulary.
@@ -564,6 +592,20 @@ func compileManifest(f *Fusefile) ([]byte, []string, error) {
 		Services: make(map[string]manifestService, len(f.Services)),
 	}
 
+	// the top-level env block, folded into the same secret set as f.Secrets
+	// and the per-service refs: a `{secret: x}` here requires x exactly the
+	// way `services.<name>.env` does, so `fuse up` still fails before any
+	// network call when x was not supplied.
+	if len(f.Env) > 0 {
+		m.Machine.Env = make(map[string]manifestEnv, len(f.Env))
+		for key, ev := range f.Env {
+			if ev.Secret != "" {
+				secretSet[ev.Secret] = true
+			}
+			m.Machine.Env[key] = manifestEnv(ev)
+		}
+	}
+
 	for name, svc := range f.Services {
 		ms := manifestService{Image: svc.Image, Restart: svc.Restart}
 		if len(svc.Ports) > 0 {
@@ -693,6 +735,36 @@ func scriptPrelude(f *Fusefile) string {
 	return b.String()
 }
 
+// fuseEnvPath is where the orchestrator renders the top-level env block inside
+// the guest. It must match internal/orchestrator's fuseEnvPath, which is the
+// side that writes the file; this package cannot import that one.
+const fuseEnvPath = "/fuse/env"
+
+// envSource renders the fragment that pulls the top-level env block into a
+// generated script, or "" when there is no env block.
+//
+// The values are not here, and that is the point. The script is executed as
+// `sh -lc <script>` and the host agent hands the whole thing to ssh as one argv
+// element, so a resolved secret written into the script text would be readable
+// in the host's process table for the length of the boot. Only fuseEnvPath
+// appears; the file itself lives under /fuse, which the guest mounts on tmpfs.
+//
+// `set -a` exports every assignment the sourced file makes, so build steps, the
+// run command, and anything they spawn all see the variables. It is turned back
+// off immediately so the rest of the script keeps its usual scoping.
+//
+// This is emitted by the boot scripts only (compileStartupScript,
+// StartupScriptFrom, compileRunScript), never by compileBuildScript or
+// SetupScriptRange: those run through `fuse build`'s exec path and their
+// fragments are what layer keys are derived from, and the env block is not in
+// those keys.
+func envSource(f *Fusefile) string {
+	if len(f.Env) == 0 {
+		return ""
+	}
+	return "set -a\n. " + fuseEnvPath + "\nset +a\n"
+}
+
 // compileBuildScript renders the file block and the build steps, without the
 // run command. an empty build phase yields "" rather than a bare prelude:
 // `fuse build` exists to bake those steps, and files alone are re-materialized
@@ -772,6 +844,7 @@ func compileRunScript(f *Fusefile) string {
 	}
 	var b strings.Builder
 	b.WriteString(scriptPrelude(f))
+	b.WriteString(envSource(f))
 	b.WriteString(renderFiles(f.Files))
 	if !f.Run.IsEmpty() {
 		b.WriteString(f.Run.Render())
@@ -836,7 +909,9 @@ func writeBuildAndRun(b *strings.Builder, scripts []string, run Command) {
 
 // compileStartupScript joins the build steps and the run command into a single
 // shell script with a strict-mode prelude. if there is nothing to run (no build
-// steps and no run command), it returns "" rather than a bare prelude.
+// steps and no run command), it returns "" rather than a bare prelude: an env
+// block alone is not something to boot, and the empty script short circuit is
+// what keeps that true.
 //
 // the two phases are emitted as distinguishable halves rather than as a flat
 // concatenation: see BuildPhaseExitStatus for why the seam has to be visible in
@@ -848,6 +923,7 @@ func compileStartupScript(f *Fusefile) string {
 
 	var b strings.Builder
 	b.WriteString(scriptPrelude(f))
+	b.WriteString(envSource(f))
 	b.WriteString(renderFiles(f.Files))
 	writeBuildAndRun(&b, setupScripts(f), f.Run)
 	return b.String()
@@ -880,6 +956,7 @@ func StartupScriptFrom(f *Fusefile, from int) string {
 
 	var b strings.Builder
 	b.WriteString(scriptPrelude(f))
+	b.WriteString(envSource(f))
 	b.WriteString(renderFiles(f.Files))
 	writeBuildAndRun(&b, scripts[from:], f.Run)
 	return b.String()

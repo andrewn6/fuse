@@ -614,20 +614,42 @@ func TestCompileStartupScript(t *testing.T) {
 	cases := []struct {
 		name      string
 		workspace string
+		env       map[string]EnvValue
 		build     []Step
 		run       string
 		want      string
 	}{
 		{
-			"build and run", "", []Step{{Run: "a"}, {Run: "b"}}, "./c",
+			"build and run", "", nil, []Step{{Run: "a"}, {Run: "b"}}, "./c",
 			prelude + buildOpen + "a\nb\n" + buildClose + runMarker + "./c\n",
 		},
-		{"run only", "", nil, "./c", prelude + "./c\n"},
-		{"build only", "", []Step{{Run: "a"}}, "", prelude + buildOpen + "a\n" + buildClose},
-		{"neither", "", nil, "", ""},
+		{"run only", "", nil, nil, "./c", prelude + "./c\n"},
+		{"build only", "", nil, []Step{{Run: "a"}}, "", prelude + buildOpen + "a\n" + buildClose},
+		{"neither", "", nil, nil, "", ""},
+		{
+			// the env block is sourced by path, before the build phase, so both
+			// build and run see it. no key and no value is written into the script.
+			"env is sourced, never interpolated",
+			"",
+			map[string]EnvValue{"NODE_ENV": {Value: "production"}, "TOKEN": {Secret: "api_token"}},
+			[]Step{{Run: "a"}},
+			"./c",
+			prelude + "set -a\n. /fuse/env\nset +a\n" + buildOpen + "a\n" + buildClose + runMarker + "./c\n",
+		},
+		{
+			// an env block on its own is not something to boot, so the empty
+			// script short circuit still wins.
+			"env alone emits no script",
+			"",
+			map[string]EnvValue{"NODE_ENV": {Value: "production"}},
+			nil,
+			"",
+			"",
+		},
 		{
 			"custom workspace",
 			"/srv/app",
+			nil,
 			nil,
 			"./c",
 			"set -eu\nif (set -o pipefail) 2>/dev/null; then set -o pipefail; fi\n" +
@@ -639,6 +661,7 @@ func TestCompileStartupScript(t *testing.T) {
 			"workspace with a quote is escaped",
 			"/tmp/it's here",
 			nil,
+			nil,
 			"./c",
 			"set -eu\nif (set -o pipefail) 2>/dev/null; then set -o pipefail; fi\n" +
 				`mkdir -p '/tmp/it'\''s here'` + "\n" + `cd '/tmp/it'\''s here'` + "\n./c\n",
@@ -648,6 +671,7 @@ func TestCompileStartupScript(t *testing.T) {
 			// after it still starts in the workspace.
 			"per-step workdir is a subshell",
 			"",
+			nil,
 			[]Step{{Run: "a"}, {Workdir: "web", Run: "b"}, {Run: "c"}},
 			"./d",
 			prelude + buildOpen + "a\n(cd 'web'; b)\nc\n" + buildClose + runMarker + "./d\n",
@@ -655,6 +679,7 @@ func TestCompileStartupScript(t *testing.T) {
 		{
 			"absolute per-step workdir",
 			"",
+			nil,
 			[]Step{{Workdir: "/opt/x", Run: "b"}},
 			"",
 			prelude + buildOpen + "(cd '/opt/x'; b)\n" + buildClose,
@@ -662,6 +687,7 @@ func TestCompileStartupScript(t *testing.T) {
 		{
 			"per-step workdir with a quote is escaped",
 			"",
+			nil,
 			[]Step{{Workdir: "it's here", Run: "b"}},
 			"",
 			prelude + buildOpen + `(cd 'it'\''s here'; b)` + "\n" + buildClose,
@@ -670,7 +696,7 @@ func TestCompileStartupScript(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			f := &Fusefile{Version: 1, Workspace: tc.workspace, Build: tc.build, Run: Command{Shell: tc.run}}
+			f := &Fusefile{Version: 1, Workspace: tc.workspace, Env: tc.env, Build: tc.build, Run: Command{Shell: tc.run}}
 			c, err := Compile(f)
 			if err != nil {
 				t.Fatalf("unexpected error: %v", err)
@@ -860,6 +886,82 @@ func TestCompileManifestValueEnvExactBytes(t *testing.T) {
 	want := `{"version":"1","machine":{"workspace":"/workspace"},"services":{"x":{"image":"x","env":{"FOO":{"value":"bar"}}}}}`
 	if string(c.ManifestJSON) != want {
 		t.Fatalf("manifest json =\n%s\nwant\n%s", string(c.ManifestJSON), want)
+	}
+}
+
+// the top-level env block rides in machine.env, and its exact bytes are the
+// contract the orchestrator's /fuse/env renderer and
+// internal/secrets.ExtractRequiredSecrets both read.
+func TestCompileManifestTopLevelEnvExactBytes(t *testing.T) {
+	f := &Fusefile{Version: 1, Env: map[string]EnvValue{
+		"NODE_ENV":     {Value: "production"},
+		"DATABASE_URL": {Secret: "db_url"},
+	}}
+	c, err := Compile(f)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := `{"version":"1","machine":{"workspace":"/workspace","env":{"DATABASE_URL":{"secret":"db_url"},"NODE_ENV":{"value":"production"}}},"services":{}}`
+	if string(c.ManifestJSON) != want {
+		t.Fatalf("manifest json =\n%s\nwant\n%s", string(c.ManifestJSON), want)
+	}
+}
+
+// a secret referenced from the top-level env block is required transitively,
+// exactly as a service's env ref is, so `fuse up` fails before any network call
+// when it was not supplied.
+func TestCompileManifestTopLevelEnvRequiredSecretsUnion(t *testing.T) {
+	f := &Fusefile{Version: 1, Secrets: []string{"s0"},
+		Env: map[string]EnvValue{
+			"A": {Secret: "s1"},
+			"B": {Value: "literal"},
+			// the same secret from two places must still be one requirement.
+			"C": {Secret: "s0"},
+		},
+		Services: map[string]Service{
+			"db": {Image: "d", Env: map[string]EnvValue{"D": {Secret: "s2"}}}}}
+	c, err := Compile(f)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := []string{"s0", "s1", "s2"}
+	if !reflect.DeepEqual(c.RequiredSecrets, want) {
+		t.Fatalf("required secrets = %v, want %v", c.RequiredSecrets, want)
+	}
+}
+
+// the security property this whole block exists for: neither a secret name nor
+// anything that could carry its value reaches the generated script. The script
+// is handed to ssh as one argv element, so its text is public on the host for
+// the length of the boot; only the path to the resolved file appears in it.
+func TestCompileTopLevelEnvSecretNeverReachesTheScript(t *testing.T) {
+	f := &Fusefile{Version: 1,
+		Env:   map[string]EnvValue{"DATABASE_URL": {Secret: "db_url"}},
+		Setup: []Step{{Run: "npm ci"}},
+		Run:   Command{Shell: "node server.js"}}
+	c, err := Compile(f)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	for _, script := range []string{c.StartupScript, c.RunScript, StartupScriptFrom(f, 1)} {
+		if strings.Contains(script, "db_url") {
+			t.Errorf("script names the secret db_url:\n%s", script)
+		}
+		if strings.Contains(script, "DATABASE_URL=") {
+			t.Errorf("script assigns DATABASE_URL inline:\n%s", script)
+		}
+		if !strings.Contains(script, ". /fuse/env") {
+			t.Errorf("script does not source the env file:\n%s", script)
+		}
+	}
+
+	// the build path is deliberately left alone: it runs through exec, and its
+	// fragments are what layer keys are derived from.
+	if strings.Contains(c.BuildScript, "/fuse/env") {
+		t.Errorf("build script sources the env file:\n%s", c.BuildScript)
 	}
 }
 

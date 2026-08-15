@@ -72,6 +72,15 @@ cache:
 # bake genuinely long work into an image with 'fuse build' instead.
 startup_timeout: 55s
 
+# environment variables for every build step and for run. same value-or-secret
+# grammar as services[].env. a { secret: name } entry requires that secret, and
+# its value is resolved into a file the startup script sources, never written
+# into the script itself. services and 'fuse environment exec'/'shell' do not
+# inherit these.
+# env:
+#   NODE_ENV: { value: production }
+#   DATABASE_URL: { secret: db_url }
+
 # work that prepares the environment. runs once at boot, before run, and
 # compiles into startup_script ahead of it. 'setup:' is the old name for this
 # block: it still works, but setting both is an error.

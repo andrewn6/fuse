@@ -677,6 +677,135 @@ func TestParseStructuralRules(t *testing.T) {
 	}
 }
 
+// the top-level env block reuses the services env grammar, and adds a rule of
+// its own: the key is emitted unquoted into the /fuse file the startup script
+// sources, so it has to be a shell identifier.
+func TestParseTopLevelEnv(t *testing.T) {
+	src := `version: 1
+env:
+  NODE_ENV: { value: production }
+  _PORT2: { value: "8080" }
+  DATABASE_URL: { secret: db_url }
+run: node server.js
+`
+	f, err := Parse([]byte(src))
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if got := f.Env["NODE_ENV"].Value; got != "production" {
+		t.Errorf("env.NODE_ENV.value = %q, want production", got)
+	}
+	if got := f.Env["DATABASE_URL"].Secret; got != "db_url" {
+		t.Errorf("env.DATABASE_URL.secret = %q, want db_url", got)
+	}
+	if got := f.Env["DATABASE_URL"].Value; got != "" {
+		t.Errorf("env.DATABASE_URL.value = %q, want empty", got)
+	}
+}
+
+func TestParseTopLevelEnvInvalid(t *testing.T) {
+	cases := []struct {
+		name        string
+		src         string
+		wantContain string
+	}{
+		{
+			name:        "ambiguous",
+			src:         "version: 1\nenv:\n  K: { value: a, secret: b }\n",
+			wantContain: "env.K: value and secret are mutually exclusive",
+		},
+		{
+			name:        "neither value nor secret",
+			src:         "version: 1\nenv:\n  K: {}\n",
+			wantContain: "env.K: value or secret is required",
+		},
+		{
+			name:        "empty name",
+			src:         "version: 1\nenv:\n  \"\": { value: x }\n",
+			wantContain: "env: environment variable name must not be empty",
+		},
+		{
+			name:        "blank name",
+			src:         "version: 1\nenv:\n  \"   \": { value: x }\n",
+			wantContain: "env: environment variable name must not be empty",
+		},
+		{
+			name:        "name starting with a digit",
+			src:         "version: 1\nenv:\n  2FAST: { value: x }\n",
+			wantContain: `env: invalid environment variable name "2FAST"`,
+		},
+		{
+			// the reason the key rule exists: an unvalidated key would carry a
+			// second statement into the file the guest sources.
+			name:        "name carrying a shell statement",
+			src:         "version: 1\nenv:\n  \"A=1; rm -rf /\": { value: x }\n",
+			wantContain: `env: invalid environment variable name "A=1; rm -rf /"`,
+		},
+		{
+			name:        "name with a dash",
+			src:         "version: 1\nenv:\n  NODE-ENV: { value: x }\n",
+			wantContain: `env: invalid environment variable name "NODE-ENV"`,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := Parse([]byte(tc.src))
+			if err == nil {
+				t.Fatalf("expected an error, got nil")
+			}
+			if !strings.Contains(err.Error(), tc.wantContain) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantContain)
+			}
+		})
+	}
+}
+
+// env keys are sorted before validating so the joined message does not depend
+// on go's randomized map iteration order.
+func TestParseTopLevelEnvErrorsSorted(t *testing.T) {
+	src := "version: 1\nenv:\n  ZEBRA: {}\n  APPLE: {}\n"
+
+	_, err := Parse([]byte(src))
+	if err == nil {
+		t.Fatal("expected an error, got nil")
+	}
+	msg := err.Error()
+	appleIdx := strings.Index(msg, "env.APPLE: value or secret is required")
+	zebraIdx := strings.Index(msg, "env.ZEBRA: value or secret is required")
+	if appleIdx == -1 || zebraIdx == -1 {
+		t.Fatalf("expected both env errors present, got: %s", msg)
+	}
+	if appleIdx > zebraIdx {
+		t.Fatalf("expected sorted (APPLE before ZEBRA) order, got: %s", msg)
+	}
+}
+
+func TestValidEnvKey(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"NODE_ENV", true},
+		{"_", true},
+		{"_x1", true},
+		{"a", true},
+		{"PORT8080", true},
+		{"", false},
+		{"1PORT", false},
+		{"NODE-ENV", false},
+		{"NODE ENV", false},
+		{"A=1; echo hi", false},
+		{"FOO\nBAR", false},
+		{"FOO.BAR", false},
+	}
+	for _, tc := range cases {
+		if got := ValidEnvKey(tc.in); got != tc.want {
+			t.Errorf("ValidEnvKey(%q) = %v, want %v", tc.in, got, tc.want)
+		}
+	}
+}
+
 func TestParseAcceptsValidStructuralValues(t *testing.T) {
 	src := `version: 1
 workspace: /srv/app
