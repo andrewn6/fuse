@@ -22,6 +22,35 @@ import (
 // dropped in without the walk itself changing.
 type copyFilter func(rel string, isDir bool) bool
 
+// copyDecision is what the walk does with one path a filter rejected. The two
+// drops are kept apart because --show-copy reports them separately: a file
+// missing because of a pattern the author wrote is a different surprise from
+// one missing because of a built-in default they never saw.
+type copyDecision int
+
+const (
+	copyKeep copyDecision = iota
+	copySkipPattern
+	copySkipDefault
+)
+
+// copyDecider is the reporting form of copyFilter, and what the walk actually
+// consults. .fuseignore supplies one (fuseignore.decide); a plain copyFilter
+// is adapted into one.
+type copyDecider func(rel string, isDir bool) copyDecision
+
+// copyEntryStat is one copy entry's contribution to the create request, which
+// is what --show-copy prints. A skipped directory counts once rather than once
+// per file beneath it: the point of pruning is not to walk what was ignored,
+// so nothing here knows how big node_modules was.
+type copyEntryStat struct {
+	Spec           fusefile.CopySpec
+	Files          int
+	Bytes          int64
+	SkippedPattern int
+	SkippedDefault int
+}
+
 // collectCopyFiles resolves each compiled copy entry against baseDir (the
 // Fusefile's directory) and reads it into the guest-path-to-bytes map the
 // create request carries as `files`.
@@ -42,12 +71,32 @@ type copyFilter func(rel string, isDir bool) bool
 //     output fails naming the limit instead of reading gigabytes into memory
 //     and posting a body the orchestrator was always going to refuse.
 func collectCopyFiles(entries []fusefile.CopySpec, baseDir string, filter copyFilter) (map[string][]byte, error) {
+	var decide copyDecider
+	if filter != nil {
+		// a bare filter says no more than "drop it", so everything it drops
+		// is reported as a pattern skip.
+		decide = func(rel string, isDir bool) copyDecision {
+			if filter(rel, isDir) {
+				return copyKeep
+			}
+			return copySkipPattern
+		}
+	}
+	files, _, err := collectCopy(entries, baseDir, decide)
+	return files, err
+}
+
+// collectCopy is collectCopyFiles with the per-entry counts --show-copy needs.
+func collectCopy(entries []fusefile.CopySpec, baseDir string, decide copyDecider) (map[string][]byte, []copyEntryStat, error) {
 	if len(entries) == 0 {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	c := &copyCollector{files: make(map[string][]byte), owner: make(map[string]int)}
 	for i, entry := range entries {
+		// one stat per entry, in entry order, so stats[i] is entry i.
+		c.stats = append(c.stats, copyEntryStat{Spec: entry})
+
 		src := entry.From
 		if !filepath.IsAbs(src) {
 			src = filepath.Join(baseDir, src)
@@ -57,27 +106,30 @@ func collectCopyFiles(entries []fusefile.CopySpec, baseDir string, filter copyFi
 		// refused rather than resolved behind the author's back.
 		info, err := os.Lstat(src)
 		if err != nil {
-			return nil, fmt.Errorf("copy[%d].from: %w", i, err)
+			return nil, nil, fmt.Errorf("copy[%d].from: %w", i, err)
 		}
 
 		switch {
 		case info.Mode()&os.ModeSymlink != 0:
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"copy[%d].from: %s is a symlink, which copy does not follow; name what it points at instead", i, entry.From)
 		case info.IsDir():
-			if err := walkCopyDir(c, i, src, entry, filter); err != nil {
-				return nil, err
+			if err := walkCopyDir(c, i, src, entry, decide); err != nil {
+				return nil, nil, err
 			}
 		case info.Mode().IsRegular():
+			// an entry that names one file is copied as written: ignores only
+			// bound the expansion of a directory, so `from: ./.env` still
+			// ships the file the author explicitly asked for.
 			if err := c.add(i, src, entry.To, info.Size()); err != nil {
-				return nil, err
+				return nil, nil, err
 			}
 		default:
-			return nil, fmt.Errorf(
+			return nil, nil, fmt.Errorf(
 				"copy[%d].from: %s is neither a regular file nor a directory (mode %s)", i, entry.From, info.Mode())
 		}
 	}
-	return c.files, nil
+	return c.files, c.stats, nil
 }
 
 // walkCopyDir expands a directory source into one entry per regular file
@@ -89,7 +141,7 @@ func collectCopyFiles(entries []fusefile.CopySpec, baseDir string, filter copyFi
 // device node) fails the walk rather than being skipped, because silently
 // dropping part of what an author asked to copy is how a guest ends up missing
 // one file and nobody knows why.
-func walkCopyDir(c *copyCollector, i int, root string, entry fusefile.CopySpec, filter copyFilter) error {
+func walkCopyDir(c *copyCollector, i int, root string, entry fusefile.CopySpec, decide copyDecider) error {
 	return filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return fmt.Errorf("copy[%d].from: %w", i, err)
@@ -103,11 +155,20 @@ func walkCopyDir(c *copyCollector, i int, root string, entry fusefile.CopySpec, 
 		}
 		rel = filepath.ToSlash(rel)
 
-		if filter != nil && !filter(rel, d.IsDir()) {
-			if d.IsDir() {
-				return fs.SkipDir
+		// checked before anything reads or sizes the path, so an ignored
+		// file counts against neither the size cap nor the request body.
+		if decide != nil {
+			if got := decide(rel, d.IsDir()); got != copyKeep {
+				if got == copySkipDefault {
+					c.stats[i].SkippedDefault++
+				} else {
+					c.stats[i].SkippedPattern++
+				}
+				if d.IsDir() {
+					return fs.SkipDir
+				}
+				return nil
 			}
-			return nil
 		}
 		if d.IsDir() {
 			return nil
@@ -150,6 +211,7 @@ type copyCollector struct {
 	files map[string][]byte
 	owner map[string]int // guest path -> the copy entry that claimed it
 	total int64
+	stats []copyEntryStat // one per entry, in entry order
 }
 
 // add records one local file at its guest path, refusing to read it at all
@@ -175,5 +237,7 @@ func (c *copyCollector) add(i int, src, dst string, size int64) error {
 	}
 	c.files[dst] = data
 	c.owner[dst] = i
+	c.stats[i].Files++
+	c.stats[i].Bytes += size
 	return nil
 }
