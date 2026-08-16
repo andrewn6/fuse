@@ -103,7 +103,7 @@ if [ ! -f "$WORK/desktop-full.tar" ]; then
     set -e
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq >/dev/null
-    apt-get install -y --no-install-recommends software-properties-common ca-certificates >/dev/null
+    apt-get install -y --no-install-recommends software-properties-common ca-certificates gnupg >/dev/null
     add-apt-repository -y ppa:mozillateam/ppa >/dev/null 2>&1
     apt-get update -qq >/dev/null
     dpkg-query -W -f="\${Package}\n" | sort > /tmp/before
