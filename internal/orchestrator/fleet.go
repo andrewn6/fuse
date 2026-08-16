@@ -80,6 +80,13 @@ var (
 	// this is a provider capability gap, not a server fault.
 	ErrComputerUnsupported = errors.New("computer not supported by provider")
 
+	// ErrGuestUnavailable is returned by ComputerStream when the guest agent
+	// is reachable but answers 503 for the requested surface: the VM is
+	// running, there is just no display or no vnc server behind it. Unlike
+	// ErrComputerUnsupported this is a property of the image, not the
+	// provider, and it can clear on its own (the desktop units restarting).
+	ErrGuestUnavailable = errors.New("guest surface unavailable")
+
 	// ErrGPUUnsupported is returned by CreateSnapshot and ForkEnvironment
 	// when the target vm holds a gpu passthrough device. A vfio device
 	// cannot be checkpointed (d4), so this is a permanent property of the

@@ -202,6 +202,11 @@ func (h *Handler) register(r chi.Router) {
 	r.Post("/v1/environments/{vmId}/computer", h.computerAction)
 	r.Get("/v1/environments/{vmId}/computer", h.computerDisplay)
 
+	// The live desktop stream is a protocol upgrade like attach, so it is a
+	// sub-path of the computer surface rather than an ?action= verb. See
+	// computerStream in computer.go.
+	r.Get("/v1/environments/{vmId}/computer/stream", h.computerStream)
+
 	r.Post("/v1/environments/{vmId}/snapshots", h.createSnapshot)
 	r.Get("/v1/snapshots", h.listSnapshots)
 	// A fixed sub-path rather than a filter on the collection above: this
