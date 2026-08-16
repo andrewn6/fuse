@@ -1,3 +1,5 @@
+import type { Duplex } from "node:stream";
+
 import type { CallOptions, Transport } from "./transport.js";
 import type {
   ComputerAction,
@@ -19,6 +21,9 @@ import { streamEvents } from "./events.js";
 /** The server's max page size; list() requests this internally so it walks
  * every page in as few round trips as possible. */
 const MAX_PAGE_LIMIT = 200;
+
+/** The Upgrade token that opens a live desktop stream. */
+export const VNC_PROTO = "fuse-vnc/1";
 
 /** Filters (and pagination) for environments.list / environments.listPage. */
 export interface ListEnvironmentsOptions {
@@ -246,6 +251,28 @@ export class EnvironmentsService {
     }
     if (content.length === 0) content.push({ type: "text", text: "done" });
     return { content };
+  }
+
+  /**
+   * Open the live view of a running environment's desktop: a raw RFB (VNC)
+   * byte stream carrying both the display and input, so it is also how a
+   * human takes over a session an agent is driving. The bytes are verbatim
+   * from the vnc server inside the guest; hand the stream to any RFB client.
+   *
+   * Node only — browsers cannot open raw sockets. For a browser, use the
+   * `fuse desktop` CLI command, which bridges this stream to a local viewer.
+   *
+   * Requires an environment booted from a desktop image; on any other image
+   * the server answers 503 with a reason. Unlike exec this accepts API keys.
+   * The caller owns the stream and must destroy() it when done.
+   */
+  async computerStream(vmId: string, opts: CallOptions = {}): Promise<Duplex> {
+    requireArg(vmId, "vm id");
+    return this.t.upgrade(
+      `/v1/environments/${encodeURIComponent(vmId)}/computer/stream`,
+      VNC_PROTO,
+      opts.signal,
+    );
   }
 
   /** Report whether the environment has a live display and at what geometry.

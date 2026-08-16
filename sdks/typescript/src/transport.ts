@@ -4,7 +4,9 @@
 // sdks/go/environments.go. SSE streams use stream() which deliberately applies
 // no timeout (the Go SDK uses a separate Timeout:0 client for events).
 
-import { FuseError, errorFromResponse } from "./errors.js";
+import type { Duplex } from "node:stream";
+
+import { FuseError, errorFromResponse, parseApiError } from "./errors.js";
 
 const REQUEST_ID_HEADER = "X-Request-ID";
 
@@ -146,6 +148,79 @@ export class Transport {
     );
     if (!res.ok) throw await errorFromResponse(res);
     return res;
+  }
+
+  /**
+   * Open a raw HTTP/1.1 upgrade and hand back the socket, positioned at the
+   * first byte of the stream proper. Node only: browsers get no raw sockets,
+   * which is why this imports node:http lazily and fails with a clear error
+   * elsewhere. Mirrors dialUpgrade in sdks/go/exec.go — fetch cannot carry an
+   * upgrade, and node:https pins HTTP/1.1 (node's h2 lives in a separate
+   * module), which is where an upgrade is well defined.
+   */
+  async upgrade(path: string, proto: string, signal?: AbortSignal): Promise<Duplex> {
+    const isHttps = this.baseUrl.protocol === "https:";
+    if (!isHttps && this.baseUrl.protocol !== "http:") {
+      throw new FuseError(`cannot upgrade a ${this.baseUrl.protocol} url`);
+    }
+
+    let request: typeof import("node:http").request;
+    try {
+      ({ request } = isHttps ? await import("node:https") : await import("node:http"));
+    } catch (err) {
+      throw new FuseError(
+        "this stream needs a Node runtime (browsers cannot open raw sockets); " +
+          "use the hosted viewer or the fuse CLI instead",
+        { cause: err },
+      );
+    }
+
+    const url = this.buildUrl(path, undefined);
+    const headers = this.buildHeaders(false);
+    headers["Connection"] = "Upgrade";
+    headers["Upgrade"] = proto;
+
+    return await new Promise<Duplex>((resolve, reject) => {
+      const req = request(url, { headers });
+
+      const onAbort = () => req.destroy(signal?.reason ?? new FuseError("aborted"));
+      signal?.addEventListener("abort", onAbort, { once: true });
+      const cleanup = () => signal?.removeEventListener("abort", onAbort);
+
+      req.on("upgrade", (_res, socket, head) => {
+        cleanup();
+        // bytes that arrived with the response head belong to the stream
+        if (head.length > 0) socket.unshift(head);
+        socket.setTimeout(0);
+        resolve(socket);
+      });
+      req.on("response", (res) => {
+        // the server answered plain HTTP: an error, surfaced in the same
+        // shape as every other call in this SDK
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => {
+          cleanup();
+          const rid = res.headers[REQUEST_ID_HEADER.toLowerCase()];
+          reject(
+            parseApiError(
+              res.statusCode ?? 0,
+              typeof rid === "string" ? rid : undefined,
+              Buffer.concat(chunks).toString("utf-8"),
+            ),
+          );
+        });
+      });
+      req.on("error", (err) => {
+        cleanup();
+        if (signal?.aborted) {
+          reject(err);
+          return;
+        }
+        reject(new FuseError(`upgrade failed: GET ${url}`, { cause: err }));
+      });
+      req.end();
+    });
   }
 
   private async execute(

@@ -122,7 +122,13 @@ interface ErrorEnvelope {
   };
 }
 
-function parseApiError(
+/**
+ * parseApiError builds a FuseApiError from a status, optional request id, and
+ * raw body, parsing the `{"error":{code,message,details}}` envelope when
+ * present. Used directly by paths that do not have a fetch Response (the
+ * upgrade transport reads node http responses).
+ */
+export function parseApiError(
   status: number,
   requestId: string | undefined,
   body: string,
