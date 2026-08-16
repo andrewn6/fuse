@@ -43,6 +43,11 @@ from urllib.parse import parse_qs, urlparse
 FC_DIR = Path(os.environ.get("FC_DIR", "/home/ubuntu/fc"))
 STATE_DIR = FC_DIR / "agent-state"
 VMS_DIR = STATE_DIR / "vms"
+# firecracker api sockets live outside the vm state dir: unix socket paths
+# cap at 107 bytes (sun_path), and STATE_DIR plus a long vm id (build vms
+# embed a nanosecond timestamp) can exceed that, killing firecracker at
+# spawn with "path must be shorter than SUN_LEN".
+SOCK_DIR = Path(os.environ.get("FC_SOCK_DIR", "/tmp/fuse-fc-socks"))
 KERNEL = FC_DIR / "vmlinux.bin"
 BASE_ROOTFS = Path(os.environ.get("BASE_ROOTFS", str(FC_DIR / "rootfs-fused.ext4")))
 # Named rootfs images for bring-your-own-image (see internal/fusefile's
@@ -449,9 +454,21 @@ def pid_alive(pid: int) -> bool:
         return False
 
 
+def sock_path(vm_id: str) -> Path:
+    # short and world-readable so the path never busts sun_path; the hash
+    # suffix keeps truncated names collision-free. vm_id has been through
+    # sanitize_name(), so it is filesystem-safe.
+    SOCK_DIR.mkdir(parents=True, exist_ok=True)
+    name = vm_id
+    if len(str(SOCK_DIR / f"{name}.sock")) > 100:
+        digest = hashlib.sha256(vm_id.encode()).hexdigest()[:12]
+        name = f"{vm_id[:24]}-{digest}"
+    return SOCK_DIR / f"{name}.sock"
+
+
 def start_firecracker(meta: dict) -> None:
     d = vm_dir(meta["vm_id"])
-    sock = d / "fc.sock"
+    sock = sock_path(meta["vm_id"])
     log = d / "fc.log"
     sudo(["rm", "-f", str(sock)], check=False)
     # Launch firecracker under sudo, detach with setsid; capture pid from shell.
