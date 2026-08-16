@@ -12,6 +12,7 @@ from ._core import (
     iter_sse_data,
     serialize_body,
 )
+from ._stream import ComputerStream, open_upgrade
 from .errors import REQUEST_ID_HEADER, check_response
 
 
@@ -87,6 +88,14 @@ class Transport:
                 resp.read()
                 check_response(resp)
             yield from iter_sse_data(resp.iter_lines())
+
+    def upgrade(self, path: str, proto: str) -> ComputerStream:
+        # a raw http/1.1 upgrade over its own socket; httpx cannot carry one
+        # (a client never gets the socket back after a response), so this
+        # bypasses both clients. see _stream.py.
+        return open_upgrade(
+            str(self._http.base_url), path, proto, self._headers(has_body=False)
+        )
 
     def close(self) -> None:
         if self._owns_http:

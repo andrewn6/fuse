@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from typing import Any
 from urllib.parse import quote
 
+from .._stream import VNC_PROTO, ComputerStream
 from .._transport import Transport
 from ..errors import ApiError
 from ..types import (
@@ -160,6 +161,23 @@ class EnvironmentsService:
         if not content:
             content.append({"type": "text", "text": "done"})
         return ComputerToolResult(content=content)
+
+    def computer_stream(self, vm_id: str) -> ComputerStream:
+        # opens the live view of a running environment's desktop: a raw rfb
+        # (vnc) byte stream carrying both the display and input, so it is
+        # also how a human takes over a session an agent is driving. the
+        # bytes are verbatim from the vnc server inside the guest; hand the
+        # stream to any rfb client (the `fuse desktop` cli command wraps it
+        # in a browser viewer).
+        #
+        # requires an environment booted from a desktop image; on any other
+        # image the server answers 503 with a reason. unlike exec this
+        # accepts api keys. the caller owns the stream and must close it
+        # (it is a context manager).
+        if not vm_id:
+            raise ValueError("vm id is required")
+        path = f"/v1/environments/{quote(vm_id, safe='')}/computer/stream"
+        return self._t.upgrade(path, VNC_PROTO)
 
     def computer_display(self, vm_id: str) -> ComputerDisplay:
         # reports whether the environment has a live display and at what
