@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.26.0](https://github.com/folsomintel/fuse/compare/v0.25.0...v0.26.0) (2026-08-16)
+
+
+### Features
+
+* **sdks:** rust sdk ([#200](https://github.com/folsomintel/fuse/issues/200)) ([a446ae6](https://github.com/folsomintel/fuse/commit/a446ae6967792e8be20b8f34c461c25257f43b46))
+
 ## [0.25.0](https://github.com/folsomintel/fuse/compare/v0.24.0...v0.25.0) (2026-08-16)
 
 
