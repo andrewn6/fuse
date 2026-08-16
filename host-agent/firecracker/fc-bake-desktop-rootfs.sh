@@ -202,7 +202,7 @@ if [ "${FC_DESKTOP_SKIP_DISPLAY_CHECK:-0}" != "1" ]; then
     set -e
     Xvfb :99 -screen 0 640x480x24 -nolisten tcp >/dev/null 2>&1 &
     xpid=$!
-    trap "kill $xpid 2>/dev/null || true" EXIT
+    trap "kill $xpid 2>/dev/null; wait $xpid 2>/dev/null; true" EXIT
     i=0
     while [ ! -S /tmp/.X11-unix/X99 ]; do
       i=$((i+1)); [ $i -gt 50 ] && exit 1; sleep 0.2
