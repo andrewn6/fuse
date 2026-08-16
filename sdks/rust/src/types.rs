@@ -912,6 +912,9 @@ pub struct HostCapacity {
 }
 
 impl HostCapacity {
+    /// Returns a capacity declaring the three probe-able hardware facts.
+    /// Use `HostCapacity::default()` with just [`vm_count`](Self::vm_count)
+    /// to have the orchestrator probe them from the host agent instead.
     pub fn new(cpus: u32, ram_mb: u64, storage_gb: u64) -> Self {
         Self {
             cpus,
@@ -919,6 +922,13 @@ impl HostCapacity {
             storage_gb,
             ..Self::default()
         }
+    }
+
+    /// Sets the scheduling VM cap. Never probed, always required on
+    /// registration.
+    pub fn vm_count(mut self, vm_count: u32) -> Self {
+        self.vm_count = vm_count;
+        self
     }
 
     pub fn arch(mut self, arch: Arch) -> Self {
