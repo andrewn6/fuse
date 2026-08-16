@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.27.0](https://github.com/folsomintel/fuse/compare/v0.26.0...v0.27.0) (2026-08-16)
+
+
+### Features
+
+* ent orm spike for the orchestrator state store ([#206](https://github.com/folsomintel/fuse/issues/206)) ([f5fbe66](https://github.com/folsomintel/fuse/commit/f5fbe66dc7d673ec9fed4fde8810e3ec540b6bb3))
+
 ## [0.26.0](https://github.com/folsomintel/fuse/compare/v0.25.0...v0.26.0) (2026-08-16)
 
 
