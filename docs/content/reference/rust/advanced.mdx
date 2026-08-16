@@ -1,0 +1,172 @@
+---
+title: Advanced usage
+sidebar:
+  icon: wrench
+description: Custom transports, retries, request correlation, and testing
+---
+
+## Custom HTTP client
+
+`http_client` on the builder replaces the `reqwest::Client` used for every
+normal (non-streaming) request. Use it to set connection pooling options,
+a proxy, or custom TLS configuration:
+
+```rust
+let http = reqwest::Client::builder()
+    .timeout(std::time::Duration::from_secs(10))
+    .proxy(reqwest::Proxy::all("http://proxy.internal:3128")?)
+    .build()?;
+
+let client = fuse::Client::builder(base_url)
+    .token(token)
+    .http_client(http)
+    .build()?;
+```
+
+This does not affect streaming calls. `events`, `exec`, and the computer
+endpoint always use a separate, internally managed client with no total
+timeout, since a request-level deadline would kill a long-lived SSE
+connection or a long guest command. `exec` bounds itself per call from the
+guest timeout; drop an `EventStream` to stop it.
+
+For just a shorter deadline, `timeout(Duration)` on the builder is enough —
+no custom client needed.
+
+## Retries
+
+The SDK does not retry requests itself — a failed request returns
+immediately as `Error::Transport` or `Error::Api`. This is deliberate: retry
+policy (which codes are safe to retry, backoff shape, idempotency) is
+callsite-specific, and baking one policy into the client would be wrong for
+some callers. Wrap calls yourself:
+
+```rust
+async fn create_with_retry(
+    client: &fuse::Client,
+    request: fuse::CreateRequest,
+) -> Result<fuse::EnvironmentInfo, fuse::Error> {
+    let mut last_err = None;
+    for attempt in 0..3 {
+        match client.environments().create(request.clone()).await {
+            Ok(env) => return Ok(env),
+            Err(err) if err.is_unavailable() => {
+                tokio::time::sleep(std::time::Duration::from_secs(attempt + 1)).await;
+                last_err = Some(err);
+            }
+            Err(err) => return Err(err), // not retryable
+        }
+    }
+    Err(last_err.expect("loop ran"))
+}
+```
+
+`is_unavailable` and `is_conflict` are usually the two codes worth retrying
+(the orchestrator rejecting work while shutting down, or a transient
+scheduling conflict); `is_invalid_argument` and `is_not_found` are not —
+retrying won't change the outcome.
+
+## Request correlation
+
+`request_id` on the builder sets a generator called once per request. Its
+return value is sent as `X-Request-ID` and echoed back on every response,
+including error responses, where it also appears on `ApiError::request_id`.
+Use it to thread a trace ID from your own service into the orchestrator's
+logs and audit events:
+
+```rust
+let client = fuse::Client::builder(base_url)
+    .token(token)
+    .request_id(|| uuid::Uuid::new_v4().to_string())
+    .build()?;
+```
+
+An empty return value from the generator omits the header entirely rather
+than sending a blank one.
+
+The orchestrator echoes the supplied ID only if it is 1 to 128 characters of
+`[A-Za-z0-9_-]` — anything else is silently replaced with a
+server-generated `req_<hex>` ID rather than rejected. Trace formats
+containing `.`, `:`, or `/` are therefore dropped without any error;
+normalize them before returning them from the generator.
+
+## Unknown wire values
+
+Every closed vocabulary (`EnvironmentState`, `HealthState`, `ErrorCode`,
+`MissReason`, `HostState`, `SnapshotState`, and the rest) is an enum with an
+`Other(String)` variant. A value this SDK release does not know decodes into
+`Other` and re-serializes verbatim, so an older client keeps working against
+a newer server. The enums are `#[non_exhaustive]`: always include a wildcard
+arm when matching.
+
+```rust
+match env.state {
+    fuse::EnvironmentState::Running => {}
+    fuse::EnvironmentState::Failed => panic!("provisioning failed"),
+    other => println!("unhandled state: {other}"),
+}
+```
+
+## Testing against the stub
+
+The orchestrator itself, not the SDK, has a built-in in-memory stub
+provider: run it with no `FIRECRACKER_BASE_URL` set and it simulates VM
+lifecycle behavior without booting real microVMs. This is the fastest way to
+test SDK-driven code end to end without a real Firecracker host:
+
+```bash
+go build -o bin/orchestrator ./orchestrator
+./bin/orchestrator   # FIRECRACKER_BASE_URL unset -> stub mode, listens on :8080
+```
+
+Point a client at `http://localhost:8080` with an empty token (the
+orchestrator also runs without auth when `ORCH_AUTH_TOKEN` is unset), and
+`environments()` and `snapshots()` behave exactly as they would against a
+real deployment — states transition, events stream, snapshots and forks work
+(Firecracker-backed stub VMs support both), just nothing is actually
+virtualized underneath.
+
+Two services do **not**. `api_keys()` returns a `404` `route_not_found`
+unless the orchestrator was started with `DATABASE_URL`, since the
+`/v1/api-keys` routes are registered only with a Postgres-backed key store.
+And `hosts().register` never uses the stub: it always builds a real provider
+against the `url` you pass, so with no host agent actually listening there
+the capacity probe fails and registration returns a `502` if you left
+`cpus`/`ram_mb`/`storage_gb` at `0`. Declare all three explicitly to
+register a host in stub mode.
+
+For unit-testing your own code that calls the SDK, a mock HTTP server is the
+pattern the SDK's own test suite uses ([wiremock](https://crates.io/crates/wiremock)) —
+point the client at the mock's URL and assert on what it received:
+
+```rust
+use wiremock::{matchers, Mock, MockServer, ResponseTemplate};
+
+let server = MockServer::start().await;
+Mock::given(matchers::method("POST"))
+    .and(matchers::path("/v1/environments"))
+    .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+        "id": "vm-1", "state": "running", "task_id": "task-1",
+        "url": "https://x",
+        "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:00:00Z",
+    })))
+    .mount(&server)
+    .await;
+
+let client = fuse::Client::new(server.uri(), "test-token")?;
+let env = client
+    .environments()
+    .create(fuse::CreateRequest::new("task-1"))
+    .await?;
+```
+
+## Choosing a timeout
+
+The default 60-second timeout on the normal-request client is generous
+enough for every non-streaming call, including `create`, which blocks
+server-side until the environment reaches `running` or fails. If you're
+provisioning environments with a large `max_runtime_seconds` or a slow
+custom image pull, you generally don't need a longer client timeout for
+that — `create` itself doesn't wait for the whole runtime, only for the
+initial boot. Where you do want a shorter timeout is read-only calls like
+`list`/`get` in a hot path; set one via `timeout` on the builder rather than
+wrapping every call in `tokio::time::timeout`.

@@ -1,0 +1,81 @@
+---
+title: Snapshots
+sidebar:
+  icon: camera
+description: Capturing and restoring a running microVM's state
+---
+
+`client.snapshots()` captures and restores the state of a running microVM.
+Take a snapshot before something risky, and restore if it goes wrong:
+
+```rust
+use fuse::{SnapshotMode, SnapshotRequest};
+
+let snap = client
+    .snapshots()
+    .create(
+        &env.id,
+        SnapshotRequest::new()
+            .comment("before risky migration")
+            .mode(SnapshotMode::Manual),
+    )
+    .await?;
+
+// ... do the risky thing ...
+
+client.snapshots().restore(&snap.id).await?;
+```
+
+- `create`'s `vm_id` must be a `running` environment. `SnapshotRequest` is
+  entirely optional — `SnapshotRequest::new()` with nothing chained is a
+  valid request; `mode` is `SnapshotMode::Manual` or `SnapshotMode::Auto`,
+  and an omitted `retention_seconds` keeps it forever.
+- `restore` is **in place only**: it restores onto the snapshot's original
+  VM, which must still be running. There is no cross-host restore, clone, or
+  standalone restore into a new VM — use `fork` on
+  [`Environments`](/reference/rust/environments) for that instead.
+
+## Everything else
+
+| Method | Purpose |
+| --- | --- |
+| `list(ListSnapshotsOptions)` | List snapshots, optionally filtered by `vm_id`/`task_id`/`tenant_id`/`state`, walking every result page. `list_page` returns one page with a cursor. |
+| `get(snapshot_id)` | Fetch one snapshot's full detail, including `state` (`Creating`\|`Ready`\|`Restoring`\|`Deleting`\|`Error`) and `exports`. |
+| `delete(snapshot_id)` | Leaf-only delete; also removes the underlying provider artifact. No soft-delete. |
+| `resolve(layer_key, arch)` | Look up the newest ready build artifact for one layer cache key and architecture. |
+
+These mirror the [HTTP API](/reference/api) one to one.
+
+## Resolving build layers
+
+`resolve` is the cache lookup behind `fuse build`: given a step's
+content-addressed `layer_key` and an `Arch`, it returns the newest ready
+artifact, or `None` on a miss.
+
+```rust
+use fuse::Arch;
+
+match client.snapshots().resolve(layer_key, Arch::Amd64).await? {
+    Some(artifact) => println!("cache hit: {}", artifact.id),
+    None => println!("cold cache, building from scratch"),
+}
+```
+
+A miss is `Ok(None)`, not an error — a cold cache is the normal state of a
+first build. `arch` is required rather than defaulted because an ext4 rootfs
+is not portable across architectures: resolving without one could hand back
+an artifact the caller cannot boot, at the exact moment it believes it got a
+cache hit.
+
+## The QEMU/GPU exception
+
+Environments running on the QEMU backend (whole-GPU passthrough) cannot be
+snapshotted or forked at all — `create` and `Environments::fork` against a
+GPU environment fail with a `409` `conflict` `ApiError` rather than silently
+no-op-ing. `restore` carries no GPU check of its own; it is simply
+unreachable for a GPU environment because no snapshot of one can exist. See
+[Providers](/docs/concepts/providers).
+
+`err.is_conflict()` reports `true` for the GPU guardrail, so branch on that
+rather than on the error message. A backend with no snapshot support at all
+returns `501` `unimplemented` instead, which `is_conflict` does not match.

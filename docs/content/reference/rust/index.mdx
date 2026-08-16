@@ -1,0 +1,99 @@
+---
+title: Overview
+sidebar:
+  icon: book-open
+description: Install the Rust SDK and construct a client
+---
+
+`folsom-fuse` is the Rust client for the Fuse control plane. It groups four
+resource services (Environments, Hosts, Snapshots, API keys) behind a single
+`Client`, all backed by one shared HTTP transport. The API is async and runs
+on any Tokio runtime.
+
+## Install
+
+```bash
+cargo add folsom-fuse tokio --features tokio/full
+```
+
+The crate is published as `folsom-fuse` (crates.io's `fuse` is taken by the
+filesystem bindings), but the library target is `fuse`, so imports mirror the
+Python SDK's `import fuse`:
+
+```rust
+use fuse::{Client, CreateRequest, Spec};
+```
+
+## Constructing a client
+
+```rust
+let client = fuse::Client::new("https://orchestrator.example.com", "token")?;
+```
+
+The base URL must be the orchestrator's root (no `/v1` suffix). The token is
+sent as a bearer token on every request; pass `""` for an orchestrator
+running without auth and no `Authorization` header is sent at all.
+
+For non-default options, use the builder:
+
+```rust
+use std::time::Duration;
+
+let client = fuse::Client::builder("https://orchestrator.example.com")
+    .token("token")
+    .timeout(Duration::from_secs(10))
+    .user_agent("my-service/1.0")
+    .build()?;
+```
+
+| Builder method | Purpose |
+| --- | --- |
+| `token(str)` | Bearer token for every request. Empty means no auth header. |
+| `timeout(Duration)` | Timeout for normal (non-streaming) requests. Default: 60 seconds. |
+| `user_agent(str)` | Override the `User-Agent` header. Default: `fuse-rust/<version>`. |
+| `request_id(fn)` | Generator called once per request for `X-Request-ID`. An empty return value omits the header. |
+| `http_client(reqwest::Client)` | Override the `reqwest::Client` used for normal requests. |
+
+The default client for normal requests has a 60-second timeout. A separate,
+no-timeout client is used internally for streaming calls (the SSE event
+stream, `exec`, and the computer endpoint), since a long-lived stream should
+not be killed by a per-request deadline; those calls are bounded per call
+instead, and dropping an `EventStream` closes it.
+
+## Services
+
+Services hang off the client as methods, each cheap to call and `Clone`:
+
+| Service | Page |
+| --- | --- |
+| `client.environments()` | [Environments](/reference/rust/environments) |
+| `client.hosts()` | [Hosts](/reference/rust/hosts) |
+| `client.snapshots()` | [Snapshots](/reference/rust/snapshots) |
+| `client.api_keys()` | [API keys](/reference/rust/api-keys) |
+
+The `Client` itself is `Clone` and internally reference-counted, so handing
+one to a spawned task is a cheap `client.clone()`.
+
+## Probing what you're pointed at
+
+```rust
+pub async fn version(&self) -> Result<VersionInfo, Error>
+```
+
+`version` is the only method on `Client` itself rather than on a service. It
+probes `GET /v1/version` unauthenticated and reports what answered:
+`service` and `version` from the body, plus the raw `server_header` and
+`status` from the response. A transport-level failure (connection refused,
+DNS, timeout) comes back as `Err`; a reachable-but-wrong service comes back
+as a `VersionInfo` whose `is_orchestrator()` reports `false`, so you can
+tell "nothing there" from "wrong thing there".
+
+```rust
+let info = client.version().await?; // Err means nothing reachable at that URL
+if !info.is_orchestrator() {
+    panic!("not a fuse orchestrator: server={}", info.server_header);
+}
+```
+
+See [Quickstart](/reference/rust/quickstart) for a complete working
+example, and [Errors](/reference/rust/errors) for how failures surface.

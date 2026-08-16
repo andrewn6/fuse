@@ -1,0 +1,74 @@
+---
+title: Hosts
+sidebar:
+  icon: server
+description: Registering and managing the compute hosts the scheduler places VMs onto
+---
+
+`client.hosts()` registers and manages the compute hosts the scheduler
+places microVMs onto. Register a host, letting the orchestrator probe its
+real hardware capacity rather than trusting a guess:
+
+```rust
+use fuse::{HostBackend, HostCapacity, RegisterHostRequest};
+
+// vm_count is required; cpus/ram_mb/storage_gb left at 0 to probe.
+let capacity = HostCapacity::default().vm_count(20);
+
+let host = client
+    .hosts()
+    .register(
+        RegisterHostRequest::new("prod-east-1", "http://10.0.0.5:8090", capacity)
+            .token(agent_token)
+            .region("us-east")
+            .backend(HostBackend::Firecracker),
+    )
+    .await?;
+for warning in &host.warnings {
+    println!("warning: {warning}");
+}
+```
+
+- `id` is a free-form, operator-supplied string and doubles as the host's
+  primary key. `backend` defaults to firecracker if omitted; only
+  `HostBackend::Qemu` hosts may register with `capacity.gpus > 0`.
+- `capacity.cpus`, `ram_mb`, and `storage_gb` are optional hardware facts:
+  leaving any at `0` (as above) has the orchestrator probe the host agent
+  for the real value instead of trusting a guess. Pass one explicitly to
+  override the probe, for a deliberate overcommit or carve-out — a declared
+  value above what the probe reports still registers, with a warning rather
+  than a rejection. If the orchestrator cannot reach or probe the host agent
+  and `cpus`/`ram_mb`/`storage_gb` were not all declared, registration fails
+  with a `502` `ApiError` instead; declare them explicitly in that case.
+- `token` must be the host agent's own `FC_AGENT_TOKEN`, **not** the
+  orchestrator token. The capacity probe doubles as an auth probe, so a
+  wrong token fails registration with a `502` `ApiError` carrying code
+  `unauthorized`, even when capacity was fully declared.
+- `capacity.vm_count` is scheduling policy, not something a host can report
+  on its own, so it's never probed and is always required.
+- `capacity.mig_profiles` advertises fractional GPU capacity as a map of MIG
+  profile name to instance count (`{"1g.10gb": 4}`). Like `gpus` it requires
+  `HostBackend::Qemu`, and profile names must be in mig-parted form —
+  either violation is a `400` `invalid_argument`. Keys are lowercased
+  server-side before scheduling, so declared casing doesn't have to match a
+  Fusefile's `gpu_profile`.
+- `host.warnings` is only ever populated on this call's response — non-fatal
+  notices like a declared value exceeding what was probed.
+
+## Everything else
+
+| Method | Purpose |
+| --- | --- |
+| `list()` | List every registered host with its declared `capacity` and live `allocated` figures, walking every result page. `list_page` returns one page with a cursor. |
+| `get(host_id)` | Fetch one host by ID. |
+| `cordon(host_id)` / `uncordon(host_id)` | Stop or resume scheduling new environments onto the host, without touching what's already running. |
+| `deregister(host_id)` | Remove the host. Fails with a `409` `conflict` `ApiError` if environments are still assigned to it. |
+
+`err.is_conflict()` reports `true` when the host is still busy, so branch on
+that rather than on the error message. Cordon the host and drain its
+environments before retrying.
+
+`host.state` is a `HostState`: `Active`, `Cordoned`, or `Draining` (plus the
+`Other` passthrough for values a newer server may add). `host.last_seen` is
+set once at registration and never refreshed — it is not a liveness signal.
+These mirror the [HTTP API](/reference/api) one to one.
