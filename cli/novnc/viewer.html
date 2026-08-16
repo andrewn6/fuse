@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>fuse desktop</title>
+    <style>
+      html,
+      body {
+        height: 100%;
+        margin: 0;
+        background: #16181d;
+        color: #c8ccd4;
+        font:
+          13px/1.4 ui-monospace,
+          SFMono-Regular,
+          Menlo,
+          monospace;
+      }
+      body {
+        display: flex;
+        flex-direction: column;
+      }
+      #bar {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 6px 12px;
+        background: #1e2128;
+        border-bottom: 1px solid #2b2f38;
+        user-select: none;
+      }
+      #bar .env {
+        color: #e8eaf0;
+      }
+      #bar .state {
+        color: #7d8590;
+      }
+      #bar .state.connected {
+        color: #7ec699;
+      }
+      #bar .state.failed {
+        color: #e0828a;
+      }
+      #bar .viewonly {
+        color: #d4a55e;
+      }
+      #screen {
+        flex: 1;
+        overflow: hidden;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="bar">
+      <span class="env" id="env"></span>
+      <span class="state" id="state">connecting</span>
+      <span class="viewonly" id="viewonly" hidden>view-only</span>
+    </div>
+    <div id="screen"></div>
+    <script type="module">
+      import RFB from "./novnc/core/rfb.js";
+
+      const params = new URLSearchParams(location.search);
+      document.getElementById("env").textContent = params.get("env") || "";
+
+      const viewOnly = params.get("view_only") === "1";
+      document.getElementById("viewonly").hidden = !viewOnly;
+
+      const state = document.getElementById("state");
+      const scheme = location.protocol === "https:" ? "wss" : "ws";
+      const url =
+        scheme +
+        "://" +
+        location.host +
+        "/ws?token=" +
+        encodeURIComponent(params.get("token") || "");
+
+      const rfb = new RFB(document.getElementById("screen"), url);
+      rfb.viewOnly = viewOnly;
+      rfb.scaleViewport = true;
+      rfb.background = "#16181d";
+
+      rfb.addEventListener("connect", () => {
+        state.textContent = "connected";
+        state.className = "state connected";
+      });
+      rfb.addEventListener("disconnect", (e) => {
+        state.textContent = e.detail.clean
+          ? "disconnected - close this tab, or reload to reconnect"
+          : "connection failed - is the fuse desktop command still running?";
+        state.className = "state failed";
+      });
+    </script>
+  </body>
+</html>
