@@ -110,11 +110,16 @@ if [ ! -f "$WORK/desktop-full.tar" ]; then
     apt-get install -y --no-install-recommends $DESKTOP_PACKAGES >/dev/null
     dpkg-query -W -f="\${Package}\n" | sort > /tmp/after
     comm -13 /tmp/before /tmp/after > /tmp/new-pkgs
-    # union with the packages named in DESKTOP_PACKAGES directly: one of them
-    # (dbus, for dbus-run-session) is pulled in transitively by
-    # software-properties-common earlier, so it never shows up as "new" here
-    # even though the desktop stack explicitly depends on its files.
-    { cat /tmp/new-pkgs; for p in $DESKTOP_PACKAGES; do echo "$p"; done; } | sort -u > /tmp/wanted-pkgs
+    # union with the full dependency closure of DESKTOP_PACKAGES, not just the
+    # names themselves: dbus (for dbus-run-session) and its library
+    # libdbus-1-3 are both pulled in transitively by software-properties-common
+    # earlier, so neither shows up as "new" here even though the desktop
+    # stack depends on their files.
+    apt-cache depends --recurse --no-recommends --no-suggests --no-conflicts \
+      --no-breaks --no-replaces --no-enhances $DESKTOP_PACKAGES 2>/dev/null \
+      | grep -E "^[a-zA-Z0-9]" | sort -u > /tmp/desktop-closure
+    { cat /tmp/new-pkgs /tmp/desktop-closure; for p in $DESKTOP_PACKAGES; do echo "$p"; done; } \
+      | sort -u > /tmp/wanted-pkgs
     while read -r p; do dpkg -L "$p" 2>/dev/null; done < /tmp/wanted-pkgs | sort -u > /tmp/paths
     # gtk apps need the caches the package triggers generated in this
     # container; dpkg does not own them, so they are listed by hand
