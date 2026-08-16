@@ -1,0 +1,168 @@
+---
+title: Environments
+sidebar:
+  icon: box
+description: Provisioning, running commands in, and tearing down microVMs
+---
+
+`client.environments()` provisions, inspects, drives, and tears down
+microVMs. Here's a complete flow: create one, run a command inside it, then
+tear it down.
+
+```rust
+use fuse::{CreateRequest, ExecRequest, Spec};
+
+let env = client
+    .environments()
+    .create(CreateRequest::new("build-1").spec(Spec::new().cpus(2).ram_mb(2048).storage_gb(10)))
+    .await?;
+
+let result = client
+    .environments()
+    .exec(&env.id, ExecRequest::cmd(["make", "test"]))
+    .await?;
+if !result.success() {
+    panic!("tests failed: {}", result.stderr);
+}
+
+client.environments().destroy(&env.id).await?;
+```
+
+- `create` provisions from a `Spec` (CPUs, RAM, storage, and optionally GPU)
+  and blocks server-side until the environment is `running` or provisioning
+  fails, so the returned `EnvironmentInfo` already reflects the outcome. No
+  separate poll-until-ready step is needed for the common case. `Spec`
+  carries `gpus`, `gpu_kind`, and `gpu_profile`; set `gpu_profile` to a
+  mig-parted profile such as `1g.10gb` to request MIG instances instead of
+  whole devices.
+- `exec` runs one command inside the guest and returns its exit code with
+  stdout/stderr kept apart. A **non-zero exit code is a successful call**,
+  not an `Err` — the command ran and failed, which is the answer you asked
+  for. Only an `Err` means the command couldn't run at all (VM not found, VM
+  not running, or the provider has no guest to exec into). `exec` requires
+  the master token, see [Errors](/reference/rust/errors).
+- `destroy` tears the environment down from any state and is idempotent; a
+  second call on an already-gone environment returns a `not_found`
+  `ApiError` rather than panicking or hanging.
+
+## Building an exec request
+
+`ExecRequest` makes the server's cmd-xor-shell rule unrepresentable to get
+wrong: construct it with exactly one of the two.
+
+```rust
+use std::time::Duration;
+use fuse::ExecRequest;
+
+// argv, preferred: no quoting rules, no injection via interpolation.
+let argv = ExecRequest::cmd(["ls", "-l", "/tmp"]);
+
+// shell, only for what argv cannot express: pipes, redirects, globs.
+let piped = ExecRequest::shell("dmesg | tail -n 5").timeout(Duration::from_secs(10));
+```
+
+`timeout` bounds the command inside the guest (the server clamps anything
+above its ceiling). The SDK sizes its own HTTP deadline to the guest timeout
+plus headroom, so a long-running command is never cut short by the 60-second
+default client timeout.
+
+## Watching state instead of exec
+
+If you need to react to lifecycle transitions rather than run a one-shot
+command, `events` opens a live stream instead of a single call:
+
+```rust
+let mut events = client.environments().events(&env.id).await?;
+while let Some(event) = events.next().await {
+    let event = event?;
+    println!("{:?}", event.state);
+    if event.is_terminal() {
+        break;
+    }
+}
+```
+
+The stream delivers the current state immediately on connect, then one event
+per transition, and ends on its own after a terminal state
+(`destroyed`/`failed`). Drop the stream to stop early. See the full
+walkthrough in [Quickstart](/reference/rust/quickstart).
+
+Streams from environments provisioned off a Fusefile also carry **step
+events** (`event.kind == EventKind::Step`) reporting each setup step's
+boundary, timing, and cache verdict (`index`, `total`, `key`, `cached`,
+`miss_reason`). Step events carry no lifecycle state — `event.state` is
+`None` — which is why `state` is an `Option`.
+
+## Computer use
+
+Environments booted from a desktop image also expose the computer surface:
+`computer` relays one action to the desktop, `computer_display` reports the
+display geometry, and `computer_tool_result` executes one Anthropic
+`tool_use` block verbatim and shapes the answer for the Messages API.
+
+```rust
+use fuse::ComputerAction;
+
+let display = client.environments().computer_display(&env.id).await?;
+assert!(display.up);
+
+let shot = client
+    .environments()
+    .computer(&env.id, ComputerAction::screenshot())
+    .await?;
+// shot.screenshot is a base64 png.
+```
+
+An action the environment refuses (a malformed coordinate, a display that is
+not up) comes back from `computer_tool_result` as `is_error` content for the
+model rather than an `Err`, mirroring the Go adapter. See the
+[computer use guide](/docs/guides/computer-use) for the full agent loop.
+
+## Interactive sessions
+
+The Rust SDK has no `attach` — the framed pty stream behind
+[`fuse environment shell`](/reference/cli/environment/shell) is currently
+Go-only. Use `exec` for scripted automation, or the
+[Go SDK](/reference/go/environments#interactive-sessions) to build an
+interactive terminal.
+
+## Everything else
+
+| Method | Purpose |
+| --- | --- |
+| `list(ListEnvironmentsOptions)` | List environments, optionally filtered by `task_id`/`state`/`host_id`, walking every result page. `list_page` returns one page with a cursor. |
+| `get(vm_id)` | Fetch one environment by ID. |
+| `drain(vm_id)` | Phase one of teardown: signal the guest to stop gracefully without destroying the VM. |
+| `fork(vm_id, ForkOptions)` | Create a new environment seeded from a snapshot of this one. |
+| `rotate_token(vm_id)` | Re-issue the guest's credentials without recreating the VM. |
+
+Fork is unavailable wherever snapshotting is — GPU/QEMU-backed environments
+can't be forked, see [Providers](/docs/concepts/providers). Full signatures
+are on [docs.rs](https://docs.rs/folsom-fuse); the shapes above mirror the
+[HTTP API](/reference/api) one to one.
+
+## Lifecycle states
+
+States are a real enum rather than strings:
+
+```rust
+pub enum EnvironmentState {
+    Provisioning,
+    Running,
+    Draining,
+    Destroying,
+    Destroyed,
+    Failed,
+    Other(String), // a state this SDK does not know yet
+}
+
+impl EnvironmentState {
+    pub fn is_terminal(&self) -> bool // destroyed or failed
+    pub fn is_settled(&self) -> bool  // running, or either terminal state
+}
+```
+
+`Other` carries any state a newer server introduces, verbatim, instead of
+failing to decode — match it with a wildcard arm. `is_terminal` reports the
+two states after which an event stream closes; `is_settled` additionally
+covers `running` and is what a wait-until-up loop should break on.

@@ -1,0 +1,35 @@
+---
+title: API keys
+sidebar:
+  icon: key-round
+description: Issuing and revoking orchestrator-global API keys
+---
+
+`client.api_keys()` mints and revokes API keys. All three methods require
+the master token — the server enforces this regardless of what token the
+client was constructed with.
+
+API keys are **Postgres-only**. An orchestrator started without
+`DATABASE_URL` does not register the `/v1/api-keys` routes at all, so
+`create`, `list`, and `revoke` come back as a `404` `ApiError` with code
+`route_not_found`, not `unauthorized`. That is what you will hit against the
+in-memory stub described in
+[Advanced usage](/reference/rust/advanced#testing-against-the-stub).
+
+```rust
+let created = client.api_keys().create("ci-runner").await?;
+println!("save this now: {}", created.key); // shown exactly once
+```
+
+`label` may be empty. `created.key` holds the raw secret and is returned
+exactly once — it cannot be recovered afterward, store it immediately. The
+key's metadata lives on `created.api_key`.
+
+## Everything else
+
+| Method | Purpose |
+| --- | --- |
+| `list()` | List key metadata — `ApiKey` has no secret field. `last_used_at`/`revoked_at` are `None` until they happen. |
+| `revoke(id)` | Revoke the key with the given `id` (the `ApiKey::id`, not the secret itself). |
+
+These mirror the [HTTP API](/reference/api) one to one.

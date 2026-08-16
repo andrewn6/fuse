@@ -1,0 +1,120 @@
+---
+title: Errors
+sidebar:
+  icon: triangle-alert
+description: The Error enum, ApiError, error codes, and the is_* predicates
+---
+
+Every SDK method returns `Result<T, fuse::Error>`. `Error` is an enum with
+four variants:
+
+```rust
+pub enum Error {
+    Api(Box<ApiError>),        // the server answered non-2xx
+    Transport(reqwest::Error), // the request could not be sent or read
+    Decode(serde_json::Error), // a 2xx body did not match the expected shape
+    InvalidRequest(String),    // rejected client-side before being sent
+}
+```
+
+Non-2xx responses come back as `Error::Api`, decoded from the server's
+structured error envelope. Branch on the code, not the message:
+
+```rust
+match client.environments().get(&id).await {
+    Ok(env) => println!("{}", env.state),
+    Err(err) if err.is_not_found() => { /* handle the 404 case */ }
+    Err(err) => return Err(err.into()),
+}
+```
+
+`err.api()` gets you the full `ApiError` when you need more than a yes/no
+check — `status`, `code`, `request_id` (for correlating with server-side
+logs), and `body`:
+
+```rust
+if let Some(api) = err.api() {
+    println!(
+        "status={} code={:?} request_id={:?}",
+        api.status, api.code, api.request_id
+    );
+}
+```
+
+## Code-checking predicates
+
+```rust
+impl Error {
+    pub fn is_not_found(&self) -> bool
+    pub fn is_conflict(&self) -> bool
+    pub fn is_unauthorized(&self) -> bool
+    pub fn is_invalid_argument(&self) -> bool
+    pub fn is_unavailable(&self) -> bool
+
+    pub fn api(&self) -> Option<&ApiError>
+    pub fn status(&self) -> Option<u16>
+    pub fn code(&self) -> Option<&ErrorCode>
+}
+```
+
+Each predicate reports whether the error is an `Error::Api` with the
+matching code. Prefer these over matching `ErrorCode` variants directly, and
+definitely over comparing the `Display` output, which is meant for logs, not
+branching logic.
+
+The server returns further codes with no matching predicate: `Internal`,
+`RouteNotFound`, and `Unimplemented` (`501`, when a provider has no guest to
+[`exec`](/reference/rust/environments) into). Match `err.code()` against the
+`ErrorCode` variant directly until a predicate is added.
+
+## ApiError
+
+```rust
+pub struct ApiError {
+    pub status: u16,
+    pub code: Option<ErrorCode>,
+    pub message: String,
+    pub details: HashMap<String, String>,
+    pub request_id: Option<String>,
+    pub body: Vec<u8>,
+}
+```
+
+`code` is `None` when the response carried no envelope (a proxy error page,
+a panic before the error writer); `message` then falls back to the HTTP
+status text and `body` keeps the raw bytes for debugging.
+
+## Full code list
+
+`ErrorCode` is an enum over the server's closed vocabulary, with an
+`Other(String)` variant that carries any code a newer server introduces
+verbatim instead of failing to decode.
+
+| Variant | Wire value | Typical status |
+| --- | --- | --- |
+| `ErrorCode::NotFound` | `not_found` | `404` |
+| `ErrorCode::RouteNotFound` | `route_not_found` | `404` |
+| `ErrorCode::Conflict` | `conflict` | `409` |
+| `ErrorCode::InvalidArgument` | `invalid_argument` | `400` |
+| `ErrorCode::PayloadTooLarge` | `payload_too_large` | `413` |
+| `ErrorCode::Unauthorized` | `unauthorized` | `401` or `403` |
+| `ErrorCode::Unavailable` | `unavailable` | `503` |
+| `ErrorCode::Internal` | `internal` | `500` or `502` |
+| `ErrorCode::Unimplemented` | `unimplemented` | `501` |
+
+`route_not_found` and `not_found` are both `404` but mean different things:
+`route_not_found` means the URL matches no route the server exposes (a wrong
+host, a wrong port, or a server that isn't a fuse orchestrator at all),
+where `not_found` means the route exists and the resource doesn't. The
+distinction matters in practice because the `/v1/api-keys` routes are
+registered only on a Postgres-backed orchestrator, so
+[API keys](/reference/rust/api-keys) calls against an orchestrator without
+`DATABASE_URL` come back as `route_not_found`.
+
+## Client-side errors
+
+`Error::InvalidRequest` is returned before any request is sent: an empty or
+unparseable base URL at build time, an empty `vm_id`/`host_id`/`snapshot_id`
+argument, or an empty exec command. These mirror the Go SDK's client-side
+checks, so a typo'd empty string fails fast instead of producing a confusing
+404.

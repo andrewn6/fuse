@@ -1,0 +1,81 @@
+---
+title: Quickstart
+sidebar:
+  icon: rocket
+description: Provision a microVM, tail its lifecycle, and tear it down
+---
+
+This walks through the full lifecycle of an environment using the Rust SDK:
+create one, wait for it to come up, and destroy it.
+
+## Full example
+
+```rust
+use fuse::{Client, CreateRequest, Spec};
+
+#[tokio::main]
+async fn main() -> Result<(), fuse::Error> {
+    let client = Client::new("https://orchestrator.example.com", "token")?;
+
+    let env = client
+        .environments()
+        .create(CreateRequest::new("task-1").spec(Spec::new().cpus(1).ram_mb(512)))
+        .await?;
+    println!("created: {} {}", env.id, env.state);
+
+    let mut events = client.environments().events(&env.id).await?;
+    while let Some(event) = events.next().await {
+        let event = event?;
+        println!("state: {:?}", event.state);
+        if event.state.as_ref().is_some_and(|s| s.is_settled()) {
+            break;
+        }
+    }
+
+    client.environments().destroy(&env.id).await?;
+    println!("destroyed: {}", env.id);
+    Ok(())
+}
+```
+
+## What each step does
+
+**`create`** provisions a microVM from a `Spec` (CPUs, RAM, storage, and
+optionally GPU). `CreateRequest::new` takes the one required field
+(`task_id`); everything else chains on with setters. The call blocks
+server-side until the environment is running, and returns an `Err` if
+provisioning fails. There is **no** success path that hands back an
+`EnvironmentInfo` in `failed` state, so don't branch on
+`env.state == EnvironmentState::Failed` after an `Ok` — that branch can
+never be taken.
+
+**`events`** opens the SSE event stream for that environment and returns an
+`EventStream`; call `.next().await` until it returns `None`. The stream
+delivers the current state immediately on connect, then one event per
+transition. It ends on its own after a terminal state (`destroyed` or
+`failed`); a stream-level failure is yielded as an `Err` item. There is no
+built-in timeout: drop the stream to stop it early.
+
+Because `create` has already returned by this point, the first event is a
+snapshot of the current state (`running`) and nothing transitions after it
+until something destroys the environment. Break on
+`EnvironmentState::is_settled`, as above, which covers `running` plus both
+terminal states. Do **not** loop on `is_terminal`: it is only ever true for
+`destroyed` or `failed`, so a healthy environment never satisfies it and the
+loop blocks forever. `is_terminal` is for callers that genuinely want to
+watch an environment until it goes away.
+
+`event.state` is an `Option<EnvironmentState>` because [step
+events](/reference/rust/environments#watching-state-instead-of-exec) carry
+no lifecycle state; on state events it is always populated.
+
+**`destroy`** tears the environment down. It is idempotent: destroying an
+already-gone environment returns a `not_found` [`ApiError`](/reference/rust/errors),
+not a panic or a different error shape.
+
+## Next steps
+
+- [Environments](/reference/rust/environments) covers every method on
+  `Environments`, including drain, fork, and rotate-token.
+- [Errors](/reference/rust/errors) covers how to branch on the server's
+  error codes instead of comparing strings.
