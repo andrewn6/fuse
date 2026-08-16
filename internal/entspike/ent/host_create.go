@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"time"
 
+	"entgo.io/ent/dialect"
+	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/folsomintel/fuse/internal/entspike/ent/host"
@@ -18,6 +20,7 @@ type HostCreate struct {
 	config
 	mutation *HostMutation
 	hooks    []Hook
+	conflict []sql.ConflictOption
 }
 
 // SetURL sets the "url" field.
@@ -432,6 +435,7 @@ func (_c *HostCreate) createSpec() (*Host, *sqlgraph.CreateSpec) {
 		_node = &Host{config: _c.config}
 		_spec = sqlgraph.NewCreateSpec(host.Table, sqlgraph.NewFieldSpec(host.FieldID, field.TypeString))
 	)
+	_spec.OnConflict = _c.conflict
 	if id, ok := _c.mutation.ID(); ok {
 		_node.ID = id
 		_spec.ID.Value = id
@@ -511,11 +515,709 @@ func (_c *HostCreate) createSpec() (*Host, *sqlgraph.CreateSpec) {
 	return _node, _spec
 }
 
+// OnConflict allows configuring the `ON CONFLICT` / `ON DUPLICATE KEY` clause
+// of the `INSERT` statement. For example:
+//
+//	client.Host.Create().
+//		SetURL(v).
+//		OnConflict(
+//			// Update the row with the new values
+//			// the was proposed for insertion.
+//			sql.ResolveWithNewValues(),
+//		).
+//		// Override some of the fields with custom
+//		// update values.
+//		Update(func(u *ent.HostUpsert) {
+//			SetURL(v+v).
+//		}).
+//		Exec(ctx)
+func (_c *HostCreate) OnConflict(opts ...sql.ConflictOption) *HostUpsertOne {
+	_c.conflict = opts
+	return &HostUpsertOne{
+		create: _c,
+	}
+}
+
+// OnConflictColumns calls `OnConflict` and configures the columns
+// as conflict target. Using this option is equivalent to using:
+//
+//	client.Host.Create().
+//		OnConflict(sql.ConflictColumns(columns...)).
+//		Exec(ctx)
+func (_c *HostCreate) OnConflictColumns(columns ...string) *HostUpsertOne {
+	_c.conflict = append(_c.conflict, sql.ConflictColumns(columns...))
+	return &HostUpsertOne{
+		create: _c,
+	}
+}
+
+type (
+	// HostUpsertOne is the builder for "upsert"-ing
+	//  one Host node.
+	HostUpsertOne struct {
+		create *HostCreate
+	}
+
+	// HostUpsert is the "OnConflict" setter.
+	HostUpsert struct {
+		*sql.UpdateSet
+	}
+)
+
+// SetURL sets the "url" field.
+func (u *HostUpsert) SetURL(v string) *HostUpsert {
+	u.Set(host.FieldURL, v)
+	return u
+}
+
+// UpdateURL sets the "url" field to the value that was provided on create.
+func (u *HostUpsert) UpdateURL() *HostUpsert {
+	u.SetExcluded(host.FieldURL)
+	return u
+}
+
+// SetTokenEncrypted sets the "token_encrypted" field.
+func (u *HostUpsert) SetTokenEncrypted(v []byte) *HostUpsert {
+	u.Set(host.FieldTokenEncrypted, v)
+	return u
+}
+
+// UpdateTokenEncrypted sets the "token_encrypted" field to the value that was provided on create.
+func (u *HostUpsert) UpdateTokenEncrypted() *HostUpsert {
+	u.SetExcluded(host.FieldTokenEncrypted)
+	return u
+}
+
+// ClearTokenEncrypted clears the value of the "token_encrypted" field.
+func (u *HostUpsert) ClearTokenEncrypted() *HostUpsert {
+	u.SetNull(host.FieldTokenEncrypted)
+	return u
+}
+
+// SetRegion sets the "region" field.
+func (u *HostUpsert) SetRegion(v string) *HostUpsert {
+	u.Set(host.FieldRegion, v)
+	return u
+}
+
+// UpdateRegion sets the "region" field to the value that was provided on create.
+func (u *HostUpsert) UpdateRegion() *HostUpsert {
+	u.SetExcluded(host.FieldRegion)
+	return u
+}
+
+// SetState sets the "state" field.
+func (u *HostUpsert) SetState(v host.State) *HostUpsert {
+	u.Set(host.FieldState, v)
+	return u
+}
+
+// UpdateState sets the "state" field to the value that was provided on create.
+func (u *HostUpsert) UpdateState() *HostUpsert {
+	u.SetExcluded(host.FieldState)
+	return u
+}
+
+// SetTenantID sets the "tenant_id" field.
+func (u *HostUpsert) SetTenantID(v string) *HostUpsert {
+	u.Set(host.FieldTenantID, v)
+	return u
+}
+
+// UpdateTenantID sets the "tenant_id" field to the value that was provided on create.
+func (u *HostUpsert) UpdateTenantID() *HostUpsert {
+	u.SetExcluded(host.FieldTenantID)
+	return u
+}
+
+// SetCpusTotal sets the "cpus_total" field.
+func (u *HostUpsert) SetCpusTotal(v int) *HostUpsert {
+	u.Set(host.FieldCpusTotal, v)
+	return u
+}
+
+// UpdateCpusTotal sets the "cpus_total" field to the value that was provided on create.
+func (u *HostUpsert) UpdateCpusTotal() *HostUpsert {
+	u.SetExcluded(host.FieldCpusTotal)
+	return u
+}
+
+// AddCpusTotal adds v to the "cpus_total" field.
+func (u *HostUpsert) AddCpusTotal(v int) *HostUpsert {
+	u.Add(host.FieldCpusTotal, v)
+	return u
+}
+
+// SetRAMMBTotal sets the "ram_mb_total" field.
+func (u *HostUpsert) SetRAMMBTotal(v int) *HostUpsert {
+	u.Set(host.FieldRAMMBTotal, v)
+	return u
+}
+
+// UpdateRAMMBTotal sets the "ram_mb_total" field to the value that was provided on create.
+func (u *HostUpsert) UpdateRAMMBTotal() *HostUpsert {
+	u.SetExcluded(host.FieldRAMMBTotal)
+	return u
+}
+
+// AddRAMMBTotal adds v to the "ram_mb_total" field.
+func (u *HostUpsert) AddRAMMBTotal(v int) *HostUpsert {
+	u.Add(host.FieldRAMMBTotal, v)
+	return u
+}
+
+// SetStorageGBTotal sets the "storage_gb_total" field.
+func (u *HostUpsert) SetStorageGBTotal(v int) *HostUpsert {
+	u.Set(host.FieldStorageGBTotal, v)
+	return u
+}
+
+// UpdateStorageGBTotal sets the "storage_gb_total" field to the value that was provided on create.
+func (u *HostUpsert) UpdateStorageGBTotal() *HostUpsert {
+	u.SetExcluded(host.FieldStorageGBTotal)
+	return u
+}
+
+// AddStorageGBTotal adds v to the "storage_gb_total" field.
+func (u *HostUpsert) AddStorageGBTotal(v int) *HostUpsert {
+	u.Add(host.FieldStorageGBTotal, v)
+	return u
+}
+
+// SetVMCountMax sets the "vm_count_max" field.
+func (u *HostUpsert) SetVMCountMax(v int) *HostUpsert {
+	u.Set(host.FieldVMCountMax, v)
+	return u
+}
+
+// UpdateVMCountMax sets the "vm_count_max" field to the value that was provided on create.
+func (u *HostUpsert) UpdateVMCountMax() *HostUpsert {
+	u.SetExcluded(host.FieldVMCountMax)
+	return u
+}
+
+// AddVMCountMax adds v to the "vm_count_max" field.
+func (u *HostUpsert) AddVMCountMax(v int) *HostUpsert {
+	u.Add(host.FieldVMCountMax, v)
+	return u
+}
+
+// SetCpusAllocated sets the "cpus_allocated" field.
+func (u *HostUpsert) SetCpusAllocated(v int) *HostUpsert {
+	u.Set(host.FieldCpusAllocated, v)
+	return u
+}
+
+// UpdateCpusAllocated sets the "cpus_allocated" field to the value that was provided on create.
+func (u *HostUpsert) UpdateCpusAllocated() *HostUpsert {
+	u.SetExcluded(host.FieldCpusAllocated)
+	return u
+}
+
+// AddCpusAllocated adds v to the "cpus_allocated" field.
+func (u *HostUpsert) AddCpusAllocated(v int) *HostUpsert {
+	u.Add(host.FieldCpusAllocated, v)
+	return u
+}
+
+// SetRAMMBAllocated sets the "ram_mb_allocated" field.
+func (u *HostUpsert) SetRAMMBAllocated(v int) *HostUpsert {
+	u.Set(host.FieldRAMMBAllocated, v)
+	return u
+}
+
+// UpdateRAMMBAllocated sets the "ram_mb_allocated" field to the value that was provided on create.
+func (u *HostUpsert) UpdateRAMMBAllocated() *HostUpsert {
+	u.SetExcluded(host.FieldRAMMBAllocated)
+	return u
+}
+
+// AddRAMMBAllocated adds v to the "ram_mb_allocated" field.
+func (u *HostUpsert) AddRAMMBAllocated(v int) *HostUpsert {
+	u.Add(host.FieldRAMMBAllocated, v)
+	return u
+}
+
+// SetStorageGBAllocated sets the "storage_gb_allocated" field.
+func (u *HostUpsert) SetStorageGBAllocated(v int) *HostUpsert {
+	u.Set(host.FieldStorageGBAllocated, v)
+	return u
+}
+
+// UpdateStorageGBAllocated sets the "storage_gb_allocated" field to the value that was provided on create.
+func (u *HostUpsert) UpdateStorageGBAllocated() *HostUpsert {
+	u.SetExcluded(host.FieldStorageGBAllocated)
+	return u
+}
+
+// AddStorageGBAllocated adds v to the "storage_gb_allocated" field.
+func (u *HostUpsert) AddStorageGBAllocated(v int) *HostUpsert {
+	u.Add(host.FieldStorageGBAllocated, v)
+	return u
+}
+
+// SetVMCountAllocated sets the "vm_count_allocated" field.
+func (u *HostUpsert) SetVMCountAllocated(v int) *HostUpsert {
+	u.Set(host.FieldVMCountAllocated, v)
+	return u
+}
+
+// UpdateVMCountAllocated sets the "vm_count_allocated" field to the value that was provided on create.
+func (u *HostUpsert) UpdateVMCountAllocated() *HostUpsert {
+	u.SetExcluded(host.FieldVMCountAllocated)
+	return u
+}
+
+// AddVMCountAllocated adds v to the "vm_count_allocated" field.
+func (u *HostUpsert) AddVMCountAllocated(v int) *HostUpsert {
+	u.Add(host.FieldVMCountAllocated, v)
+	return u
+}
+
+// SetLabels sets the "labels" field.
+func (u *HostUpsert) SetLabels(v map[string]string) *HostUpsert {
+	u.Set(host.FieldLabels, v)
+	return u
+}
+
+// UpdateLabels sets the "labels" field to the value that was provided on create.
+func (u *HostUpsert) UpdateLabels() *HostUpsert {
+	u.SetExcluded(host.FieldLabels)
+	return u
+}
+
+// SetArch sets the "arch" field.
+func (u *HostUpsert) SetArch(v string) *HostUpsert {
+	u.Set(host.FieldArch, v)
+	return u
+}
+
+// UpdateArch sets the "arch" field to the value that was provided on create.
+func (u *HostUpsert) UpdateArch() *HostUpsert {
+	u.SetExcluded(host.FieldArch)
+	return u
+}
+
+// SetLastSeenAt sets the "last_seen_at" field.
+func (u *HostUpsert) SetLastSeenAt(v time.Time) *HostUpsert {
+	u.Set(host.FieldLastSeenAt, v)
+	return u
+}
+
+// UpdateLastSeenAt sets the "last_seen_at" field to the value that was provided on create.
+func (u *HostUpsert) UpdateLastSeenAt() *HostUpsert {
+	u.SetExcluded(host.FieldLastSeenAt)
+	return u
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (u *HostUpsert) SetUpdatedAt(v time.Time) *HostUpsert {
+	u.Set(host.FieldUpdatedAt, v)
+	return u
+}
+
+// UpdateUpdatedAt sets the "updated_at" field to the value that was provided on create.
+func (u *HostUpsert) UpdateUpdatedAt() *HostUpsert {
+	u.SetExcluded(host.FieldUpdatedAt)
+	return u
+}
+
+// UpdateNewValues updates the mutable fields using the new values that were set on create except the ID field.
+// Using this option is equivalent to using:
+//
+//	client.Host.Create().
+//		OnConflict(
+//			sql.ResolveWithNewValues(),
+//			sql.ResolveWith(func(u *sql.UpdateSet) {
+//				u.SetIgnore(host.FieldID)
+//			}),
+//		).
+//		Exec(ctx)
+func (u *HostUpsertOne) UpdateNewValues() *HostUpsertOne {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWithNewValues())
+	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(s *sql.UpdateSet) {
+		if _, exists := u.create.mutation.ID(); exists {
+			s.SetIgnore(host.FieldID)
+		}
+		if _, exists := u.create.mutation.CreatedAt(); exists {
+			s.SetIgnore(host.FieldCreatedAt)
+		}
+	}))
+	return u
+}
+
+// Ignore sets each column to itself in case of conflict.
+// Using this option is equivalent to using:
+//
+//	client.Host.Create().
+//	    OnConflict(sql.ResolveWithIgnore()).
+//	    Exec(ctx)
+func (u *HostUpsertOne) Ignore() *HostUpsertOne {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWithIgnore())
+	return u
+}
+
+// DoNothing configures the conflict_action to `DO NOTHING`.
+// Supported only by SQLite and PostgreSQL.
+func (u *HostUpsertOne) DoNothing() *HostUpsertOne {
+	u.create.conflict = append(u.create.conflict, sql.DoNothing())
+	return u
+}
+
+// Update allows overriding fields `UPDATE` values. See the HostCreate.OnConflict
+// documentation for more info.
+func (u *HostUpsertOne) Update(set func(*HostUpsert)) *HostUpsertOne {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(update *sql.UpdateSet) {
+		set(&HostUpsert{UpdateSet: update})
+	}))
+	return u
+}
+
+// SetURL sets the "url" field.
+func (u *HostUpsertOne) SetURL(v string) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetURL(v)
+	})
+}
+
+// UpdateURL sets the "url" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateURL() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateURL()
+	})
+}
+
+// SetTokenEncrypted sets the "token_encrypted" field.
+func (u *HostUpsertOne) SetTokenEncrypted(v []byte) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetTokenEncrypted(v)
+	})
+}
+
+// UpdateTokenEncrypted sets the "token_encrypted" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateTokenEncrypted() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateTokenEncrypted()
+	})
+}
+
+// ClearTokenEncrypted clears the value of the "token_encrypted" field.
+func (u *HostUpsertOne) ClearTokenEncrypted() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.ClearTokenEncrypted()
+	})
+}
+
+// SetRegion sets the "region" field.
+func (u *HostUpsertOne) SetRegion(v string) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetRegion(v)
+	})
+}
+
+// UpdateRegion sets the "region" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateRegion() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateRegion()
+	})
+}
+
+// SetState sets the "state" field.
+func (u *HostUpsertOne) SetState(v host.State) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetState(v)
+	})
+}
+
+// UpdateState sets the "state" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateState() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateState()
+	})
+}
+
+// SetTenantID sets the "tenant_id" field.
+func (u *HostUpsertOne) SetTenantID(v string) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetTenantID(v)
+	})
+}
+
+// UpdateTenantID sets the "tenant_id" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateTenantID() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateTenantID()
+	})
+}
+
+// SetCpusTotal sets the "cpus_total" field.
+func (u *HostUpsertOne) SetCpusTotal(v int) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetCpusTotal(v)
+	})
+}
+
+// AddCpusTotal adds v to the "cpus_total" field.
+func (u *HostUpsertOne) AddCpusTotal(v int) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.AddCpusTotal(v)
+	})
+}
+
+// UpdateCpusTotal sets the "cpus_total" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateCpusTotal() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateCpusTotal()
+	})
+}
+
+// SetRAMMBTotal sets the "ram_mb_total" field.
+func (u *HostUpsertOne) SetRAMMBTotal(v int) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetRAMMBTotal(v)
+	})
+}
+
+// AddRAMMBTotal adds v to the "ram_mb_total" field.
+func (u *HostUpsertOne) AddRAMMBTotal(v int) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.AddRAMMBTotal(v)
+	})
+}
+
+// UpdateRAMMBTotal sets the "ram_mb_total" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateRAMMBTotal() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateRAMMBTotal()
+	})
+}
+
+// SetStorageGBTotal sets the "storage_gb_total" field.
+func (u *HostUpsertOne) SetStorageGBTotal(v int) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetStorageGBTotal(v)
+	})
+}
+
+// AddStorageGBTotal adds v to the "storage_gb_total" field.
+func (u *HostUpsertOne) AddStorageGBTotal(v int) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.AddStorageGBTotal(v)
+	})
+}
+
+// UpdateStorageGBTotal sets the "storage_gb_total" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateStorageGBTotal() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateStorageGBTotal()
+	})
+}
+
+// SetVMCountMax sets the "vm_count_max" field.
+func (u *HostUpsertOne) SetVMCountMax(v int) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetVMCountMax(v)
+	})
+}
+
+// AddVMCountMax adds v to the "vm_count_max" field.
+func (u *HostUpsertOne) AddVMCountMax(v int) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.AddVMCountMax(v)
+	})
+}
+
+// UpdateVMCountMax sets the "vm_count_max" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateVMCountMax() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateVMCountMax()
+	})
+}
+
+// SetCpusAllocated sets the "cpus_allocated" field.
+func (u *HostUpsertOne) SetCpusAllocated(v int) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetCpusAllocated(v)
+	})
+}
+
+// AddCpusAllocated adds v to the "cpus_allocated" field.
+func (u *HostUpsertOne) AddCpusAllocated(v int) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.AddCpusAllocated(v)
+	})
+}
+
+// UpdateCpusAllocated sets the "cpus_allocated" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateCpusAllocated() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateCpusAllocated()
+	})
+}
+
+// SetRAMMBAllocated sets the "ram_mb_allocated" field.
+func (u *HostUpsertOne) SetRAMMBAllocated(v int) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetRAMMBAllocated(v)
+	})
+}
+
+// AddRAMMBAllocated adds v to the "ram_mb_allocated" field.
+func (u *HostUpsertOne) AddRAMMBAllocated(v int) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.AddRAMMBAllocated(v)
+	})
+}
+
+// UpdateRAMMBAllocated sets the "ram_mb_allocated" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateRAMMBAllocated() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateRAMMBAllocated()
+	})
+}
+
+// SetStorageGBAllocated sets the "storage_gb_allocated" field.
+func (u *HostUpsertOne) SetStorageGBAllocated(v int) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetStorageGBAllocated(v)
+	})
+}
+
+// AddStorageGBAllocated adds v to the "storage_gb_allocated" field.
+func (u *HostUpsertOne) AddStorageGBAllocated(v int) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.AddStorageGBAllocated(v)
+	})
+}
+
+// UpdateStorageGBAllocated sets the "storage_gb_allocated" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateStorageGBAllocated() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateStorageGBAllocated()
+	})
+}
+
+// SetVMCountAllocated sets the "vm_count_allocated" field.
+func (u *HostUpsertOne) SetVMCountAllocated(v int) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetVMCountAllocated(v)
+	})
+}
+
+// AddVMCountAllocated adds v to the "vm_count_allocated" field.
+func (u *HostUpsertOne) AddVMCountAllocated(v int) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.AddVMCountAllocated(v)
+	})
+}
+
+// UpdateVMCountAllocated sets the "vm_count_allocated" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateVMCountAllocated() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateVMCountAllocated()
+	})
+}
+
+// SetLabels sets the "labels" field.
+func (u *HostUpsertOne) SetLabels(v map[string]string) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetLabels(v)
+	})
+}
+
+// UpdateLabels sets the "labels" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateLabels() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateLabels()
+	})
+}
+
+// SetArch sets the "arch" field.
+func (u *HostUpsertOne) SetArch(v string) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetArch(v)
+	})
+}
+
+// UpdateArch sets the "arch" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateArch() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateArch()
+	})
+}
+
+// SetLastSeenAt sets the "last_seen_at" field.
+func (u *HostUpsertOne) SetLastSeenAt(v time.Time) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetLastSeenAt(v)
+	})
+}
+
+// UpdateLastSeenAt sets the "last_seen_at" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateLastSeenAt() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateLastSeenAt()
+	})
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (u *HostUpsertOne) SetUpdatedAt(v time.Time) *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.SetUpdatedAt(v)
+	})
+}
+
+// UpdateUpdatedAt sets the "updated_at" field to the value that was provided on create.
+func (u *HostUpsertOne) UpdateUpdatedAt() *HostUpsertOne {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateUpdatedAt()
+	})
+}
+
+// Exec executes the query.
+func (u *HostUpsertOne) Exec(ctx context.Context) error {
+	if len(u.create.conflict) == 0 {
+		return errors.New("ent: missing options for HostCreate.OnConflict")
+	}
+	return u.create.Exec(ctx)
+}
+
+// ExecX is like Exec, but panics if an error occurs.
+func (u *HostUpsertOne) ExecX(ctx context.Context) {
+	if err := u.create.Exec(ctx); err != nil {
+		panic(err)
+	}
+}
+
+// Exec executes the UPSERT query and returns the inserted/updated ID.
+func (u *HostUpsertOne) ID(ctx context.Context) (id string, err error) {
+	if u.create.driver.Dialect() == dialect.MySQL {
+		// In case of "ON CONFLICT", there is no way to get back non-numeric ID
+		// fields from the database since MySQL does not support the RETURNING clause.
+		return id, errors.New("ent: HostUpsertOne.ID is not supported by MySQL driver. Use HostUpsertOne.Exec instead")
+	}
+	node, err := u.create.Save(ctx)
+	if err != nil {
+		return id, err
+	}
+	return node.ID, nil
+}
+
+// IDX is like ID, but panics if an error occurs.
+func (u *HostUpsertOne) IDX(ctx context.Context) string {
+	id, err := u.ID(ctx)
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
 // HostCreateBulk is the builder for creating many Host entities in bulk.
 type HostCreateBulk struct {
 	config
 	err      error
 	builders []*HostCreate
+	conflict []sql.ConflictOption
 }
 
 // Save creates the Host entities in the database.
@@ -545,6 +1247,7 @@ func (_c *HostCreateBulk) Save(ctx context.Context) ([]*Host, error) {
 					_, err = mutators[i+1].Mutate(root, _c.builders[i+1].mutation)
 				} else {
 					spec := &sqlgraph.BatchCreateSpec{Nodes: specs}
+					spec.OnConflict = _c.conflict
 					// Invoke the actual operation on the latest mutation in the chain.
 					if err = sqlgraph.BatchCreate(ctx, _c.driver, spec); err != nil {
 						if sqlgraph.IsConstraintError(err) {
@@ -591,6 +1294,424 @@ func (_c *HostCreateBulk) Exec(ctx context.Context) error {
 // ExecX is like Exec, but panics if an error occurs.
 func (_c *HostCreateBulk) ExecX(ctx context.Context) {
 	if err := _c.Exec(ctx); err != nil {
+		panic(err)
+	}
+}
+
+// OnConflict allows configuring the `ON CONFLICT` / `ON DUPLICATE KEY` clause
+// of the `INSERT` statement. For example:
+//
+//	client.Host.CreateBulk(builders...).
+//		OnConflict(
+//			// Update the row with the new values
+//			// the was proposed for insertion.
+//			sql.ResolveWithNewValues(),
+//		).
+//		// Override some of the fields with custom
+//		// update values.
+//		Update(func(u *ent.HostUpsert) {
+//			SetURL(v+v).
+//		}).
+//		Exec(ctx)
+func (_c *HostCreateBulk) OnConflict(opts ...sql.ConflictOption) *HostUpsertBulk {
+	_c.conflict = opts
+	return &HostUpsertBulk{
+		create: _c,
+	}
+}
+
+// OnConflictColumns calls `OnConflict` and configures the columns
+// as conflict target. Using this option is equivalent to using:
+//
+//	client.Host.Create().
+//		OnConflict(sql.ConflictColumns(columns...)).
+//		Exec(ctx)
+func (_c *HostCreateBulk) OnConflictColumns(columns ...string) *HostUpsertBulk {
+	_c.conflict = append(_c.conflict, sql.ConflictColumns(columns...))
+	return &HostUpsertBulk{
+		create: _c,
+	}
+}
+
+// HostUpsertBulk is the builder for "upsert"-ing
+// a bulk of Host nodes.
+type HostUpsertBulk struct {
+	create *HostCreateBulk
+}
+
+// UpdateNewValues updates the mutable fields using the new values that
+// were set on create. Using this option is equivalent to using:
+//
+//	client.Host.Create().
+//		OnConflict(
+//			sql.ResolveWithNewValues(),
+//			sql.ResolveWith(func(u *sql.UpdateSet) {
+//				u.SetIgnore(host.FieldID)
+//			}),
+//		).
+//		Exec(ctx)
+func (u *HostUpsertBulk) UpdateNewValues() *HostUpsertBulk {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWithNewValues())
+	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(s *sql.UpdateSet) {
+		for _, b := range u.create.builders {
+			if _, exists := b.mutation.ID(); exists {
+				s.SetIgnore(host.FieldID)
+			}
+			if _, exists := b.mutation.CreatedAt(); exists {
+				s.SetIgnore(host.FieldCreatedAt)
+			}
+		}
+	}))
+	return u
+}
+
+// Ignore sets each column to itself in case of conflict.
+// Using this option is equivalent to using:
+//
+//	client.Host.Create().
+//		OnConflict(sql.ResolveWithIgnore()).
+//		Exec(ctx)
+func (u *HostUpsertBulk) Ignore() *HostUpsertBulk {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWithIgnore())
+	return u
+}
+
+// DoNothing configures the conflict_action to `DO NOTHING`.
+// Supported only by SQLite and PostgreSQL.
+func (u *HostUpsertBulk) DoNothing() *HostUpsertBulk {
+	u.create.conflict = append(u.create.conflict, sql.DoNothing())
+	return u
+}
+
+// Update allows overriding fields `UPDATE` values. See the HostCreateBulk.OnConflict
+// documentation for more info.
+func (u *HostUpsertBulk) Update(set func(*HostUpsert)) *HostUpsertBulk {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(update *sql.UpdateSet) {
+		set(&HostUpsert{UpdateSet: update})
+	}))
+	return u
+}
+
+// SetURL sets the "url" field.
+func (u *HostUpsertBulk) SetURL(v string) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetURL(v)
+	})
+}
+
+// UpdateURL sets the "url" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateURL() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateURL()
+	})
+}
+
+// SetTokenEncrypted sets the "token_encrypted" field.
+func (u *HostUpsertBulk) SetTokenEncrypted(v []byte) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetTokenEncrypted(v)
+	})
+}
+
+// UpdateTokenEncrypted sets the "token_encrypted" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateTokenEncrypted() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateTokenEncrypted()
+	})
+}
+
+// ClearTokenEncrypted clears the value of the "token_encrypted" field.
+func (u *HostUpsertBulk) ClearTokenEncrypted() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.ClearTokenEncrypted()
+	})
+}
+
+// SetRegion sets the "region" field.
+func (u *HostUpsertBulk) SetRegion(v string) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetRegion(v)
+	})
+}
+
+// UpdateRegion sets the "region" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateRegion() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateRegion()
+	})
+}
+
+// SetState sets the "state" field.
+func (u *HostUpsertBulk) SetState(v host.State) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetState(v)
+	})
+}
+
+// UpdateState sets the "state" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateState() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateState()
+	})
+}
+
+// SetTenantID sets the "tenant_id" field.
+func (u *HostUpsertBulk) SetTenantID(v string) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetTenantID(v)
+	})
+}
+
+// UpdateTenantID sets the "tenant_id" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateTenantID() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateTenantID()
+	})
+}
+
+// SetCpusTotal sets the "cpus_total" field.
+func (u *HostUpsertBulk) SetCpusTotal(v int) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetCpusTotal(v)
+	})
+}
+
+// AddCpusTotal adds v to the "cpus_total" field.
+func (u *HostUpsertBulk) AddCpusTotal(v int) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.AddCpusTotal(v)
+	})
+}
+
+// UpdateCpusTotal sets the "cpus_total" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateCpusTotal() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateCpusTotal()
+	})
+}
+
+// SetRAMMBTotal sets the "ram_mb_total" field.
+func (u *HostUpsertBulk) SetRAMMBTotal(v int) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetRAMMBTotal(v)
+	})
+}
+
+// AddRAMMBTotal adds v to the "ram_mb_total" field.
+func (u *HostUpsertBulk) AddRAMMBTotal(v int) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.AddRAMMBTotal(v)
+	})
+}
+
+// UpdateRAMMBTotal sets the "ram_mb_total" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateRAMMBTotal() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateRAMMBTotal()
+	})
+}
+
+// SetStorageGBTotal sets the "storage_gb_total" field.
+func (u *HostUpsertBulk) SetStorageGBTotal(v int) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetStorageGBTotal(v)
+	})
+}
+
+// AddStorageGBTotal adds v to the "storage_gb_total" field.
+func (u *HostUpsertBulk) AddStorageGBTotal(v int) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.AddStorageGBTotal(v)
+	})
+}
+
+// UpdateStorageGBTotal sets the "storage_gb_total" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateStorageGBTotal() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateStorageGBTotal()
+	})
+}
+
+// SetVMCountMax sets the "vm_count_max" field.
+func (u *HostUpsertBulk) SetVMCountMax(v int) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetVMCountMax(v)
+	})
+}
+
+// AddVMCountMax adds v to the "vm_count_max" field.
+func (u *HostUpsertBulk) AddVMCountMax(v int) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.AddVMCountMax(v)
+	})
+}
+
+// UpdateVMCountMax sets the "vm_count_max" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateVMCountMax() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateVMCountMax()
+	})
+}
+
+// SetCpusAllocated sets the "cpus_allocated" field.
+func (u *HostUpsertBulk) SetCpusAllocated(v int) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetCpusAllocated(v)
+	})
+}
+
+// AddCpusAllocated adds v to the "cpus_allocated" field.
+func (u *HostUpsertBulk) AddCpusAllocated(v int) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.AddCpusAllocated(v)
+	})
+}
+
+// UpdateCpusAllocated sets the "cpus_allocated" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateCpusAllocated() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateCpusAllocated()
+	})
+}
+
+// SetRAMMBAllocated sets the "ram_mb_allocated" field.
+func (u *HostUpsertBulk) SetRAMMBAllocated(v int) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetRAMMBAllocated(v)
+	})
+}
+
+// AddRAMMBAllocated adds v to the "ram_mb_allocated" field.
+func (u *HostUpsertBulk) AddRAMMBAllocated(v int) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.AddRAMMBAllocated(v)
+	})
+}
+
+// UpdateRAMMBAllocated sets the "ram_mb_allocated" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateRAMMBAllocated() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateRAMMBAllocated()
+	})
+}
+
+// SetStorageGBAllocated sets the "storage_gb_allocated" field.
+func (u *HostUpsertBulk) SetStorageGBAllocated(v int) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetStorageGBAllocated(v)
+	})
+}
+
+// AddStorageGBAllocated adds v to the "storage_gb_allocated" field.
+func (u *HostUpsertBulk) AddStorageGBAllocated(v int) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.AddStorageGBAllocated(v)
+	})
+}
+
+// UpdateStorageGBAllocated sets the "storage_gb_allocated" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateStorageGBAllocated() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateStorageGBAllocated()
+	})
+}
+
+// SetVMCountAllocated sets the "vm_count_allocated" field.
+func (u *HostUpsertBulk) SetVMCountAllocated(v int) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetVMCountAllocated(v)
+	})
+}
+
+// AddVMCountAllocated adds v to the "vm_count_allocated" field.
+func (u *HostUpsertBulk) AddVMCountAllocated(v int) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.AddVMCountAllocated(v)
+	})
+}
+
+// UpdateVMCountAllocated sets the "vm_count_allocated" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateVMCountAllocated() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateVMCountAllocated()
+	})
+}
+
+// SetLabels sets the "labels" field.
+func (u *HostUpsertBulk) SetLabels(v map[string]string) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetLabels(v)
+	})
+}
+
+// UpdateLabels sets the "labels" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateLabels() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateLabels()
+	})
+}
+
+// SetArch sets the "arch" field.
+func (u *HostUpsertBulk) SetArch(v string) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetArch(v)
+	})
+}
+
+// UpdateArch sets the "arch" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateArch() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateArch()
+	})
+}
+
+// SetLastSeenAt sets the "last_seen_at" field.
+func (u *HostUpsertBulk) SetLastSeenAt(v time.Time) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetLastSeenAt(v)
+	})
+}
+
+// UpdateLastSeenAt sets the "last_seen_at" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateLastSeenAt() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateLastSeenAt()
+	})
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (u *HostUpsertBulk) SetUpdatedAt(v time.Time) *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.SetUpdatedAt(v)
+	})
+}
+
+// UpdateUpdatedAt sets the "updated_at" field to the value that was provided on create.
+func (u *HostUpsertBulk) UpdateUpdatedAt() *HostUpsertBulk {
+	return u.Update(func(s *HostUpsert) {
+		s.UpdateUpdatedAt()
+	})
+}
+
+// Exec executes the query.
+func (u *HostUpsertBulk) Exec(ctx context.Context) error {
+	if u.create.err != nil {
+		return u.create.err
+	}
+	for i, b := range u.create.builders {
+		if len(b.conflict) != 0 {
+			return fmt.Errorf("ent: OnConflict was set for builder %d. Set it on the HostCreateBulk instead", i)
+		}
+	}
+	if len(u.create.conflict) == 0 {
+		return errors.New("ent: missing options for HostCreateBulk.OnConflict")
+	}
+	return u.create.Exec(ctx)
+}
+
+// ExecX is like Exec, but panics if an error occurs.
+func (u *HostUpsertBulk) ExecX(ctx context.Context) {
+	if err := u.create.Exec(ctx); err != nil {
 		panic(err)
 	}
 }

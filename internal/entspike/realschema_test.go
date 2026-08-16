@@ -73,6 +73,8 @@ func TestEntAgainstRealSchema(t *testing.T) {
 		SetState(vm.StateRunning).
 		SetCpus(4).
 		SetIdleTimeoutSeconds(300).
+		SetCreatedAt(time.Now()).
+		SetUpdatedAt(time.Now()).
 		Save(ctx); err != nil {
 		t.Fatalf("create vm in real schema: %v", err)
 	}

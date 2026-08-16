@@ -124,14 +124,16 @@ func init() {
 	vmDescLastError := vmFields[15].Descriptor()
 	// vm.DefaultLastError holds the default value on creation for the last_error field.
 	vm.DefaultLastError = vmDescLastError.Default.(string)
-	// vmDescCreatedAt is the schema descriptor for created_at field.
-	vmDescCreatedAt := vmFields[16].Descriptor()
-	// vm.DefaultCreatedAt holds the default value on creation for the created_at field.
-	vm.DefaultCreatedAt = vmDescCreatedAt.Default.(func() time.Time)
-	// vmDescUpdatedAt is the schema descriptor for updated_at field.
-	vmDescUpdatedAt := vmFields[17].Descriptor()
-	// vm.DefaultUpdatedAt holds the default value on creation for the updated_at field.
-	vm.DefaultUpdatedAt = vmDescUpdatedAt.Default.(func() time.Time)
-	// vm.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
-	vm.UpdateDefaultUpdatedAt = vmDescUpdatedAt.UpdateDefault.(func() time.Time)
+	// vmDescGpus is the schema descriptor for gpus field.
+	vmDescGpus := vmFields[17].Descriptor()
+	// vm.DefaultGpus holds the default value on creation for the gpus field.
+	vm.DefaultGpus = vmDescGpus.Default.(int32)
+	// vmDescGpuKind is the schema descriptor for gpu_kind field.
+	vmDescGpuKind := vmFields[18].Descriptor()
+	// vm.DefaultGpuKind holds the default value on creation for the gpu_kind field.
+	vm.DefaultGpuKind = vmDescGpuKind.Default.(string)
+	// vmDescGpuProfile is the schema descriptor for gpu_profile field.
+	vmDescGpuProfile := vmFields[19].Descriptor()
+	// vm.DefaultGpuProfile holds the default value on creation for the gpu_profile field.
+	vm.DefaultGpuProfile = vmDescGpuProfile.Default.(string)
 }

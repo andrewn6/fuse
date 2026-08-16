@@ -4,6 +4,7 @@ package ent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -1571,35 +1572,45 @@ func (m *HostMutation) ResetEdge(name string) error {
 // VMMutation represents an operation that mutates the VM nodes in the graph.
 type VMMutation struct {
 	config
-	op                      Op
-	typ                     string
-	id                      *string
-	host_id                 *string
-	network_host            *string
-	state                   *vm.State
-	url                     *string
-	task_id                 *string
-	tenant_id               *string
-	cpus                    *int
-	addcpus                 *int
-	ram_mb                  *int
-	addram_mb               *int
-	storage_gb              *int
-	addstorage_gb           *int
-	region                  *string
-	max_runtime_seconds     *int
-	addmax_runtime_seconds  *int
-	idle_timeout_seconds    *int
-	addidle_timeout_seconds *int
-	auth_token_encrypted    *[]byte
-	secrets_encrypted       *[]byte
-	last_error              *string
-	created_at              *time.Time
-	updated_at              *time.Time
-	clearedFields           map[string]struct{}
-	done                    bool
-	oldValue                func(context.Context) (*VM, error)
-	predicates              []predicate.VM
+	op                       Op
+	typ                      string
+	id                       *string
+	host_id                  *string
+	network_host             *string
+	state                    *vm.State
+	url                      *string
+	task_id                  *string
+	tenant_id                *string
+	cpus                     *int
+	addcpus                  *int
+	ram_mb                   *int
+	addram_mb                *int
+	storage_gb               *int
+	addstorage_gb            *int
+	region                   *string
+	max_runtime_seconds      *int
+	addmax_runtime_seconds   *int
+	idle_timeout_seconds     *int
+	addidle_timeout_seconds  *int
+	auth_token_encrypted     *[]byte
+	secrets_encrypted        *[]byte
+	last_error               *string
+	endpoints                *json.RawMessage
+	appendendpoints          json.RawMessage
+	gpus                     *int32
+	addgpus                  *int32
+	gpu_kind                 *string
+	gpu_profile              *string
+	gpu_uuids                *json.RawMessage
+	appendgpu_uuids          json.RawMessage
+	mig_instance_uuids       *json.RawMessage
+	appendmig_instance_uuids json.RawMessage
+	created_at               *time.Time
+	updated_at               *time.Time
+	clearedFields            map[string]struct{}
+	done                     bool
+	oldValue                 func(context.Context) (*VM, error)
+	predicates               []predicate.VM
 }
 
 var _ ent.Mutation = (*VMMutation)(nil)
@@ -2372,6 +2383,329 @@ func (m *VMMutation) ResetLastError() {
 	m.last_error = nil
 }
 
+// SetEndpoints sets the "endpoints" field.
+func (m *VMMutation) SetEndpoints(jm json.RawMessage) {
+	m.endpoints = &jm
+	m.appendendpoints = nil
+}
+
+// Endpoints returns the value of the "endpoints" field in the mutation.
+func (m *VMMutation) Endpoints() (r json.RawMessage, exists bool) {
+	v := m.endpoints
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldEndpoints returns the old "endpoints" field's value of the VM entity.
+// If the VM object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VMMutation) OldEndpoints(ctx context.Context) (v json.RawMessage, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldEndpoints is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldEndpoints requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldEndpoints: %w", err)
+	}
+	return oldValue.Endpoints, nil
+}
+
+// AppendEndpoints adds jm to the "endpoints" field.
+func (m *VMMutation) AppendEndpoints(jm json.RawMessage) {
+	m.appendendpoints = append(m.appendendpoints, jm...)
+}
+
+// AppendedEndpoints returns the list of values that were appended to the "endpoints" field in this mutation.
+func (m *VMMutation) AppendedEndpoints() (json.RawMessage, bool) {
+	if len(m.appendendpoints) == 0 {
+		return nil, false
+	}
+	return m.appendendpoints, true
+}
+
+// ClearEndpoints clears the value of the "endpoints" field.
+func (m *VMMutation) ClearEndpoints() {
+	m.endpoints = nil
+	m.appendendpoints = nil
+	m.clearedFields[vm.FieldEndpoints] = struct{}{}
+}
+
+// EndpointsCleared returns if the "endpoints" field was cleared in this mutation.
+func (m *VMMutation) EndpointsCleared() bool {
+	_, ok := m.clearedFields[vm.FieldEndpoints]
+	return ok
+}
+
+// ResetEndpoints resets all changes to the "endpoints" field.
+func (m *VMMutation) ResetEndpoints() {
+	m.endpoints = nil
+	m.appendendpoints = nil
+	delete(m.clearedFields, vm.FieldEndpoints)
+}
+
+// SetGpus sets the "gpus" field.
+func (m *VMMutation) SetGpus(i int32) {
+	m.gpus = &i
+	m.addgpus = nil
+}
+
+// Gpus returns the value of the "gpus" field in the mutation.
+func (m *VMMutation) Gpus() (r int32, exists bool) {
+	v := m.gpus
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGpus returns the old "gpus" field's value of the VM entity.
+// If the VM object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VMMutation) OldGpus(ctx context.Context) (v int32, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGpus is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGpus requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGpus: %w", err)
+	}
+	return oldValue.Gpus, nil
+}
+
+// AddGpus adds i to the "gpus" field.
+func (m *VMMutation) AddGpus(i int32) {
+	if m.addgpus != nil {
+		*m.addgpus += i
+	} else {
+		m.addgpus = &i
+	}
+}
+
+// AddedGpus returns the value that was added to the "gpus" field in this mutation.
+func (m *VMMutation) AddedGpus() (r int32, exists bool) {
+	v := m.addgpus
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetGpus resets all changes to the "gpus" field.
+func (m *VMMutation) ResetGpus() {
+	m.gpus = nil
+	m.addgpus = nil
+}
+
+// SetGpuKind sets the "gpu_kind" field.
+func (m *VMMutation) SetGpuKind(s string) {
+	m.gpu_kind = &s
+}
+
+// GpuKind returns the value of the "gpu_kind" field in the mutation.
+func (m *VMMutation) GpuKind() (r string, exists bool) {
+	v := m.gpu_kind
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGpuKind returns the old "gpu_kind" field's value of the VM entity.
+// If the VM object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VMMutation) OldGpuKind(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGpuKind is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGpuKind requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGpuKind: %w", err)
+	}
+	return oldValue.GpuKind, nil
+}
+
+// ResetGpuKind resets all changes to the "gpu_kind" field.
+func (m *VMMutation) ResetGpuKind() {
+	m.gpu_kind = nil
+}
+
+// SetGpuProfile sets the "gpu_profile" field.
+func (m *VMMutation) SetGpuProfile(s string) {
+	m.gpu_profile = &s
+}
+
+// GpuProfile returns the value of the "gpu_profile" field in the mutation.
+func (m *VMMutation) GpuProfile() (r string, exists bool) {
+	v := m.gpu_profile
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGpuProfile returns the old "gpu_profile" field's value of the VM entity.
+// If the VM object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VMMutation) OldGpuProfile(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGpuProfile is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGpuProfile requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGpuProfile: %w", err)
+	}
+	return oldValue.GpuProfile, nil
+}
+
+// ResetGpuProfile resets all changes to the "gpu_profile" field.
+func (m *VMMutation) ResetGpuProfile() {
+	m.gpu_profile = nil
+}
+
+// SetGpuUuids sets the "gpu_uuids" field.
+func (m *VMMutation) SetGpuUuids(jm json.RawMessage) {
+	m.gpu_uuids = &jm
+	m.appendgpu_uuids = nil
+}
+
+// GpuUuids returns the value of the "gpu_uuids" field in the mutation.
+func (m *VMMutation) GpuUuids() (r json.RawMessage, exists bool) {
+	v := m.gpu_uuids
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldGpuUuids returns the old "gpu_uuids" field's value of the VM entity.
+// If the VM object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VMMutation) OldGpuUuids(ctx context.Context) (v json.RawMessage, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldGpuUuids is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldGpuUuids requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldGpuUuids: %w", err)
+	}
+	return oldValue.GpuUuids, nil
+}
+
+// AppendGpuUuids adds jm to the "gpu_uuids" field.
+func (m *VMMutation) AppendGpuUuids(jm json.RawMessage) {
+	m.appendgpu_uuids = append(m.appendgpu_uuids, jm...)
+}
+
+// AppendedGpuUuids returns the list of values that were appended to the "gpu_uuids" field in this mutation.
+func (m *VMMutation) AppendedGpuUuids() (json.RawMessage, bool) {
+	if len(m.appendgpu_uuids) == 0 {
+		return nil, false
+	}
+	return m.appendgpu_uuids, true
+}
+
+// ClearGpuUuids clears the value of the "gpu_uuids" field.
+func (m *VMMutation) ClearGpuUuids() {
+	m.gpu_uuids = nil
+	m.appendgpu_uuids = nil
+	m.clearedFields[vm.FieldGpuUuids] = struct{}{}
+}
+
+// GpuUuidsCleared returns if the "gpu_uuids" field was cleared in this mutation.
+func (m *VMMutation) GpuUuidsCleared() bool {
+	_, ok := m.clearedFields[vm.FieldGpuUuids]
+	return ok
+}
+
+// ResetGpuUuids resets all changes to the "gpu_uuids" field.
+func (m *VMMutation) ResetGpuUuids() {
+	m.gpu_uuids = nil
+	m.appendgpu_uuids = nil
+	delete(m.clearedFields, vm.FieldGpuUuids)
+}
+
+// SetMigInstanceUuids sets the "mig_instance_uuids" field.
+func (m *VMMutation) SetMigInstanceUuids(jm json.RawMessage) {
+	m.mig_instance_uuids = &jm
+	m.appendmig_instance_uuids = nil
+}
+
+// MigInstanceUuids returns the value of the "mig_instance_uuids" field in the mutation.
+func (m *VMMutation) MigInstanceUuids() (r json.RawMessage, exists bool) {
+	v := m.mig_instance_uuids
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldMigInstanceUuids returns the old "mig_instance_uuids" field's value of the VM entity.
+// If the VM object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VMMutation) OldMigInstanceUuids(ctx context.Context) (v json.RawMessage, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldMigInstanceUuids is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldMigInstanceUuids requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldMigInstanceUuids: %w", err)
+	}
+	return oldValue.MigInstanceUuids, nil
+}
+
+// AppendMigInstanceUuids adds jm to the "mig_instance_uuids" field.
+func (m *VMMutation) AppendMigInstanceUuids(jm json.RawMessage) {
+	m.appendmig_instance_uuids = append(m.appendmig_instance_uuids, jm...)
+}
+
+// AppendedMigInstanceUuids returns the list of values that were appended to the "mig_instance_uuids" field in this mutation.
+func (m *VMMutation) AppendedMigInstanceUuids() (json.RawMessage, bool) {
+	if len(m.appendmig_instance_uuids) == 0 {
+		return nil, false
+	}
+	return m.appendmig_instance_uuids, true
+}
+
+// ClearMigInstanceUuids clears the value of the "mig_instance_uuids" field.
+func (m *VMMutation) ClearMigInstanceUuids() {
+	m.mig_instance_uuids = nil
+	m.appendmig_instance_uuids = nil
+	m.clearedFields[vm.FieldMigInstanceUuids] = struct{}{}
+}
+
+// MigInstanceUuidsCleared returns if the "mig_instance_uuids" field was cleared in this mutation.
+func (m *VMMutation) MigInstanceUuidsCleared() bool {
+	_, ok := m.clearedFields[vm.FieldMigInstanceUuids]
+	return ok
+}
+
+// ResetMigInstanceUuids resets all changes to the "mig_instance_uuids" field.
+func (m *VMMutation) ResetMigInstanceUuids() {
+	m.mig_instance_uuids = nil
+	m.appendmig_instance_uuids = nil
+	delete(m.clearedFields, vm.FieldMigInstanceUuids)
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *VMMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -2478,7 +2812,7 @@ func (m *VMMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *VMMutation) Fields() []string {
-	fields := make([]string, 0, 17)
+	fields := make([]string, 0, 23)
 	if m.host_id != nil {
 		fields = append(fields, vm.FieldHostID)
 	}
@@ -2524,6 +2858,24 @@ func (m *VMMutation) Fields() []string {
 	if m.last_error != nil {
 		fields = append(fields, vm.FieldLastError)
 	}
+	if m.endpoints != nil {
+		fields = append(fields, vm.FieldEndpoints)
+	}
+	if m.gpus != nil {
+		fields = append(fields, vm.FieldGpus)
+	}
+	if m.gpu_kind != nil {
+		fields = append(fields, vm.FieldGpuKind)
+	}
+	if m.gpu_profile != nil {
+		fields = append(fields, vm.FieldGpuProfile)
+	}
+	if m.gpu_uuids != nil {
+		fields = append(fields, vm.FieldGpuUuids)
+	}
+	if m.mig_instance_uuids != nil {
+		fields = append(fields, vm.FieldMigInstanceUuids)
+	}
 	if m.created_at != nil {
 		fields = append(fields, vm.FieldCreatedAt)
 	}
@@ -2568,6 +2920,18 @@ func (m *VMMutation) Field(name string) (ent.Value, bool) {
 		return m.SecretsEncrypted()
 	case vm.FieldLastError:
 		return m.LastError()
+	case vm.FieldEndpoints:
+		return m.Endpoints()
+	case vm.FieldGpus:
+		return m.Gpus()
+	case vm.FieldGpuKind:
+		return m.GpuKind()
+	case vm.FieldGpuProfile:
+		return m.GpuProfile()
+	case vm.FieldGpuUuids:
+		return m.GpuUuids()
+	case vm.FieldMigInstanceUuids:
+		return m.MigInstanceUuids()
 	case vm.FieldCreatedAt:
 		return m.CreatedAt()
 	case vm.FieldUpdatedAt:
@@ -2611,6 +2975,18 @@ func (m *VMMutation) OldField(ctx context.Context, name string) (ent.Value, erro
 		return m.OldSecretsEncrypted(ctx)
 	case vm.FieldLastError:
 		return m.OldLastError(ctx)
+	case vm.FieldEndpoints:
+		return m.OldEndpoints(ctx)
+	case vm.FieldGpus:
+		return m.OldGpus(ctx)
+	case vm.FieldGpuKind:
+		return m.OldGpuKind(ctx)
+	case vm.FieldGpuProfile:
+		return m.OldGpuProfile(ctx)
+	case vm.FieldGpuUuids:
+		return m.OldGpuUuids(ctx)
+	case vm.FieldMigInstanceUuids:
+		return m.OldMigInstanceUuids(ctx)
 	case vm.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case vm.FieldUpdatedAt:
@@ -2729,6 +3105,48 @@ func (m *VMMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetLastError(v)
 		return nil
+	case vm.FieldEndpoints:
+		v, ok := value.(json.RawMessage)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetEndpoints(v)
+		return nil
+	case vm.FieldGpus:
+		v, ok := value.(int32)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGpus(v)
+		return nil
+	case vm.FieldGpuKind:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGpuKind(v)
+		return nil
+	case vm.FieldGpuProfile:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGpuProfile(v)
+		return nil
+	case vm.FieldGpuUuids:
+		v, ok := value.(json.RawMessage)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetGpuUuids(v)
+		return nil
+	case vm.FieldMigInstanceUuids:
+		v, ok := value.(json.RawMessage)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetMigInstanceUuids(v)
+		return nil
 	case vm.FieldCreatedAt:
 		v, ok := value.(time.Time)
 		if !ok {
@@ -2766,6 +3184,9 @@ func (m *VMMutation) AddedFields() []string {
 	if m.addidle_timeout_seconds != nil {
 		fields = append(fields, vm.FieldIdleTimeoutSeconds)
 	}
+	if m.addgpus != nil {
+		fields = append(fields, vm.FieldGpus)
+	}
 	return fields
 }
 
@@ -2784,6 +3205,8 @@ func (m *VMMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedMaxRuntimeSeconds()
 	case vm.FieldIdleTimeoutSeconds:
 		return m.AddedIdleTimeoutSeconds()
+	case vm.FieldGpus:
+		return m.AddedGpus()
 	}
 	return nil, false
 }
@@ -2828,6 +3251,13 @@ func (m *VMMutation) AddField(name string, value ent.Value) error {
 		}
 		m.AddIdleTimeoutSeconds(v)
 		return nil
+	case vm.FieldGpus:
+		v, ok := value.(int32)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddGpus(v)
+		return nil
 	}
 	return fmt.Errorf("unknown VM numeric field %s", name)
 }
@@ -2841,6 +3271,15 @@ func (m *VMMutation) ClearedFields() []string {
 	}
 	if m.FieldCleared(vm.FieldSecretsEncrypted) {
 		fields = append(fields, vm.FieldSecretsEncrypted)
+	}
+	if m.FieldCleared(vm.FieldEndpoints) {
+		fields = append(fields, vm.FieldEndpoints)
+	}
+	if m.FieldCleared(vm.FieldGpuUuids) {
+		fields = append(fields, vm.FieldGpuUuids)
+	}
+	if m.FieldCleared(vm.FieldMigInstanceUuids) {
+		fields = append(fields, vm.FieldMigInstanceUuids)
 	}
 	return fields
 }
@@ -2861,6 +3300,15 @@ func (m *VMMutation) ClearField(name string) error {
 		return nil
 	case vm.FieldSecretsEncrypted:
 		m.ClearSecretsEncrypted()
+		return nil
+	case vm.FieldEndpoints:
+		m.ClearEndpoints()
+		return nil
+	case vm.FieldGpuUuids:
+		m.ClearGpuUuids()
+		return nil
+	case vm.FieldMigInstanceUuids:
+		m.ClearMigInstanceUuids()
 		return nil
 	}
 	return fmt.Errorf("unknown VM nullable field %s", name)
@@ -2914,6 +3362,24 @@ func (m *VMMutation) ResetField(name string) error {
 		return nil
 	case vm.FieldLastError:
 		m.ResetLastError()
+		return nil
+	case vm.FieldEndpoints:
+		m.ResetEndpoints()
+		return nil
+	case vm.FieldGpus:
+		m.ResetGpus()
+		return nil
+	case vm.FieldGpuKind:
+		m.ResetGpuKind()
+		return nil
+	case vm.FieldGpuProfile:
+		m.ResetGpuProfile()
+		return nil
+	case vm.FieldGpuUuids:
+		m.ResetGpuUuids()
+		return nil
+	case vm.FieldMigInstanceUuids:
+		m.ResetMigInstanceUuids()
 		return nil
 	case vm.FieldCreatedAt:
 		m.ResetCreatedAt()

@@ -4,10 +4,13 @@ package ent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
+	"entgo.io/ent/dialect"
+	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
 	"entgo.io/ent/schema/field"
 	"github.com/folsomintel/fuse/internal/entspike/ent/vm"
@@ -18,6 +21,7 @@ type VMCreate struct {
 	config
 	mutation *VMMutation
 	hooks    []Hook
+	conflict []sql.ConflictOption
 }
 
 // SetHostID sets the "host_id" field.
@@ -206,31 +210,75 @@ func (_c *VMCreate) SetNillableLastError(v *string) *VMCreate {
 	return _c
 }
 
+// SetEndpoints sets the "endpoints" field.
+func (_c *VMCreate) SetEndpoints(v json.RawMessage) *VMCreate {
+	_c.mutation.SetEndpoints(v)
+	return _c
+}
+
+// SetGpus sets the "gpus" field.
+func (_c *VMCreate) SetGpus(v int32) *VMCreate {
+	_c.mutation.SetGpus(v)
+	return _c
+}
+
+// SetNillableGpus sets the "gpus" field if the given value is not nil.
+func (_c *VMCreate) SetNillableGpus(v *int32) *VMCreate {
+	if v != nil {
+		_c.SetGpus(*v)
+	}
+	return _c
+}
+
+// SetGpuKind sets the "gpu_kind" field.
+func (_c *VMCreate) SetGpuKind(v string) *VMCreate {
+	_c.mutation.SetGpuKind(v)
+	return _c
+}
+
+// SetNillableGpuKind sets the "gpu_kind" field if the given value is not nil.
+func (_c *VMCreate) SetNillableGpuKind(v *string) *VMCreate {
+	if v != nil {
+		_c.SetGpuKind(*v)
+	}
+	return _c
+}
+
+// SetGpuProfile sets the "gpu_profile" field.
+func (_c *VMCreate) SetGpuProfile(v string) *VMCreate {
+	_c.mutation.SetGpuProfile(v)
+	return _c
+}
+
+// SetNillableGpuProfile sets the "gpu_profile" field if the given value is not nil.
+func (_c *VMCreate) SetNillableGpuProfile(v *string) *VMCreate {
+	if v != nil {
+		_c.SetGpuProfile(*v)
+	}
+	return _c
+}
+
+// SetGpuUuids sets the "gpu_uuids" field.
+func (_c *VMCreate) SetGpuUuids(v json.RawMessage) *VMCreate {
+	_c.mutation.SetGpuUuids(v)
+	return _c
+}
+
+// SetMigInstanceUuids sets the "mig_instance_uuids" field.
+func (_c *VMCreate) SetMigInstanceUuids(v json.RawMessage) *VMCreate {
+	_c.mutation.SetMigInstanceUuids(v)
+	return _c
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_c *VMCreate) SetCreatedAt(v time.Time) *VMCreate {
 	_c.mutation.SetCreatedAt(v)
 	return _c
 }
 
-// SetNillableCreatedAt sets the "created_at" field if the given value is not nil.
-func (_c *VMCreate) SetNillableCreatedAt(v *time.Time) *VMCreate {
-	if v != nil {
-		_c.SetCreatedAt(*v)
-	}
-	return _c
-}
-
 // SetUpdatedAt sets the "updated_at" field.
 func (_c *VMCreate) SetUpdatedAt(v time.Time) *VMCreate {
 	_c.mutation.SetUpdatedAt(v)
-	return _c
-}
-
-// SetNillableUpdatedAt sets the "updated_at" field if the given value is not nil.
-func (_c *VMCreate) SetNillableUpdatedAt(v *time.Time) *VMCreate {
-	if v != nil {
-		_c.SetUpdatedAt(*v)
-	}
 	return _c
 }
 
@@ -323,13 +371,17 @@ func (_c *VMCreate) defaults() {
 		v := vm.DefaultLastError
 		_c.mutation.SetLastError(v)
 	}
-	if _, ok := _c.mutation.CreatedAt(); !ok {
-		v := vm.DefaultCreatedAt()
-		_c.mutation.SetCreatedAt(v)
+	if _, ok := _c.mutation.Gpus(); !ok {
+		v := vm.DefaultGpus
+		_c.mutation.SetGpus(v)
 	}
-	if _, ok := _c.mutation.UpdatedAt(); !ok {
-		v := vm.DefaultUpdatedAt()
-		_c.mutation.SetUpdatedAt(v)
+	if _, ok := _c.mutation.GpuKind(); !ok {
+		v := vm.DefaultGpuKind
+		_c.mutation.SetGpuKind(v)
+	}
+	if _, ok := _c.mutation.GpuProfile(); !ok {
+		v := vm.DefaultGpuProfile
+		_c.mutation.SetGpuProfile(v)
 	}
 }
 
@@ -379,6 +431,15 @@ func (_c *VMCreate) check() error {
 	if _, ok := _c.mutation.LastError(); !ok {
 		return &ValidationError{Name: "last_error", err: errors.New(`ent: missing required field "VM.last_error"`)}
 	}
+	if _, ok := _c.mutation.Gpus(); !ok {
+		return &ValidationError{Name: "gpus", err: errors.New(`ent: missing required field "VM.gpus"`)}
+	}
+	if _, ok := _c.mutation.GpuKind(); !ok {
+		return &ValidationError{Name: "gpu_kind", err: errors.New(`ent: missing required field "VM.gpu_kind"`)}
+	}
+	if _, ok := _c.mutation.GpuProfile(); !ok {
+		return &ValidationError{Name: "gpu_profile", err: errors.New(`ent: missing required field "VM.gpu_profile"`)}
+	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		return &ValidationError{Name: "created_at", err: errors.New(`ent: missing required field "VM.created_at"`)}
 	}
@@ -416,6 +477,7 @@ func (_c *VMCreate) createSpec() (*VM, *sqlgraph.CreateSpec) {
 		_node = &VM{config: _c.config}
 		_spec = sqlgraph.NewCreateSpec(vm.Table, sqlgraph.NewFieldSpec(vm.FieldID, field.TypeString))
 	)
+	_spec.OnConflict = _c.conflict
 	if id, ok := _c.mutation.ID(); ok {
 		_node.ID = id
 		_spec.ID.Value = id
@@ -480,6 +542,30 @@ func (_c *VMCreate) createSpec() (*VM, *sqlgraph.CreateSpec) {
 		_spec.SetField(vm.FieldLastError, field.TypeString, value)
 		_node.LastError = value
 	}
+	if value, ok := _c.mutation.Endpoints(); ok {
+		_spec.SetField(vm.FieldEndpoints, field.TypeJSON, value)
+		_node.Endpoints = value
+	}
+	if value, ok := _c.mutation.Gpus(); ok {
+		_spec.SetField(vm.FieldGpus, field.TypeInt32, value)
+		_node.Gpus = value
+	}
+	if value, ok := _c.mutation.GpuKind(); ok {
+		_spec.SetField(vm.FieldGpuKind, field.TypeString, value)
+		_node.GpuKind = value
+	}
+	if value, ok := _c.mutation.GpuProfile(); ok {
+		_spec.SetField(vm.FieldGpuProfile, field.TypeString, value)
+		_node.GpuProfile = value
+	}
+	if value, ok := _c.mutation.GpuUuids(); ok {
+		_spec.SetField(vm.FieldGpuUuids, field.TypeJSON, value)
+		_node.GpuUuids = value
+	}
+	if value, ok := _c.mutation.MigInstanceUuids(); ok {
+		_spec.SetField(vm.FieldMigInstanceUuids, field.TypeJSON, value)
+		_node.MigInstanceUuids = value
+	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(vm.FieldCreatedAt, field.TypeTime, value)
 		_node.CreatedAt = value
@@ -491,11 +577,888 @@ func (_c *VMCreate) createSpec() (*VM, *sqlgraph.CreateSpec) {
 	return _node, _spec
 }
 
+// OnConflict allows configuring the `ON CONFLICT` / `ON DUPLICATE KEY` clause
+// of the `INSERT` statement. For example:
+//
+//	client.VM.Create().
+//		SetHostID(v).
+//		OnConflict(
+//			// Update the row with the new values
+//			// the was proposed for insertion.
+//			sql.ResolveWithNewValues(),
+//		).
+//		// Override some of the fields with custom
+//		// update values.
+//		Update(func(u *ent.VMUpsert) {
+//			SetHostID(v+v).
+//		}).
+//		Exec(ctx)
+func (_c *VMCreate) OnConflict(opts ...sql.ConflictOption) *VMUpsertOne {
+	_c.conflict = opts
+	return &VMUpsertOne{
+		create: _c,
+	}
+}
+
+// OnConflictColumns calls `OnConflict` and configures the columns
+// as conflict target. Using this option is equivalent to using:
+//
+//	client.VM.Create().
+//		OnConflict(sql.ConflictColumns(columns...)).
+//		Exec(ctx)
+func (_c *VMCreate) OnConflictColumns(columns ...string) *VMUpsertOne {
+	_c.conflict = append(_c.conflict, sql.ConflictColumns(columns...))
+	return &VMUpsertOne{
+		create: _c,
+	}
+}
+
+type (
+	// VMUpsertOne is the builder for "upsert"-ing
+	//  one VM node.
+	VMUpsertOne struct {
+		create *VMCreate
+	}
+
+	// VMUpsert is the "OnConflict" setter.
+	VMUpsert struct {
+		*sql.UpdateSet
+	}
+)
+
+// SetHostID sets the "host_id" field.
+func (u *VMUpsert) SetHostID(v string) *VMUpsert {
+	u.Set(vm.FieldHostID, v)
+	return u
+}
+
+// UpdateHostID sets the "host_id" field to the value that was provided on create.
+func (u *VMUpsert) UpdateHostID() *VMUpsert {
+	u.SetExcluded(vm.FieldHostID)
+	return u
+}
+
+// SetNetworkHost sets the "network_host" field.
+func (u *VMUpsert) SetNetworkHost(v string) *VMUpsert {
+	u.Set(vm.FieldNetworkHost, v)
+	return u
+}
+
+// UpdateNetworkHost sets the "network_host" field to the value that was provided on create.
+func (u *VMUpsert) UpdateNetworkHost() *VMUpsert {
+	u.SetExcluded(vm.FieldNetworkHost)
+	return u
+}
+
+// SetState sets the "state" field.
+func (u *VMUpsert) SetState(v vm.State) *VMUpsert {
+	u.Set(vm.FieldState, v)
+	return u
+}
+
+// UpdateState sets the "state" field to the value that was provided on create.
+func (u *VMUpsert) UpdateState() *VMUpsert {
+	u.SetExcluded(vm.FieldState)
+	return u
+}
+
+// SetURL sets the "url" field.
+func (u *VMUpsert) SetURL(v string) *VMUpsert {
+	u.Set(vm.FieldURL, v)
+	return u
+}
+
+// UpdateURL sets the "url" field to the value that was provided on create.
+func (u *VMUpsert) UpdateURL() *VMUpsert {
+	u.SetExcluded(vm.FieldURL)
+	return u
+}
+
+// SetTaskID sets the "task_id" field.
+func (u *VMUpsert) SetTaskID(v string) *VMUpsert {
+	u.Set(vm.FieldTaskID, v)
+	return u
+}
+
+// UpdateTaskID sets the "task_id" field to the value that was provided on create.
+func (u *VMUpsert) UpdateTaskID() *VMUpsert {
+	u.SetExcluded(vm.FieldTaskID)
+	return u
+}
+
+// SetTenantID sets the "tenant_id" field.
+func (u *VMUpsert) SetTenantID(v string) *VMUpsert {
+	u.Set(vm.FieldTenantID, v)
+	return u
+}
+
+// UpdateTenantID sets the "tenant_id" field to the value that was provided on create.
+func (u *VMUpsert) UpdateTenantID() *VMUpsert {
+	u.SetExcluded(vm.FieldTenantID)
+	return u
+}
+
+// SetCpus sets the "cpus" field.
+func (u *VMUpsert) SetCpus(v int) *VMUpsert {
+	u.Set(vm.FieldCpus, v)
+	return u
+}
+
+// UpdateCpus sets the "cpus" field to the value that was provided on create.
+func (u *VMUpsert) UpdateCpus() *VMUpsert {
+	u.SetExcluded(vm.FieldCpus)
+	return u
+}
+
+// AddCpus adds v to the "cpus" field.
+func (u *VMUpsert) AddCpus(v int) *VMUpsert {
+	u.Add(vm.FieldCpus, v)
+	return u
+}
+
+// SetRAMMB sets the "ram_mb" field.
+func (u *VMUpsert) SetRAMMB(v int) *VMUpsert {
+	u.Set(vm.FieldRAMMB, v)
+	return u
+}
+
+// UpdateRAMMB sets the "ram_mb" field to the value that was provided on create.
+func (u *VMUpsert) UpdateRAMMB() *VMUpsert {
+	u.SetExcluded(vm.FieldRAMMB)
+	return u
+}
+
+// AddRAMMB adds v to the "ram_mb" field.
+func (u *VMUpsert) AddRAMMB(v int) *VMUpsert {
+	u.Add(vm.FieldRAMMB, v)
+	return u
+}
+
+// SetStorageGB sets the "storage_gb" field.
+func (u *VMUpsert) SetStorageGB(v int) *VMUpsert {
+	u.Set(vm.FieldStorageGB, v)
+	return u
+}
+
+// UpdateStorageGB sets the "storage_gb" field to the value that was provided on create.
+func (u *VMUpsert) UpdateStorageGB() *VMUpsert {
+	u.SetExcluded(vm.FieldStorageGB)
+	return u
+}
+
+// AddStorageGB adds v to the "storage_gb" field.
+func (u *VMUpsert) AddStorageGB(v int) *VMUpsert {
+	u.Add(vm.FieldStorageGB, v)
+	return u
+}
+
+// SetRegion sets the "region" field.
+func (u *VMUpsert) SetRegion(v string) *VMUpsert {
+	u.Set(vm.FieldRegion, v)
+	return u
+}
+
+// UpdateRegion sets the "region" field to the value that was provided on create.
+func (u *VMUpsert) UpdateRegion() *VMUpsert {
+	u.SetExcluded(vm.FieldRegion)
+	return u
+}
+
+// SetMaxRuntimeSeconds sets the "max_runtime_seconds" field.
+func (u *VMUpsert) SetMaxRuntimeSeconds(v int) *VMUpsert {
+	u.Set(vm.FieldMaxRuntimeSeconds, v)
+	return u
+}
+
+// UpdateMaxRuntimeSeconds sets the "max_runtime_seconds" field to the value that was provided on create.
+func (u *VMUpsert) UpdateMaxRuntimeSeconds() *VMUpsert {
+	u.SetExcluded(vm.FieldMaxRuntimeSeconds)
+	return u
+}
+
+// AddMaxRuntimeSeconds adds v to the "max_runtime_seconds" field.
+func (u *VMUpsert) AddMaxRuntimeSeconds(v int) *VMUpsert {
+	u.Add(vm.FieldMaxRuntimeSeconds, v)
+	return u
+}
+
+// SetIdleTimeoutSeconds sets the "idle_timeout_seconds" field.
+func (u *VMUpsert) SetIdleTimeoutSeconds(v int) *VMUpsert {
+	u.Set(vm.FieldIdleTimeoutSeconds, v)
+	return u
+}
+
+// UpdateIdleTimeoutSeconds sets the "idle_timeout_seconds" field to the value that was provided on create.
+func (u *VMUpsert) UpdateIdleTimeoutSeconds() *VMUpsert {
+	u.SetExcluded(vm.FieldIdleTimeoutSeconds)
+	return u
+}
+
+// AddIdleTimeoutSeconds adds v to the "idle_timeout_seconds" field.
+func (u *VMUpsert) AddIdleTimeoutSeconds(v int) *VMUpsert {
+	u.Add(vm.FieldIdleTimeoutSeconds, v)
+	return u
+}
+
+// SetAuthTokenEncrypted sets the "auth_token_encrypted" field.
+func (u *VMUpsert) SetAuthTokenEncrypted(v []byte) *VMUpsert {
+	u.Set(vm.FieldAuthTokenEncrypted, v)
+	return u
+}
+
+// UpdateAuthTokenEncrypted sets the "auth_token_encrypted" field to the value that was provided on create.
+func (u *VMUpsert) UpdateAuthTokenEncrypted() *VMUpsert {
+	u.SetExcluded(vm.FieldAuthTokenEncrypted)
+	return u
+}
+
+// ClearAuthTokenEncrypted clears the value of the "auth_token_encrypted" field.
+func (u *VMUpsert) ClearAuthTokenEncrypted() *VMUpsert {
+	u.SetNull(vm.FieldAuthTokenEncrypted)
+	return u
+}
+
+// SetSecretsEncrypted sets the "secrets_encrypted" field.
+func (u *VMUpsert) SetSecretsEncrypted(v []byte) *VMUpsert {
+	u.Set(vm.FieldSecretsEncrypted, v)
+	return u
+}
+
+// UpdateSecretsEncrypted sets the "secrets_encrypted" field to the value that was provided on create.
+func (u *VMUpsert) UpdateSecretsEncrypted() *VMUpsert {
+	u.SetExcluded(vm.FieldSecretsEncrypted)
+	return u
+}
+
+// ClearSecretsEncrypted clears the value of the "secrets_encrypted" field.
+func (u *VMUpsert) ClearSecretsEncrypted() *VMUpsert {
+	u.SetNull(vm.FieldSecretsEncrypted)
+	return u
+}
+
+// SetLastError sets the "last_error" field.
+func (u *VMUpsert) SetLastError(v string) *VMUpsert {
+	u.Set(vm.FieldLastError, v)
+	return u
+}
+
+// UpdateLastError sets the "last_error" field to the value that was provided on create.
+func (u *VMUpsert) UpdateLastError() *VMUpsert {
+	u.SetExcluded(vm.FieldLastError)
+	return u
+}
+
+// SetEndpoints sets the "endpoints" field.
+func (u *VMUpsert) SetEndpoints(v json.RawMessage) *VMUpsert {
+	u.Set(vm.FieldEndpoints, v)
+	return u
+}
+
+// UpdateEndpoints sets the "endpoints" field to the value that was provided on create.
+func (u *VMUpsert) UpdateEndpoints() *VMUpsert {
+	u.SetExcluded(vm.FieldEndpoints)
+	return u
+}
+
+// ClearEndpoints clears the value of the "endpoints" field.
+func (u *VMUpsert) ClearEndpoints() *VMUpsert {
+	u.SetNull(vm.FieldEndpoints)
+	return u
+}
+
+// SetGpus sets the "gpus" field.
+func (u *VMUpsert) SetGpus(v int32) *VMUpsert {
+	u.Set(vm.FieldGpus, v)
+	return u
+}
+
+// UpdateGpus sets the "gpus" field to the value that was provided on create.
+func (u *VMUpsert) UpdateGpus() *VMUpsert {
+	u.SetExcluded(vm.FieldGpus)
+	return u
+}
+
+// AddGpus adds v to the "gpus" field.
+func (u *VMUpsert) AddGpus(v int32) *VMUpsert {
+	u.Add(vm.FieldGpus, v)
+	return u
+}
+
+// SetGpuKind sets the "gpu_kind" field.
+func (u *VMUpsert) SetGpuKind(v string) *VMUpsert {
+	u.Set(vm.FieldGpuKind, v)
+	return u
+}
+
+// UpdateGpuKind sets the "gpu_kind" field to the value that was provided on create.
+func (u *VMUpsert) UpdateGpuKind() *VMUpsert {
+	u.SetExcluded(vm.FieldGpuKind)
+	return u
+}
+
+// SetGpuProfile sets the "gpu_profile" field.
+func (u *VMUpsert) SetGpuProfile(v string) *VMUpsert {
+	u.Set(vm.FieldGpuProfile, v)
+	return u
+}
+
+// UpdateGpuProfile sets the "gpu_profile" field to the value that was provided on create.
+func (u *VMUpsert) UpdateGpuProfile() *VMUpsert {
+	u.SetExcluded(vm.FieldGpuProfile)
+	return u
+}
+
+// SetGpuUuids sets the "gpu_uuids" field.
+func (u *VMUpsert) SetGpuUuids(v json.RawMessage) *VMUpsert {
+	u.Set(vm.FieldGpuUuids, v)
+	return u
+}
+
+// UpdateGpuUuids sets the "gpu_uuids" field to the value that was provided on create.
+func (u *VMUpsert) UpdateGpuUuids() *VMUpsert {
+	u.SetExcluded(vm.FieldGpuUuids)
+	return u
+}
+
+// ClearGpuUuids clears the value of the "gpu_uuids" field.
+func (u *VMUpsert) ClearGpuUuids() *VMUpsert {
+	u.SetNull(vm.FieldGpuUuids)
+	return u
+}
+
+// SetMigInstanceUuids sets the "mig_instance_uuids" field.
+func (u *VMUpsert) SetMigInstanceUuids(v json.RawMessage) *VMUpsert {
+	u.Set(vm.FieldMigInstanceUuids, v)
+	return u
+}
+
+// UpdateMigInstanceUuids sets the "mig_instance_uuids" field to the value that was provided on create.
+func (u *VMUpsert) UpdateMigInstanceUuids() *VMUpsert {
+	u.SetExcluded(vm.FieldMigInstanceUuids)
+	return u
+}
+
+// ClearMigInstanceUuids clears the value of the "mig_instance_uuids" field.
+func (u *VMUpsert) ClearMigInstanceUuids() *VMUpsert {
+	u.SetNull(vm.FieldMigInstanceUuids)
+	return u
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (u *VMUpsert) SetCreatedAt(v time.Time) *VMUpsert {
+	u.Set(vm.FieldCreatedAt, v)
+	return u
+}
+
+// UpdateCreatedAt sets the "created_at" field to the value that was provided on create.
+func (u *VMUpsert) UpdateCreatedAt() *VMUpsert {
+	u.SetExcluded(vm.FieldCreatedAt)
+	return u
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (u *VMUpsert) SetUpdatedAt(v time.Time) *VMUpsert {
+	u.Set(vm.FieldUpdatedAt, v)
+	return u
+}
+
+// UpdateUpdatedAt sets the "updated_at" field to the value that was provided on create.
+func (u *VMUpsert) UpdateUpdatedAt() *VMUpsert {
+	u.SetExcluded(vm.FieldUpdatedAt)
+	return u
+}
+
+// UpdateNewValues updates the mutable fields using the new values that were set on create except the ID field.
+// Using this option is equivalent to using:
+//
+//	client.VM.Create().
+//		OnConflict(
+//			sql.ResolveWithNewValues(),
+//			sql.ResolveWith(func(u *sql.UpdateSet) {
+//				u.SetIgnore(vm.FieldID)
+//			}),
+//		).
+//		Exec(ctx)
+func (u *VMUpsertOne) UpdateNewValues() *VMUpsertOne {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWithNewValues())
+	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(s *sql.UpdateSet) {
+		if _, exists := u.create.mutation.ID(); exists {
+			s.SetIgnore(vm.FieldID)
+		}
+	}))
+	return u
+}
+
+// Ignore sets each column to itself in case of conflict.
+// Using this option is equivalent to using:
+//
+//	client.VM.Create().
+//	    OnConflict(sql.ResolveWithIgnore()).
+//	    Exec(ctx)
+func (u *VMUpsertOne) Ignore() *VMUpsertOne {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWithIgnore())
+	return u
+}
+
+// DoNothing configures the conflict_action to `DO NOTHING`.
+// Supported only by SQLite and PostgreSQL.
+func (u *VMUpsertOne) DoNothing() *VMUpsertOne {
+	u.create.conflict = append(u.create.conflict, sql.DoNothing())
+	return u
+}
+
+// Update allows overriding fields `UPDATE` values. See the VMCreate.OnConflict
+// documentation for more info.
+func (u *VMUpsertOne) Update(set func(*VMUpsert)) *VMUpsertOne {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(update *sql.UpdateSet) {
+		set(&VMUpsert{UpdateSet: update})
+	}))
+	return u
+}
+
+// SetHostID sets the "host_id" field.
+func (u *VMUpsertOne) SetHostID(v string) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetHostID(v)
+	})
+}
+
+// UpdateHostID sets the "host_id" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateHostID() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateHostID()
+	})
+}
+
+// SetNetworkHost sets the "network_host" field.
+func (u *VMUpsertOne) SetNetworkHost(v string) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetNetworkHost(v)
+	})
+}
+
+// UpdateNetworkHost sets the "network_host" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateNetworkHost() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateNetworkHost()
+	})
+}
+
+// SetState sets the "state" field.
+func (u *VMUpsertOne) SetState(v vm.State) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetState(v)
+	})
+}
+
+// UpdateState sets the "state" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateState() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateState()
+	})
+}
+
+// SetURL sets the "url" field.
+func (u *VMUpsertOne) SetURL(v string) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetURL(v)
+	})
+}
+
+// UpdateURL sets the "url" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateURL() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateURL()
+	})
+}
+
+// SetTaskID sets the "task_id" field.
+func (u *VMUpsertOne) SetTaskID(v string) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetTaskID(v)
+	})
+}
+
+// UpdateTaskID sets the "task_id" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateTaskID() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateTaskID()
+	})
+}
+
+// SetTenantID sets the "tenant_id" field.
+func (u *VMUpsertOne) SetTenantID(v string) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetTenantID(v)
+	})
+}
+
+// UpdateTenantID sets the "tenant_id" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateTenantID() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateTenantID()
+	})
+}
+
+// SetCpus sets the "cpus" field.
+func (u *VMUpsertOne) SetCpus(v int) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetCpus(v)
+	})
+}
+
+// AddCpus adds v to the "cpus" field.
+func (u *VMUpsertOne) AddCpus(v int) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.AddCpus(v)
+	})
+}
+
+// UpdateCpus sets the "cpus" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateCpus() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateCpus()
+	})
+}
+
+// SetRAMMB sets the "ram_mb" field.
+func (u *VMUpsertOne) SetRAMMB(v int) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetRAMMB(v)
+	})
+}
+
+// AddRAMMB adds v to the "ram_mb" field.
+func (u *VMUpsertOne) AddRAMMB(v int) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.AddRAMMB(v)
+	})
+}
+
+// UpdateRAMMB sets the "ram_mb" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateRAMMB() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateRAMMB()
+	})
+}
+
+// SetStorageGB sets the "storage_gb" field.
+func (u *VMUpsertOne) SetStorageGB(v int) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetStorageGB(v)
+	})
+}
+
+// AddStorageGB adds v to the "storage_gb" field.
+func (u *VMUpsertOne) AddStorageGB(v int) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.AddStorageGB(v)
+	})
+}
+
+// UpdateStorageGB sets the "storage_gb" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateStorageGB() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateStorageGB()
+	})
+}
+
+// SetRegion sets the "region" field.
+func (u *VMUpsertOne) SetRegion(v string) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetRegion(v)
+	})
+}
+
+// UpdateRegion sets the "region" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateRegion() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateRegion()
+	})
+}
+
+// SetMaxRuntimeSeconds sets the "max_runtime_seconds" field.
+func (u *VMUpsertOne) SetMaxRuntimeSeconds(v int) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetMaxRuntimeSeconds(v)
+	})
+}
+
+// AddMaxRuntimeSeconds adds v to the "max_runtime_seconds" field.
+func (u *VMUpsertOne) AddMaxRuntimeSeconds(v int) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.AddMaxRuntimeSeconds(v)
+	})
+}
+
+// UpdateMaxRuntimeSeconds sets the "max_runtime_seconds" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateMaxRuntimeSeconds() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateMaxRuntimeSeconds()
+	})
+}
+
+// SetIdleTimeoutSeconds sets the "idle_timeout_seconds" field.
+func (u *VMUpsertOne) SetIdleTimeoutSeconds(v int) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetIdleTimeoutSeconds(v)
+	})
+}
+
+// AddIdleTimeoutSeconds adds v to the "idle_timeout_seconds" field.
+func (u *VMUpsertOne) AddIdleTimeoutSeconds(v int) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.AddIdleTimeoutSeconds(v)
+	})
+}
+
+// UpdateIdleTimeoutSeconds sets the "idle_timeout_seconds" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateIdleTimeoutSeconds() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateIdleTimeoutSeconds()
+	})
+}
+
+// SetAuthTokenEncrypted sets the "auth_token_encrypted" field.
+func (u *VMUpsertOne) SetAuthTokenEncrypted(v []byte) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetAuthTokenEncrypted(v)
+	})
+}
+
+// UpdateAuthTokenEncrypted sets the "auth_token_encrypted" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateAuthTokenEncrypted() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateAuthTokenEncrypted()
+	})
+}
+
+// ClearAuthTokenEncrypted clears the value of the "auth_token_encrypted" field.
+func (u *VMUpsertOne) ClearAuthTokenEncrypted() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.ClearAuthTokenEncrypted()
+	})
+}
+
+// SetSecretsEncrypted sets the "secrets_encrypted" field.
+func (u *VMUpsertOne) SetSecretsEncrypted(v []byte) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetSecretsEncrypted(v)
+	})
+}
+
+// UpdateSecretsEncrypted sets the "secrets_encrypted" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateSecretsEncrypted() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateSecretsEncrypted()
+	})
+}
+
+// ClearSecretsEncrypted clears the value of the "secrets_encrypted" field.
+func (u *VMUpsertOne) ClearSecretsEncrypted() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.ClearSecretsEncrypted()
+	})
+}
+
+// SetLastError sets the "last_error" field.
+func (u *VMUpsertOne) SetLastError(v string) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetLastError(v)
+	})
+}
+
+// UpdateLastError sets the "last_error" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateLastError() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateLastError()
+	})
+}
+
+// SetEndpoints sets the "endpoints" field.
+func (u *VMUpsertOne) SetEndpoints(v json.RawMessage) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetEndpoints(v)
+	})
+}
+
+// UpdateEndpoints sets the "endpoints" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateEndpoints() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateEndpoints()
+	})
+}
+
+// ClearEndpoints clears the value of the "endpoints" field.
+func (u *VMUpsertOne) ClearEndpoints() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.ClearEndpoints()
+	})
+}
+
+// SetGpus sets the "gpus" field.
+func (u *VMUpsertOne) SetGpus(v int32) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetGpus(v)
+	})
+}
+
+// AddGpus adds v to the "gpus" field.
+func (u *VMUpsertOne) AddGpus(v int32) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.AddGpus(v)
+	})
+}
+
+// UpdateGpus sets the "gpus" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateGpus() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateGpus()
+	})
+}
+
+// SetGpuKind sets the "gpu_kind" field.
+func (u *VMUpsertOne) SetGpuKind(v string) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetGpuKind(v)
+	})
+}
+
+// UpdateGpuKind sets the "gpu_kind" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateGpuKind() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateGpuKind()
+	})
+}
+
+// SetGpuProfile sets the "gpu_profile" field.
+func (u *VMUpsertOne) SetGpuProfile(v string) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetGpuProfile(v)
+	})
+}
+
+// UpdateGpuProfile sets the "gpu_profile" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateGpuProfile() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateGpuProfile()
+	})
+}
+
+// SetGpuUuids sets the "gpu_uuids" field.
+func (u *VMUpsertOne) SetGpuUuids(v json.RawMessage) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetGpuUuids(v)
+	})
+}
+
+// UpdateGpuUuids sets the "gpu_uuids" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateGpuUuids() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateGpuUuids()
+	})
+}
+
+// ClearGpuUuids clears the value of the "gpu_uuids" field.
+func (u *VMUpsertOne) ClearGpuUuids() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.ClearGpuUuids()
+	})
+}
+
+// SetMigInstanceUuids sets the "mig_instance_uuids" field.
+func (u *VMUpsertOne) SetMigInstanceUuids(v json.RawMessage) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetMigInstanceUuids(v)
+	})
+}
+
+// UpdateMigInstanceUuids sets the "mig_instance_uuids" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateMigInstanceUuids() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateMigInstanceUuids()
+	})
+}
+
+// ClearMigInstanceUuids clears the value of the "mig_instance_uuids" field.
+func (u *VMUpsertOne) ClearMigInstanceUuids() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.ClearMigInstanceUuids()
+	})
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (u *VMUpsertOne) SetCreatedAt(v time.Time) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetCreatedAt(v)
+	})
+}
+
+// UpdateCreatedAt sets the "created_at" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateCreatedAt() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateCreatedAt()
+	})
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (u *VMUpsertOne) SetUpdatedAt(v time.Time) *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.SetUpdatedAt(v)
+	})
+}
+
+// UpdateUpdatedAt sets the "updated_at" field to the value that was provided on create.
+func (u *VMUpsertOne) UpdateUpdatedAt() *VMUpsertOne {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateUpdatedAt()
+	})
+}
+
+// Exec executes the query.
+func (u *VMUpsertOne) Exec(ctx context.Context) error {
+	if len(u.create.conflict) == 0 {
+		return errors.New("ent: missing options for VMCreate.OnConflict")
+	}
+	return u.create.Exec(ctx)
+}
+
+// ExecX is like Exec, but panics if an error occurs.
+func (u *VMUpsertOne) ExecX(ctx context.Context) {
+	if err := u.create.Exec(ctx); err != nil {
+		panic(err)
+	}
+}
+
+// Exec executes the UPSERT query and returns the inserted/updated ID.
+func (u *VMUpsertOne) ID(ctx context.Context) (id string, err error) {
+	if u.create.driver.Dialect() == dialect.MySQL {
+		// In case of "ON CONFLICT", there is no way to get back non-numeric ID
+		// fields from the database since MySQL does not support the RETURNING clause.
+		return id, errors.New("ent: VMUpsertOne.ID is not supported by MySQL driver. Use VMUpsertOne.Exec instead")
+	}
+	node, err := u.create.Save(ctx)
+	if err != nil {
+		return id, err
+	}
+	return node.ID, nil
+}
+
+// IDX is like ID, but panics if an error occurs.
+func (u *VMUpsertOne) IDX(ctx context.Context) string {
+	id, err := u.ID(ctx)
+	if err != nil {
+		panic(err)
+	}
+	return id
+}
+
 // VMCreateBulk is the builder for creating many VM entities in bulk.
 type VMCreateBulk struct {
 	config
 	err      error
 	builders []*VMCreate
+	conflict []sql.ConflictOption
 }
 
 // Save creates the VM entities in the database.
@@ -525,6 +1488,7 @@ func (_c *VMCreateBulk) Save(ctx context.Context) ([]*VM, error) {
 					_, err = mutators[i+1].Mutate(root, _c.builders[i+1].mutation)
 				} else {
 					spec := &sqlgraph.BatchCreateSpec{Nodes: specs}
+					spec.OnConflict = _c.conflict
 					// Invoke the actual operation on the latest mutation in the chain.
 					if err = sqlgraph.BatchCreate(ctx, _c.driver, spec); err != nil {
 						if sqlgraph.IsConstraintError(err) {
@@ -571,6 +1535,519 @@ func (_c *VMCreateBulk) Exec(ctx context.Context) error {
 // ExecX is like Exec, but panics if an error occurs.
 func (_c *VMCreateBulk) ExecX(ctx context.Context) {
 	if err := _c.Exec(ctx); err != nil {
+		panic(err)
+	}
+}
+
+// OnConflict allows configuring the `ON CONFLICT` / `ON DUPLICATE KEY` clause
+// of the `INSERT` statement. For example:
+//
+//	client.VM.CreateBulk(builders...).
+//		OnConflict(
+//			// Update the row with the new values
+//			// the was proposed for insertion.
+//			sql.ResolveWithNewValues(),
+//		).
+//		// Override some of the fields with custom
+//		// update values.
+//		Update(func(u *ent.VMUpsert) {
+//			SetHostID(v+v).
+//		}).
+//		Exec(ctx)
+func (_c *VMCreateBulk) OnConflict(opts ...sql.ConflictOption) *VMUpsertBulk {
+	_c.conflict = opts
+	return &VMUpsertBulk{
+		create: _c,
+	}
+}
+
+// OnConflictColumns calls `OnConflict` and configures the columns
+// as conflict target. Using this option is equivalent to using:
+//
+//	client.VM.Create().
+//		OnConflict(sql.ConflictColumns(columns...)).
+//		Exec(ctx)
+func (_c *VMCreateBulk) OnConflictColumns(columns ...string) *VMUpsertBulk {
+	_c.conflict = append(_c.conflict, sql.ConflictColumns(columns...))
+	return &VMUpsertBulk{
+		create: _c,
+	}
+}
+
+// VMUpsertBulk is the builder for "upsert"-ing
+// a bulk of VM nodes.
+type VMUpsertBulk struct {
+	create *VMCreateBulk
+}
+
+// UpdateNewValues updates the mutable fields using the new values that
+// were set on create. Using this option is equivalent to using:
+//
+//	client.VM.Create().
+//		OnConflict(
+//			sql.ResolveWithNewValues(),
+//			sql.ResolveWith(func(u *sql.UpdateSet) {
+//				u.SetIgnore(vm.FieldID)
+//			}),
+//		).
+//		Exec(ctx)
+func (u *VMUpsertBulk) UpdateNewValues() *VMUpsertBulk {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWithNewValues())
+	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(s *sql.UpdateSet) {
+		for _, b := range u.create.builders {
+			if _, exists := b.mutation.ID(); exists {
+				s.SetIgnore(vm.FieldID)
+			}
+		}
+	}))
+	return u
+}
+
+// Ignore sets each column to itself in case of conflict.
+// Using this option is equivalent to using:
+//
+//	client.VM.Create().
+//		OnConflict(sql.ResolveWithIgnore()).
+//		Exec(ctx)
+func (u *VMUpsertBulk) Ignore() *VMUpsertBulk {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWithIgnore())
+	return u
+}
+
+// DoNothing configures the conflict_action to `DO NOTHING`.
+// Supported only by SQLite and PostgreSQL.
+func (u *VMUpsertBulk) DoNothing() *VMUpsertBulk {
+	u.create.conflict = append(u.create.conflict, sql.DoNothing())
+	return u
+}
+
+// Update allows overriding fields `UPDATE` values. See the VMCreateBulk.OnConflict
+// documentation for more info.
+func (u *VMUpsertBulk) Update(set func(*VMUpsert)) *VMUpsertBulk {
+	u.create.conflict = append(u.create.conflict, sql.ResolveWith(func(update *sql.UpdateSet) {
+		set(&VMUpsert{UpdateSet: update})
+	}))
+	return u
+}
+
+// SetHostID sets the "host_id" field.
+func (u *VMUpsertBulk) SetHostID(v string) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetHostID(v)
+	})
+}
+
+// UpdateHostID sets the "host_id" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateHostID() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateHostID()
+	})
+}
+
+// SetNetworkHost sets the "network_host" field.
+func (u *VMUpsertBulk) SetNetworkHost(v string) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetNetworkHost(v)
+	})
+}
+
+// UpdateNetworkHost sets the "network_host" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateNetworkHost() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateNetworkHost()
+	})
+}
+
+// SetState sets the "state" field.
+func (u *VMUpsertBulk) SetState(v vm.State) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetState(v)
+	})
+}
+
+// UpdateState sets the "state" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateState() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateState()
+	})
+}
+
+// SetURL sets the "url" field.
+func (u *VMUpsertBulk) SetURL(v string) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetURL(v)
+	})
+}
+
+// UpdateURL sets the "url" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateURL() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateURL()
+	})
+}
+
+// SetTaskID sets the "task_id" field.
+func (u *VMUpsertBulk) SetTaskID(v string) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetTaskID(v)
+	})
+}
+
+// UpdateTaskID sets the "task_id" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateTaskID() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateTaskID()
+	})
+}
+
+// SetTenantID sets the "tenant_id" field.
+func (u *VMUpsertBulk) SetTenantID(v string) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetTenantID(v)
+	})
+}
+
+// UpdateTenantID sets the "tenant_id" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateTenantID() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateTenantID()
+	})
+}
+
+// SetCpus sets the "cpus" field.
+func (u *VMUpsertBulk) SetCpus(v int) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetCpus(v)
+	})
+}
+
+// AddCpus adds v to the "cpus" field.
+func (u *VMUpsertBulk) AddCpus(v int) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.AddCpus(v)
+	})
+}
+
+// UpdateCpus sets the "cpus" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateCpus() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateCpus()
+	})
+}
+
+// SetRAMMB sets the "ram_mb" field.
+func (u *VMUpsertBulk) SetRAMMB(v int) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetRAMMB(v)
+	})
+}
+
+// AddRAMMB adds v to the "ram_mb" field.
+func (u *VMUpsertBulk) AddRAMMB(v int) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.AddRAMMB(v)
+	})
+}
+
+// UpdateRAMMB sets the "ram_mb" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateRAMMB() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateRAMMB()
+	})
+}
+
+// SetStorageGB sets the "storage_gb" field.
+func (u *VMUpsertBulk) SetStorageGB(v int) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetStorageGB(v)
+	})
+}
+
+// AddStorageGB adds v to the "storage_gb" field.
+func (u *VMUpsertBulk) AddStorageGB(v int) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.AddStorageGB(v)
+	})
+}
+
+// UpdateStorageGB sets the "storage_gb" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateStorageGB() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateStorageGB()
+	})
+}
+
+// SetRegion sets the "region" field.
+func (u *VMUpsertBulk) SetRegion(v string) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetRegion(v)
+	})
+}
+
+// UpdateRegion sets the "region" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateRegion() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateRegion()
+	})
+}
+
+// SetMaxRuntimeSeconds sets the "max_runtime_seconds" field.
+func (u *VMUpsertBulk) SetMaxRuntimeSeconds(v int) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetMaxRuntimeSeconds(v)
+	})
+}
+
+// AddMaxRuntimeSeconds adds v to the "max_runtime_seconds" field.
+func (u *VMUpsertBulk) AddMaxRuntimeSeconds(v int) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.AddMaxRuntimeSeconds(v)
+	})
+}
+
+// UpdateMaxRuntimeSeconds sets the "max_runtime_seconds" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateMaxRuntimeSeconds() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateMaxRuntimeSeconds()
+	})
+}
+
+// SetIdleTimeoutSeconds sets the "idle_timeout_seconds" field.
+func (u *VMUpsertBulk) SetIdleTimeoutSeconds(v int) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetIdleTimeoutSeconds(v)
+	})
+}
+
+// AddIdleTimeoutSeconds adds v to the "idle_timeout_seconds" field.
+func (u *VMUpsertBulk) AddIdleTimeoutSeconds(v int) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.AddIdleTimeoutSeconds(v)
+	})
+}
+
+// UpdateIdleTimeoutSeconds sets the "idle_timeout_seconds" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateIdleTimeoutSeconds() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateIdleTimeoutSeconds()
+	})
+}
+
+// SetAuthTokenEncrypted sets the "auth_token_encrypted" field.
+func (u *VMUpsertBulk) SetAuthTokenEncrypted(v []byte) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetAuthTokenEncrypted(v)
+	})
+}
+
+// UpdateAuthTokenEncrypted sets the "auth_token_encrypted" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateAuthTokenEncrypted() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateAuthTokenEncrypted()
+	})
+}
+
+// ClearAuthTokenEncrypted clears the value of the "auth_token_encrypted" field.
+func (u *VMUpsertBulk) ClearAuthTokenEncrypted() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.ClearAuthTokenEncrypted()
+	})
+}
+
+// SetSecretsEncrypted sets the "secrets_encrypted" field.
+func (u *VMUpsertBulk) SetSecretsEncrypted(v []byte) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetSecretsEncrypted(v)
+	})
+}
+
+// UpdateSecretsEncrypted sets the "secrets_encrypted" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateSecretsEncrypted() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateSecretsEncrypted()
+	})
+}
+
+// ClearSecretsEncrypted clears the value of the "secrets_encrypted" field.
+func (u *VMUpsertBulk) ClearSecretsEncrypted() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.ClearSecretsEncrypted()
+	})
+}
+
+// SetLastError sets the "last_error" field.
+func (u *VMUpsertBulk) SetLastError(v string) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetLastError(v)
+	})
+}
+
+// UpdateLastError sets the "last_error" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateLastError() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateLastError()
+	})
+}
+
+// SetEndpoints sets the "endpoints" field.
+func (u *VMUpsertBulk) SetEndpoints(v json.RawMessage) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetEndpoints(v)
+	})
+}
+
+// UpdateEndpoints sets the "endpoints" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateEndpoints() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateEndpoints()
+	})
+}
+
+// ClearEndpoints clears the value of the "endpoints" field.
+func (u *VMUpsertBulk) ClearEndpoints() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.ClearEndpoints()
+	})
+}
+
+// SetGpus sets the "gpus" field.
+func (u *VMUpsertBulk) SetGpus(v int32) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetGpus(v)
+	})
+}
+
+// AddGpus adds v to the "gpus" field.
+func (u *VMUpsertBulk) AddGpus(v int32) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.AddGpus(v)
+	})
+}
+
+// UpdateGpus sets the "gpus" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateGpus() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateGpus()
+	})
+}
+
+// SetGpuKind sets the "gpu_kind" field.
+func (u *VMUpsertBulk) SetGpuKind(v string) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetGpuKind(v)
+	})
+}
+
+// UpdateGpuKind sets the "gpu_kind" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateGpuKind() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateGpuKind()
+	})
+}
+
+// SetGpuProfile sets the "gpu_profile" field.
+func (u *VMUpsertBulk) SetGpuProfile(v string) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetGpuProfile(v)
+	})
+}
+
+// UpdateGpuProfile sets the "gpu_profile" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateGpuProfile() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateGpuProfile()
+	})
+}
+
+// SetGpuUuids sets the "gpu_uuids" field.
+func (u *VMUpsertBulk) SetGpuUuids(v json.RawMessage) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetGpuUuids(v)
+	})
+}
+
+// UpdateGpuUuids sets the "gpu_uuids" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateGpuUuids() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateGpuUuids()
+	})
+}
+
+// ClearGpuUuids clears the value of the "gpu_uuids" field.
+func (u *VMUpsertBulk) ClearGpuUuids() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.ClearGpuUuids()
+	})
+}
+
+// SetMigInstanceUuids sets the "mig_instance_uuids" field.
+func (u *VMUpsertBulk) SetMigInstanceUuids(v json.RawMessage) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetMigInstanceUuids(v)
+	})
+}
+
+// UpdateMigInstanceUuids sets the "mig_instance_uuids" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateMigInstanceUuids() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateMigInstanceUuids()
+	})
+}
+
+// ClearMigInstanceUuids clears the value of the "mig_instance_uuids" field.
+func (u *VMUpsertBulk) ClearMigInstanceUuids() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.ClearMigInstanceUuids()
+	})
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (u *VMUpsertBulk) SetCreatedAt(v time.Time) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetCreatedAt(v)
+	})
+}
+
+// UpdateCreatedAt sets the "created_at" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateCreatedAt() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateCreatedAt()
+	})
+}
+
+// SetUpdatedAt sets the "updated_at" field.
+func (u *VMUpsertBulk) SetUpdatedAt(v time.Time) *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.SetUpdatedAt(v)
+	})
+}
+
+// UpdateUpdatedAt sets the "updated_at" field to the value that was provided on create.
+func (u *VMUpsertBulk) UpdateUpdatedAt() *VMUpsertBulk {
+	return u.Update(func(s *VMUpsert) {
+		s.UpdateUpdatedAt()
+	})
+}
+
+// Exec executes the query.
+func (u *VMUpsertBulk) Exec(ctx context.Context) error {
+	if u.create.err != nil {
+		return u.create.err
+	}
+	for i, b := range u.create.builders {
+		if len(b.conflict) != 0 {
+			return fmt.Errorf("ent: OnConflict was set for builder %d. Set it on the VMCreateBulk instead", i)
+		}
+	}
+	if len(u.create.conflict) == 0 {
+		return errors.New("ent: missing options for VMCreateBulk.OnConflict")
+	}
+	return u.create.Exec(ctx)
+}
+
+// ExecX is like Exec, but panics if an error occurs.
+func (u *VMUpsertBulk) ExecX(ctx context.Context) {
+	if err := u.create.Exec(ctx); err != nil {
 		panic(err)
 	}
 }

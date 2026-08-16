@@ -4,12 +4,14 @@ package ent
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"entgo.io/ent/dialect/sql"
 	"entgo.io/ent/dialect/sql/sqlgraph"
+	"entgo.io/ent/dialect/sql/sqljson"
 	"entgo.io/ent/schema/field"
 	"github.com/folsomintel/fuse/internal/entspike/ent/predicate"
 	"github.com/folsomintel/fuse/internal/entspike/ent/vm"
@@ -269,9 +271,134 @@ func (_u *VMUpdate) SetNillableLastError(v *string) *VMUpdate {
 	return _u
 }
 
+// SetEndpoints sets the "endpoints" field.
+func (_u *VMUpdate) SetEndpoints(v json.RawMessage) *VMUpdate {
+	_u.mutation.SetEndpoints(v)
+	return _u
+}
+
+// AppendEndpoints appends value to the "endpoints" field.
+func (_u *VMUpdate) AppendEndpoints(v json.RawMessage) *VMUpdate {
+	_u.mutation.AppendEndpoints(v)
+	return _u
+}
+
+// ClearEndpoints clears the value of the "endpoints" field.
+func (_u *VMUpdate) ClearEndpoints() *VMUpdate {
+	_u.mutation.ClearEndpoints()
+	return _u
+}
+
+// SetGpus sets the "gpus" field.
+func (_u *VMUpdate) SetGpus(v int32) *VMUpdate {
+	_u.mutation.ResetGpus()
+	_u.mutation.SetGpus(v)
+	return _u
+}
+
+// SetNillableGpus sets the "gpus" field if the given value is not nil.
+func (_u *VMUpdate) SetNillableGpus(v *int32) *VMUpdate {
+	if v != nil {
+		_u.SetGpus(*v)
+	}
+	return _u
+}
+
+// AddGpus adds value to the "gpus" field.
+func (_u *VMUpdate) AddGpus(v int32) *VMUpdate {
+	_u.mutation.AddGpus(v)
+	return _u
+}
+
+// SetGpuKind sets the "gpu_kind" field.
+func (_u *VMUpdate) SetGpuKind(v string) *VMUpdate {
+	_u.mutation.SetGpuKind(v)
+	return _u
+}
+
+// SetNillableGpuKind sets the "gpu_kind" field if the given value is not nil.
+func (_u *VMUpdate) SetNillableGpuKind(v *string) *VMUpdate {
+	if v != nil {
+		_u.SetGpuKind(*v)
+	}
+	return _u
+}
+
+// SetGpuProfile sets the "gpu_profile" field.
+func (_u *VMUpdate) SetGpuProfile(v string) *VMUpdate {
+	_u.mutation.SetGpuProfile(v)
+	return _u
+}
+
+// SetNillableGpuProfile sets the "gpu_profile" field if the given value is not nil.
+func (_u *VMUpdate) SetNillableGpuProfile(v *string) *VMUpdate {
+	if v != nil {
+		_u.SetGpuProfile(*v)
+	}
+	return _u
+}
+
+// SetGpuUuids sets the "gpu_uuids" field.
+func (_u *VMUpdate) SetGpuUuids(v json.RawMessage) *VMUpdate {
+	_u.mutation.SetGpuUuids(v)
+	return _u
+}
+
+// AppendGpuUuids appends value to the "gpu_uuids" field.
+func (_u *VMUpdate) AppendGpuUuids(v json.RawMessage) *VMUpdate {
+	_u.mutation.AppendGpuUuids(v)
+	return _u
+}
+
+// ClearGpuUuids clears the value of the "gpu_uuids" field.
+func (_u *VMUpdate) ClearGpuUuids() *VMUpdate {
+	_u.mutation.ClearGpuUuids()
+	return _u
+}
+
+// SetMigInstanceUuids sets the "mig_instance_uuids" field.
+func (_u *VMUpdate) SetMigInstanceUuids(v json.RawMessage) *VMUpdate {
+	_u.mutation.SetMigInstanceUuids(v)
+	return _u
+}
+
+// AppendMigInstanceUuids appends value to the "mig_instance_uuids" field.
+func (_u *VMUpdate) AppendMigInstanceUuids(v json.RawMessage) *VMUpdate {
+	_u.mutation.AppendMigInstanceUuids(v)
+	return _u
+}
+
+// ClearMigInstanceUuids clears the value of the "mig_instance_uuids" field.
+func (_u *VMUpdate) ClearMigInstanceUuids() *VMUpdate {
+	_u.mutation.ClearMigInstanceUuids()
+	return _u
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (_u *VMUpdate) SetCreatedAt(v time.Time) *VMUpdate {
+	_u.mutation.SetCreatedAt(v)
+	return _u
+}
+
+// SetNillableCreatedAt sets the "created_at" field if the given value is not nil.
+func (_u *VMUpdate) SetNillableCreatedAt(v *time.Time) *VMUpdate {
+	if v != nil {
+		_u.SetCreatedAt(*v)
+	}
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *VMUpdate) SetUpdatedAt(v time.Time) *VMUpdate {
 	_u.mutation.SetUpdatedAt(v)
+	return _u
+}
+
+// SetNillableUpdatedAt sets the "updated_at" field if the given value is not nil.
+func (_u *VMUpdate) SetNillableUpdatedAt(v *time.Time) *VMUpdate {
+	if v != nil {
+		_u.SetUpdatedAt(*v)
+	}
 	return _u
 }
 
@@ -282,7 +409,6 @@ func (_u *VMUpdate) Mutation() *VMMutation {
 
 // Save executes the query and returns the number of nodes affected by the update operation.
 func (_u *VMUpdate) Save(ctx context.Context) (int, error) {
-	_u.defaults()
 	return withHooks(ctx, _u.sqlSave, _u.mutation, _u.hooks)
 }
 
@@ -305,14 +431,6 @@ func (_u *VMUpdate) Exec(ctx context.Context) error {
 func (_u *VMUpdate) ExecX(ctx context.Context) {
 	if err := _u.Exec(ctx); err != nil {
 		panic(err)
-	}
-}
-
-// defaults sets the default values of the builder before save.
-func (_u *VMUpdate) defaults() {
-	if _, ok := _u.mutation.UpdatedAt(); !ok {
-		v := vm.UpdateDefaultUpdatedAt()
-		_u.mutation.SetUpdatedAt(v)
 	}
 }
 
@@ -403,6 +521,54 @@ func (_u *VMUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.LastError(); ok {
 		_spec.SetField(vm.FieldLastError, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.Endpoints(); ok {
+		_spec.SetField(vm.FieldEndpoints, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedEndpoints(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, vm.FieldEndpoints, value)
+		})
+	}
+	if _u.mutation.EndpointsCleared() {
+		_spec.ClearField(vm.FieldEndpoints, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.Gpus(); ok {
+		_spec.SetField(vm.FieldGpus, field.TypeInt32, value)
+	}
+	if value, ok := _u.mutation.AddedGpus(); ok {
+		_spec.AddField(vm.FieldGpus, field.TypeInt32, value)
+	}
+	if value, ok := _u.mutation.GpuKind(); ok {
+		_spec.SetField(vm.FieldGpuKind, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.GpuProfile(); ok {
+		_spec.SetField(vm.FieldGpuProfile, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.GpuUuids(); ok {
+		_spec.SetField(vm.FieldGpuUuids, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedGpuUuids(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, vm.FieldGpuUuids, value)
+		})
+	}
+	if _u.mutation.GpuUuidsCleared() {
+		_spec.ClearField(vm.FieldGpuUuids, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.MigInstanceUuids(); ok {
+		_spec.SetField(vm.FieldMigInstanceUuids, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedMigInstanceUuids(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, vm.FieldMigInstanceUuids, value)
+		})
+	}
+	if _u.mutation.MigInstanceUuidsCleared() {
+		_spec.ClearField(vm.FieldMigInstanceUuids, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.CreatedAt(); ok {
+		_spec.SetField(vm.FieldCreatedAt, field.TypeTime, value)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(vm.FieldUpdatedAt, field.TypeTime, value)
@@ -668,9 +834,134 @@ func (_u *VMUpdateOne) SetNillableLastError(v *string) *VMUpdateOne {
 	return _u
 }
 
+// SetEndpoints sets the "endpoints" field.
+func (_u *VMUpdateOne) SetEndpoints(v json.RawMessage) *VMUpdateOne {
+	_u.mutation.SetEndpoints(v)
+	return _u
+}
+
+// AppendEndpoints appends value to the "endpoints" field.
+func (_u *VMUpdateOne) AppendEndpoints(v json.RawMessage) *VMUpdateOne {
+	_u.mutation.AppendEndpoints(v)
+	return _u
+}
+
+// ClearEndpoints clears the value of the "endpoints" field.
+func (_u *VMUpdateOne) ClearEndpoints() *VMUpdateOne {
+	_u.mutation.ClearEndpoints()
+	return _u
+}
+
+// SetGpus sets the "gpus" field.
+func (_u *VMUpdateOne) SetGpus(v int32) *VMUpdateOne {
+	_u.mutation.ResetGpus()
+	_u.mutation.SetGpus(v)
+	return _u
+}
+
+// SetNillableGpus sets the "gpus" field if the given value is not nil.
+func (_u *VMUpdateOne) SetNillableGpus(v *int32) *VMUpdateOne {
+	if v != nil {
+		_u.SetGpus(*v)
+	}
+	return _u
+}
+
+// AddGpus adds value to the "gpus" field.
+func (_u *VMUpdateOne) AddGpus(v int32) *VMUpdateOne {
+	_u.mutation.AddGpus(v)
+	return _u
+}
+
+// SetGpuKind sets the "gpu_kind" field.
+func (_u *VMUpdateOne) SetGpuKind(v string) *VMUpdateOne {
+	_u.mutation.SetGpuKind(v)
+	return _u
+}
+
+// SetNillableGpuKind sets the "gpu_kind" field if the given value is not nil.
+func (_u *VMUpdateOne) SetNillableGpuKind(v *string) *VMUpdateOne {
+	if v != nil {
+		_u.SetGpuKind(*v)
+	}
+	return _u
+}
+
+// SetGpuProfile sets the "gpu_profile" field.
+func (_u *VMUpdateOne) SetGpuProfile(v string) *VMUpdateOne {
+	_u.mutation.SetGpuProfile(v)
+	return _u
+}
+
+// SetNillableGpuProfile sets the "gpu_profile" field if the given value is not nil.
+func (_u *VMUpdateOne) SetNillableGpuProfile(v *string) *VMUpdateOne {
+	if v != nil {
+		_u.SetGpuProfile(*v)
+	}
+	return _u
+}
+
+// SetGpuUuids sets the "gpu_uuids" field.
+func (_u *VMUpdateOne) SetGpuUuids(v json.RawMessage) *VMUpdateOne {
+	_u.mutation.SetGpuUuids(v)
+	return _u
+}
+
+// AppendGpuUuids appends value to the "gpu_uuids" field.
+func (_u *VMUpdateOne) AppendGpuUuids(v json.RawMessage) *VMUpdateOne {
+	_u.mutation.AppendGpuUuids(v)
+	return _u
+}
+
+// ClearGpuUuids clears the value of the "gpu_uuids" field.
+func (_u *VMUpdateOne) ClearGpuUuids() *VMUpdateOne {
+	_u.mutation.ClearGpuUuids()
+	return _u
+}
+
+// SetMigInstanceUuids sets the "mig_instance_uuids" field.
+func (_u *VMUpdateOne) SetMigInstanceUuids(v json.RawMessage) *VMUpdateOne {
+	_u.mutation.SetMigInstanceUuids(v)
+	return _u
+}
+
+// AppendMigInstanceUuids appends value to the "mig_instance_uuids" field.
+func (_u *VMUpdateOne) AppendMigInstanceUuids(v json.RawMessage) *VMUpdateOne {
+	_u.mutation.AppendMigInstanceUuids(v)
+	return _u
+}
+
+// ClearMigInstanceUuids clears the value of the "mig_instance_uuids" field.
+func (_u *VMUpdateOne) ClearMigInstanceUuids() *VMUpdateOne {
+	_u.mutation.ClearMigInstanceUuids()
+	return _u
+}
+
+// SetCreatedAt sets the "created_at" field.
+func (_u *VMUpdateOne) SetCreatedAt(v time.Time) *VMUpdateOne {
+	_u.mutation.SetCreatedAt(v)
+	return _u
+}
+
+// SetNillableCreatedAt sets the "created_at" field if the given value is not nil.
+func (_u *VMUpdateOne) SetNillableCreatedAt(v *time.Time) *VMUpdateOne {
+	if v != nil {
+		_u.SetCreatedAt(*v)
+	}
+	return _u
+}
+
 // SetUpdatedAt sets the "updated_at" field.
 func (_u *VMUpdateOne) SetUpdatedAt(v time.Time) *VMUpdateOne {
 	_u.mutation.SetUpdatedAt(v)
+	return _u
+}
+
+// SetNillableUpdatedAt sets the "updated_at" field if the given value is not nil.
+func (_u *VMUpdateOne) SetNillableUpdatedAt(v *time.Time) *VMUpdateOne {
+	if v != nil {
+		_u.SetUpdatedAt(*v)
+	}
 	return _u
 }
 
@@ -694,7 +985,6 @@ func (_u *VMUpdateOne) Select(field string, fields ...string) *VMUpdateOne {
 
 // Save executes the query and returns the updated VM entity.
 func (_u *VMUpdateOne) Save(ctx context.Context) (*VM, error) {
-	_u.defaults()
 	return withHooks(ctx, _u.sqlSave, _u.mutation, _u.hooks)
 }
 
@@ -717,14 +1007,6 @@ func (_u *VMUpdateOne) Exec(ctx context.Context) error {
 func (_u *VMUpdateOne) ExecX(ctx context.Context) {
 	if err := _u.Exec(ctx); err != nil {
 		panic(err)
-	}
-}
-
-// defaults sets the default values of the builder before save.
-func (_u *VMUpdateOne) defaults() {
-	if _, ok := _u.mutation.UpdatedAt(); !ok {
-		v := vm.UpdateDefaultUpdatedAt()
-		_u.mutation.SetUpdatedAt(v)
 	}
 }
 
@@ -832,6 +1114,54 @@ func (_u *VMUpdateOne) sqlSave(ctx context.Context) (_node *VM, err error) {
 	}
 	if value, ok := _u.mutation.LastError(); ok {
 		_spec.SetField(vm.FieldLastError, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.Endpoints(); ok {
+		_spec.SetField(vm.FieldEndpoints, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedEndpoints(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, vm.FieldEndpoints, value)
+		})
+	}
+	if _u.mutation.EndpointsCleared() {
+		_spec.ClearField(vm.FieldEndpoints, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.Gpus(); ok {
+		_spec.SetField(vm.FieldGpus, field.TypeInt32, value)
+	}
+	if value, ok := _u.mutation.AddedGpus(); ok {
+		_spec.AddField(vm.FieldGpus, field.TypeInt32, value)
+	}
+	if value, ok := _u.mutation.GpuKind(); ok {
+		_spec.SetField(vm.FieldGpuKind, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.GpuProfile(); ok {
+		_spec.SetField(vm.FieldGpuProfile, field.TypeString, value)
+	}
+	if value, ok := _u.mutation.GpuUuids(); ok {
+		_spec.SetField(vm.FieldGpuUuids, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedGpuUuids(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, vm.FieldGpuUuids, value)
+		})
+	}
+	if _u.mutation.GpuUuidsCleared() {
+		_spec.ClearField(vm.FieldGpuUuids, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.MigInstanceUuids(); ok {
+		_spec.SetField(vm.FieldMigInstanceUuids, field.TypeJSON, value)
+	}
+	if value, ok := _u.mutation.AppendedMigInstanceUuids(); ok {
+		_spec.AddModifier(func(u *sql.UpdateBuilder) {
+			sqljson.Append(u, vm.FieldMigInstanceUuids, value)
+		})
+	}
+	if _u.mutation.MigInstanceUuidsCleared() {
+		_spec.ClearField(vm.FieldMigInstanceUuids, field.TypeJSON)
+	}
+	if value, ok := _u.mutation.CreatedAt(); ok {
+		_spec.SetField(vm.FieldCreatedAt, field.TypeTime, value)
 	}
 	if value, ok := _u.mutation.UpdatedAt(); ok {
 		_spec.SetField(vm.FieldUpdatedAt, field.TypeTime, value)

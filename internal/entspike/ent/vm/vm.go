@@ -4,7 +4,6 @@ package vm
 
 import (
 	"fmt"
-	"time"
 
 	"entgo.io/ent/dialect/sql"
 )
@@ -44,6 +43,18 @@ const (
 	FieldSecretsEncrypted = "secrets_encrypted"
 	// FieldLastError holds the string denoting the last_error field in the database.
 	FieldLastError = "last_error"
+	// FieldEndpoints holds the string denoting the endpoints field in the database.
+	FieldEndpoints = "endpoints_json"
+	// FieldGpus holds the string denoting the gpus field in the database.
+	FieldGpus = "gpus"
+	// FieldGpuKind holds the string denoting the gpu_kind field in the database.
+	FieldGpuKind = "gpu_kind"
+	// FieldGpuProfile holds the string denoting the gpu_profile field in the database.
+	FieldGpuProfile = "gpu_profile"
+	// FieldGpuUuids holds the string denoting the gpu_uuids field in the database.
+	FieldGpuUuids = "gpu_uuids"
+	// FieldMigInstanceUuids holds the string denoting the mig_instance_uuids field in the database.
+	FieldMigInstanceUuids = "mig_instance_uuids"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
@@ -70,6 +81,12 @@ var Columns = []string{
 	FieldAuthTokenEncrypted,
 	FieldSecretsEncrypted,
 	FieldLastError,
+	FieldEndpoints,
+	FieldGpus,
+	FieldGpuKind,
+	FieldGpuProfile,
+	FieldGpuUuids,
+	FieldMigInstanceUuids,
 	FieldCreatedAt,
 	FieldUpdatedAt,
 }
@@ -109,12 +126,12 @@ var (
 	DefaultIdleTimeoutSeconds int
 	// DefaultLastError holds the default value on creation for the "last_error" field.
 	DefaultLastError string
-	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
-	DefaultCreatedAt func() time.Time
-	// DefaultUpdatedAt holds the default value on creation for the "updated_at" field.
-	DefaultUpdatedAt func() time.Time
-	// UpdateDefaultUpdatedAt holds the default value on update for the "updated_at" field.
-	UpdateDefaultUpdatedAt func() time.Time
+	// DefaultGpus holds the default value on creation for the "gpus" field.
+	DefaultGpus int32
+	// DefaultGpuKind holds the default value on creation for the "gpu_kind" field.
+	DefaultGpuKind string
+	// DefaultGpuProfile holds the default value on creation for the "gpu_profile" field.
+	DefaultGpuProfile string
 )
 
 // State defines the type for the "state" enum field.
@@ -126,6 +143,8 @@ const (
 	StateRunning      State = "running"
 	StateDraining     State = "draining"
 	StateDestroying   State = "destroying"
+	StateDestroyed    State = "destroyed"
+	StateFailed       State = "failed"
 )
 
 func (s State) String() string {
@@ -135,7 +154,7 @@ func (s State) String() string {
 // StateValidator is a validator for the "state" field enum values. It is called by the builders before save.
 func StateValidator(s State) error {
 	switch s {
-	case StateProvisioning, StateRunning, StateDraining, StateDestroying:
+	case StateProvisioning, StateRunning, StateDraining, StateDestroying, StateDestroyed, StateFailed:
 		return nil
 	default:
 		return fmt.Errorf("vm: invalid enum value for state field: %q", s)
@@ -213,6 +232,21 @@ func ByIdleTimeoutSeconds(opts ...sql.OrderTermOption) OrderOption {
 // ByLastError orders the results by the last_error field.
 func ByLastError(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldLastError, opts...).ToFunc()
+}
+
+// ByGpus orders the results by the gpus field.
+func ByGpus(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldGpus, opts...).ToFunc()
+}
+
+// ByGpuKind orders the results by the gpu_kind field.
+func ByGpuKind(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldGpuKind, opts...).ToFunc()
+}
+
+// ByGpuProfile orders the results by the gpu_profile field.
+func ByGpuProfile(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldGpuProfile, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.

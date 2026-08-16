@@ -134,6 +134,21 @@ func LastError(v string) predicate.VM {
 	return predicate.VM(sql.FieldEQ(FieldLastError, v))
 }
 
+// Gpus applies equality check predicate on the "gpus" field. It's identical to GpusEQ.
+func Gpus(v int32) predicate.VM {
+	return predicate.VM(sql.FieldEQ(FieldGpus, v))
+}
+
+// GpuKind applies equality check predicate on the "gpu_kind" field. It's identical to GpuKindEQ.
+func GpuKind(v string) predicate.VM {
+	return predicate.VM(sql.FieldEQ(FieldGpuKind, v))
+}
+
+// GpuProfile applies equality check predicate on the "gpu_profile" field. It's identical to GpuProfileEQ.
+func GpuProfile(v string) predicate.VM {
+	return predicate.VM(sql.FieldEQ(FieldGpuProfile, v))
+}
+
 // CreatedAt applies equality check predicate on the "created_at" field. It's identical to CreatedAtEQ.
 func CreatedAt(v time.Time) predicate.VM {
 	return predicate.VM(sql.FieldEQ(FieldCreatedAt, v))
@@ -917,6 +932,206 @@ func LastErrorEqualFold(v string) predicate.VM {
 // LastErrorContainsFold applies the ContainsFold predicate on the "last_error" field.
 func LastErrorContainsFold(v string) predicate.VM {
 	return predicate.VM(sql.FieldContainsFold(FieldLastError, v))
+}
+
+// EndpointsIsNil applies the IsNil predicate on the "endpoints" field.
+func EndpointsIsNil() predicate.VM {
+	return predicate.VM(sql.FieldIsNull(FieldEndpoints))
+}
+
+// EndpointsNotNil applies the NotNil predicate on the "endpoints" field.
+func EndpointsNotNil() predicate.VM {
+	return predicate.VM(sql.FieldNotNull(FieldEndpoints))
+}
+
+// GpusEQ applies the EQ predicate on the "gpus" field.
+func GpusEQ(v int32) predicate.VM {
+	return predicate.VM(sql.FieldEQ(FieldGpus, v))
+}
+
+// GpusNEQ applies the NEQ predicate on the "gpus" field.
+func GpusNEQ(v int32) predicate.VM {
+	return predicate.VM(sql.FieldNEQ(FieldGpus, v))
+}
+
+// GpusIn applies the In predicate on the "gpus" field.
+func GpusIn(vs ...int32) predicate.VM {
+	return predicate.VM(sql.FieldIn(FieldGpus, vs...))
+}
+
+// GpusNotIn applies the NotIn predicate on the "gpus" field.
+func GpusNotIn(vs ...int32) predicate.VM {
+	return predicate.VM(sql.FieldNotIn(FieldGpus, vs...))
+}
+
+// GpusGT applies the GT predicate on the "gpus" field.
+func GpusGT(v int32) predicate.VM {
+	return predicate.VM(sql.FieldGT(FieldGpus, v))
+}
+
+// GpusGTE applies the GTE predicate on the "gpus" field.
+func GpusGTE(v int32) predicate.VM {
+	return predicate.VM(sql.FieldGTE(FieldGpus, v))
+}
+
+// GpusLT applies the LT predicate on the "gpus" field.
+func GpusLT(v int32) predicate.VM {
+	return predicate.VM(sql.FieldLT(FieldGpus, v))
+}
+
+// GpusLTE applies the LTE predicate on the "gpus" field.
+func GpusLTE(v int32) predicate.VM {
+	return predicate.VM(sql.FieldLTE(FieldGpus, v))
+}
+
+// GpuKindEQ applies the EQ predicate on the "gpu_kind" field.
+func GpuKindEQ(v string) predicate.VM {
+	return predicate.VM(sql.FieldEQ(FieldGpuKind, v))
+}
+
+// GpuKindNEQ applies the NEQ predicate on the "gpu_kind" field.
+func GpuKindNEQ(v string) predicate.VM {
+	return predicate.VM(sql.FieldNEQ(FieldGpuKind, v))
+}
+
+// GpuKindIn applies the In predicate on the "gpu_kind" field.
+func GpuKindIn(vs ...string) predicate.VM {
+	return predicate.VM(sql.FieldIn(FieldGpuKind, vs...))
+}
+
+// GpuKindNotIn applies the NotIn predicate on the "gpu_kind" field.
+func GpuKindNotIn(vs ...string) predicate.VM {
+	return predicate.VM(sql.FieldNotIn(FieldGpuKind, vs...))
+}
+
+// GpuKindGT applies the GT predicate on the "gpu_kind" field.
+func GpuKindGT(v string) predicate.VM {
+	return predicate.VM(sql.FieldGT(FieldGpuKind, v))
+}
+
+// GpuKindGTE applies the GTE predicate on the "gpu_kind" field.
+func GpuKindGTE(v string) predicate.VM {
+	return predicate.VM(sql.FieldGTE(FieldGpuKind, v))
+}
+
+// GpuKindLT applies the LT predicate on the "gpu_kind" field.
+func GpuKindLT(v string) predicate.VM {
+	return predicate.VM(sql.FieldLT(FieldGpuKind, v))
+}
+
+// GpuKindLTE applies the LTE predicate on the "gpu_kind" field.
+func GpuKindLTE(v string) predicate.VM {
+	return predicate.VM(sql.FieldLTE(FieldGpuKind, v))
+}
+
+// GpuKindContains applies the Contains predicate on the "gpu_kind" field.
+func GpuKindContains(v string) predicate.VM {
+	return predicate.VM(sql.FieldContains(FieldGpuKind, v))
+}
+
+// GpuKindHasPrefix applies the HasPrefix predicate on the "gpu_kind" field.
+func GpuKindHasPrefix(v string) predicate.VM {
+	return predicate.VM(sql.FieldHasPrefix(FieldGpuKind, v))
+}
+
+// GpuKindHasSuffix applies the HasSuffix predicate on the "gpu_kind" field.
+func GpuKindHasSuffix(v string) predicate.VM {
+	return predicate.VM(sql.FieldHasSuffix(FieldGpuKind, v))
+}
+
+// GpuKindEqualFold applies the EqualFold predicate on the "gpu_kind" field.
+func GpuKindEqualFold(v string) predicate.VM {
+	return predicate.VM(sql.FieldEqualFold(FieldGpuKind, v))
+}
+
+// GpuKindContainsFold applies the ContainsFold predicate on the "gpu_kind" field.
+func GpuKindContainsFold(v string) predicate.VM {
+	return predicate.VM(sql.FieldContainsFold(FieldGpuKind, v))
+}
+
+// GpuProfileEQ applies the EQ predicate on the "gpu_profile" field.
+func GpuProfileEQ(v string) predicate.VM {
+	return predicate.VM(sql.FieldEQ(FieldGpuProfile, v))
+}
+
+// GpuProfileNEQ applies the NEQ predicate on the "gpu_profile" field.
+func GpuProfileNEQ(v string) predicate.VM {
+	return predicate.VM(sql.FieldNEQ(FieldGpuProfile, v))
+}
+
+// GpuProfileIn applies the In predicate on the "gpu_profile" field.
+func GpuProfileIn(vs ...string) predicate.VM {
+	return predicate.VM(sql.FieldIn(FieldGpuProfile, vs...))
+}
+
+// GpuProfileNotIn applies the NotIn predicate on the "gpu_profile" field.
+func GpuProfileNotIn(vs ...string) predicate.VM {
+	return predicate.VM(sql.FieldNotIn(FieldGpuProfile, vs...))
+}
+
+// GpuProfileGT applies the GT predicate on the "gpu_profile" field.
+func GpuProfileGT(v string) predicate.VM {
+	return predicate.VM(sql.FieldGT(FieldGpuProfile, v))
+}
+
+// GpuProfileGTE applies the GTE predicate on the "gpu_profile" field.
+func GpuProfileGTE(v string) predicate.VM {
+	return predicate.VM(sql.FieldGTE(FieldGpuProfile, v))
+}
+
+// GpuProfileLT applies the LT predicate on the "gpu_profile" field.
+func GpuProfileLT(v string) predicate.VM {
+	return predicate.VM(sql.FieldLT(FieldGpuProfile, v))
+}
+
+// GpuProfileLTE applies the LTE predicate on the "gpu_profile" field.
+func GpuProfileLTE(v string) predicate.VM {
+	return predicate.VM(sql.FieldLTE(FieldGpuProfile, v))
+}
+
+// GpuProfileContains applies the Contains predicate on the "gpu_profile" field.
+func GpuProfileContains(v string) predicate.VM {
+	return predicate.VM(sql.FieldContains(FieldGpuProfile, v))
+}
+
+// GpuProfileHasPrefix applies the HasPrefix predicate on the "gpu_profile" field.
+func GpuProfileHasPrefix(v string) predicate.VM {
+	return predicate.VM(sql.FieldHasPrefix(FieldGpuProfile, v))
+}
+
+// GpuProfileHasSuffix applies the HasSuffix predicate on the "gpu_profile" field.
+func GpuProfileHasSuffix(v string) predicate.VM {
+	return predicate.VM(sql.FieldHasSuffix(FieldGpuProfile, v))
+}
+
+// GpuProfileEqualFold applies the EqualFold predicate on the "gpu_profile" field.
+func GpuProfileEqualFold(v string) predicate.VM {
+	return predicate.VM(sql.FieldEqualFold(FieldGpuProfile, v))
+}
+
+// GpuProfileContainsFold applies the ContainsFold predicate on the "gpu_profile" field.
+func GpuProfileContainsFold(v string) predicate.VM {
+	return predicate.VM(sql.FieldContainsFold(FieldGpuProfile, v))
+}
+
+// GpuUuidsIsNil applies the IsNil predicate on the "gpu_uuids" field.
+func GpuUuidsIsNil() predicate.VM {
+	return predicate.VM(sql.FieldIsNull(FieldGpuUuids))
+}
+
+// GpuUuidsNotNil applies the NotNil predicate on the "gpu_uuids" field.
+func GpuUuidsNotNil() predicate.VM {
+	return predicate.VM(sql.FieldNotNull(FieldGpuUuids))
+}
+
+// MigInstanceUuidsIsNil applies the IsNil predicate on the "mig_instance_uuids" field.
+func MigInstanceUuidsIsNil() predicate.VM {
+	return predicate.VM(sql.FieldIsNull(FieldMigInstanceUuids))
+}
+
+// MigInstanceUuidsNotNil applies the NotNil predicate on the "mig_instance_uuids" field.
+func MigInstanceUuidsNotNil() predicate.VM {
+	return predicate.VM(sql.FieldNotNull(FieldMigInstanceUuids))
 }
 
 // CreatedAtEQ applies the EQ predicate on the "created_at" field.

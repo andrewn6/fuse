@@ -74,6 +74,8 @@ func TestEntSpikeCRUD(t *testing.T) {
 			SetState(spec.state).
 			SetCpus(4).
 			SetRAMMB(8192).
+			SetCreatedAt(time.Now()).
+			SetUpdatedAt(time.Now()).
 			Save(ctx)
 		if err != nil {
 			t.Fatalf("create %s: %v", spec.id, err)

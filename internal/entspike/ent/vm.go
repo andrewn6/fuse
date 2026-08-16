@@ -3,6 +3,7 @@
 package ent
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -47,6 +48,18 @@ type VM struct {
 	SecretsEncrypted []byte `json:"secrets_encrypted,omitempty"`
 	// LastError holds the value of the "last_error" field.
 	LastError string `json:"last_error,omitempty"`
+	// Endpoints holds the value of the "endpoints" field.
+	Endpoints json.RawMessage `json:"endpoints,omitempty"`
+	// Gpus holds the value of the "gpus" field.
+	Gpus int32 `json:"gpus,omitempty"`
+	// GpuKind holds the value of the "gpu_kind" field.
+	GpuKind string `json:"gpu_kind,omitempty"`
+	// GpuProfile holds the value of the "gpu_profile" field.
+	GpuProfile string `json:"gpu_profile,omitempty"`
+	// GpuUuids holds the value of the "gpu_uuids" field.
+	GpuUuids json.RawMessage `json:"gpu_uuids,omitempty"`
+	// MigInstanceUuids holds the value of the "mig_instance_uuids" field.
+	MigInstanceUuids json.RawMessage `json:"mig_instance_uuids,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// UpdatedAt holds the value of the "updated_at" field.
@@ -59,11 +72,11 @@ func (*VM) scanValues(columns []string) ([]any, error) {
 	values := make([]any, len(columns))
 	for i := range columns {
 		switch columns[i] {
-		case vm.FieldAuthTokenEncrypted, vm.FieldSecretsEncrypted:
+		case vm.FieldAuthTokenEncrypted, vm.FieldSecretsEncrypted, vm.FieldEndpoints, vm.FieldGpuUuids, vm.FieldMigInstanceUuids:
 			values[i] = new([]byte)
-		case vm.FieldCpus, vm.FieldRAMMB, vm.FieldStorageGB, vm.FieldMaxRuntimeSeconds, vm.FieldIdleTimeoutSeconds:
+		case vm.FieldCpus, vm.FieldRAMMB, vm.FieldStorageGB, vm.FieldMaxRuntimeSeconds, vm.FieldIdleTimeoutSeconds, vm.FieldGpus:
 			values[i] = new(sql.NullInt64)
-		case vm.FieldID, vm.FieldHostID, vm.FieldNetworkHost, vm.FieldState, vm.FieldURL, vm.FieldTaskID, vm.FieldTenantID, vm.FieldRegion, vm.FieldLastError:
+		case vm.FieldID, vm.FieldHostID, vm.FieldNetworkHost, vm.FieldState, vm.FieldURL, vm.FieldTaskID, vm.FieldTenantID, vm.FieldRegion, vm.FieldLastError, vm.FieldGpuKind, vm.FieldGpuProfile:
 			values[i] = new(sql.NullString)
 		case vm.FieldCreatedAt, vm.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -178,6 +191,48 @@ func (_m *VM) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.LastError = value.String
 			}
+		case vm.FieldEndpoints:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field endpoints", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.Endpoints); err != nil {
+					return fmt.Errorf("unmarshal field endpoints: %w", err)
+				}
+			}
+		case vm.FieldGpus:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field gpus", values[i])
+			} else if value.Valid {
+				_m.Gpus = int32(value.Int64)
+			}
+		case vm.FieldGpuKind:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field gpu_kind", values[i])
+			} else if value.Valid {
+				_m.GpuKind = value.String
+			}
+		case vm.FieldGpuProfile:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field gpu_profile", values[i])
+			} else if value.Valid {
+				_m.GpuProfile = value.String
+			}
+		case vm.FieldGpuUuids:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field gpu_uuids", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.GpuUuids); err != nil {
+					return fmt.Errorf("unmarshal field gpu_uuids: %w", err)
+				}
+			}
+		case vm.FieldMigInstanceUuids:
+			if value, ok := values[i].(*[]byte); !ok {
+				return fmt.Errorf("unexpected type %T for field mig_instance_uuids", values[i])
+			} else if value != nil && len(*value) > 0 {
+				if err := json.Unmarshal(*value, &_m.MigInstanceUuids); err != nil {
+					return fmt.Errorf("unmarshal field mig_instance_uuids: %w", err)
+				}
+			}
 		case vm.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field created_at", values[i])
@@ -270,6 +325,24 @@ func (_m *VM) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("last_error=")
 	builder.WriteString(_m.LastError)
+	builder.WriteString(", ")
+	builder.WriteString("endpoints=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Endpoints))
+	builder.WriteString(", ")
+	builder.WriteString("gpus=")
+	builder.WriteString(fmt.Sprintf("%v", _m.Gpus))
+	builder.WriteString(", ")
+	builder.WriteString("gpu_kind=")
+	builder.WriteString(_m.GpuKind)
+	builder.WriteString(", ")
+	builder.WriteString("gpu_profile=")
+	builder.WriteString(_m.GpuProfile)
+	builder.WriteString(", ")
+	builder.WriteString("gpu_uuids=")
+	builder.WriteString(fmt.Sprintf("%v", _m.GpuUuids))
+	builder.WriteString(", ")
+	builder.WriteString("mig_instance_uuids=")
+	builder.WriteString(fmt.Sprintf("%v", _m.MigInstanceUuids))
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))
