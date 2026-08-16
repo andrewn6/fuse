@@ -29,7 +29,7 @@ func fakeOrchStream(t *testing.T, greeting string) *httptest.Server {
 		_ = buf.Flush()
 		_, _ = conn.Write([]byte(greeting))
 		b := make([]byte, 64)
-		n, err := buf.Reader.Read(b)
+		n, err := buf.Read(b)
 		if err != nil {
 			return
 		}

@@ -39,7 +39,7 @@ func newFakeStreamGuest(t *testing.T) *fakeStreamGuest {
 		_ = buf.Flush()
 		_, _ = conn.Write([]byte(g.greeting))
 		b := make([]byte, 64)
-		n, err := buf.Reader.Read(b)
+		n, err := buf.Read(b)
 		if err != nil {
 			return
 		}
