@@ -116,6 +116,9 @@ var scrollButtons = map[string]string{
 // without an X server present.
 type computer struct {
 	display string
+	// vncAddr is where the stream route finds the local vnc server; a field
+	// so tests can point it at a stub listener.
+	vncAddr string
 	run     func(ctx context.Context, argv []string) (string, error)
 	ready   func() error
 }
@@ -124,7 +127,7 @@ func newComputer(display string) *computer {
 	if display == "" {
 		display = ":1"
 	}
-	c := &computer{display: display}
+	c := &computer{display: display, vncAddr: vncAddr}
 	c.run = c.execRun
 	c.ready = c.checkReady
 	return c

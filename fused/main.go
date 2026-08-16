@@ -208,6 +208,7 @@ func newHandler(c config, authToken string, manifestBytes []byte, secretCount in
 	mux.HandleFunc("/v1/computer/action", protect(authToken, comp.handleAction))
 	mux.HandleFunc("/v1/computer/screenshot", protect(authToken, comp.handleScreenshot))
 	mux.HandleFunc("/v1/computer/display", protect(authToken, comp.handleDisplay))
+	mux.HandleFunc("/v1/computer/stream", protect(authToken, comp.handleStream))
 	return mux
 }
 
