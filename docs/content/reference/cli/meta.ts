@@ -10,6 +10,7 @@ export default defineMeta({
     "contexts",
     "hosts",
     "environment",
+    "computer",
     "up",
     "build",
     "validate",

@@ -1,0 +1,21 @@
+---
+title: fuse computer click
+sidebar:
+  icon: mouse-pointer
+  label: click
+description: Left-click at a coordinate on a desktop environment's screen
+---
+
+```bash
+fuse computer click <id> <x> <y>
+fuse computer click fuse-task-1 512 384
+```
+
+Coordinates are pixels from the display's top-left corner. The display's
+geometry is on [`fuse environment get`](/reference/cli/environment/get)'s
+`desktop` row, or take a [screenshot](/reference/cli/computer/screenshot)
+first and measure.
+
+With `-o json`, the server's full response is printed, including the base64
+PNG screenshot taken after the click settled — the same shape an agent loop
+receives.

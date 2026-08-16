@@ -1,0 +1,22 @@
+---
+title: fuse computer type
+sidebar:
+  icon: keyboard
+  label: type
+description: Type text into a desktop environment's focused window
+---
+
+```bash
+fuse computer type <id> <text>...
+fuse computer type fuse-task-1 hello world
+fuse computer type fuse-task-1 "two  spaces preserved"
+```
+
+Text goes to whatever currently has focus — click an input field first.
+Multiple arguments are joined with single spaces, so quoting is only needed to
+preserve other whitespace. The text is delivered verbatim: shell
+metacharacters are typed, never interpreted, because the guest agent builds
+its input injection as an argv rather than a shell string.
+
+To press keys rather than produce text (Enter, Tab, shortcuts), use
+[`fuse computer key`](/reference/cli/computer/key).
