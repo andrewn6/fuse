@@ -82,5 +82,8 @@ try:
                 )
         messages.append({"role": "user", "content": results})
 finally:
-    client.environments.drain(env.id)
-    print(f"drained {env.id}")
+    # drain is phase-1 only and does not destroy the vm (see the drain()
+    # docstring) - a real agent loop might drain first to inspect output,
+    # but this example is done with the environment, so it destroys outright.
+    client.environments.destroy(env.id)
+    print(f"destroyed {env.id}")

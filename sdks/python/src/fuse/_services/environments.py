@@ -80,6 +80,10 @@ class EnvironmentsService:
         return EnvironmentInfo.model_validate(resp.json())
 
     def drain(self, vm_id: str) -> EnvironmentInfo:
+        # phase-1 only: this quiesces the guest workload and moves the vm to
+        # "draining" so you can inspect its output, but it does not destroy
+        # the vm. call environments.destroy(vm_id) afterward to remove it -
+        # a drained vm left undestroyed keeps running (and billing) forever.
         return self._action(vm_id, "drain")
 
     def fork(
