@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.25.0](https://github.com/folsomintel/fuse/compare/v0.24.0...v0.25.0) (2026-08-16)
+
+
+### Features
+
+* **cli:** fuse computer commands and the desktop detail row ([#198](https://github.com/folsomintel/fuse/issues/198)) ([e20145d](https://github.com/folsomintel/fuse/commit/e20145daeb4ad74de974ac6ac4c9a5b96db017b2))
+
+
+### Bug Fixes
+
+* **host-agent:** four bugs in the desktop rootfs bake, found live-verifying computer use ([#197](https://github.com/folsomintel/fuse/issues/197)) ([1565428](https://github.com/folsomintel/fuse/commit/1565428051b7432891cff6848f7d13737513dea1))
+
 ## [0.24.0](https://github.com/folsomintel/fuse/compare/v0.23.0...v0.24.0) (2026-08-15)
 
 
