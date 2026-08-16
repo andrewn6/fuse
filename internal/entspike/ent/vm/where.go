@@ -114,6 +114,11 @@ func MaxRuntimeSeconds(v int) predicate.VM {
 	return predicate.VM(sql.FieldEQ(FieldMaxRuntimeSeconds, v))
 }
 
+// IdleTimeoutSeconds applies equality check predicate on the "idle_timeout_seconds" field. It's identical to IdleTimeoutSecondsEQ.
+func IdleTimeoutSeconds(v int) predicate.VM {
+	return predicate.VM(sql.FieldEQ(FieldIdleTimeoutSeconds, v))
+}
+
 // AuthTokenEncrypted applies equality check predicate on the "auth_token_encrypted" field. It's identical to AuthTokenEncryptedEQ.
 func AuthTokenEncrypted(v []byte) predicate.VM {
 	return predicate.VM(sql.FieldEQ(FieldAuthTokenEncrypted, v))
@@ -707,6 +712,46 @@ func MaxRuntimeSecondsLT(v int) predicate.VM {
 // MaxRuntimeSecondsLTE applies the LTE predicate on the "max_runtime_seconds" field.
 func MaxRuntimeSecondsLTE(v int) predicate.VM {
 	return predicate.VM(sql.FieldLTE(FieldMaxRuntimeSeconds, v))
+}
+
+// IdleTimeoutSecondsEQ applies the EQ predicate on the "idle_timeout_seconds" field.
+func IdleTimeoutSecondsEQ(v int) predicate.VM {
+	return predicate.VM(sql.FieldEQ(FieldIdleTimeoutSeconds, v))
+}
+
+// IdleTimeoutSecondsNEQ applies the NEQ predicate on the "idle_timeout_seconds" field.
+func IdleTimeoutSecondsNEQ(v int) predicate.VM {
+	return predicate.VM(sql.FieldNEQ(FieldIdleTimeoutSeconds, v))
+}
+
+// IdleTimeoutSecondsIn applies the In predicate on the "idle_timeout_seconds" field.
+func IdleTimeoutSecondsIn(vs ...int) predicate.VM {
+	return predicate.VM(sql.FieldIn(FieldIdleTimeoutSeconds, vs...))
+}
+
+// IdleTimeoutSecondsNotIn applies the NotIn predicate on the "idle_timeout_seconds" field.
+func IdleTimeoutSecondsNotIn(vs ...int) predicate.VM {
+	return predicate.VM(sql.FieldNotIn(FieldIdleTimeoutSeconds, vs...))
+}
+
+// IdleTimeoutSecondsGT applies the GT predicate on the "idle_timeout_seconds" field.
+func IdleTimeoutSecondsGT(v int) predicate.VM {
+	return predicate.VM(sql.FieldGT(FieldIdleTimeoutSeconds, v))
+}
+
+// IdleTimeoutSecondsGTE applies the GTE predicate on the "idle_timeout_seconds" field.
+func IdleTimeoutSecondsGTE(v int) predicate.VM {
+	return predicate.VM(sql.FieldGTE(FieldIdleTimeoutSeconds, v))
+}
+
+// IdleTimeoutSecondsLT applies the LT predicate on the "idle_timeout_seconds" field.
+func IdleTimeoutSecondsLT(v int) predicate.VM {
+	return predicate.VM(sql.FieldLT(FieldIdleTimeoutSeconds, v))
+}
+
+// IdleTimeoutSecondsLTE applies the LTE predicate on the "idle_timeout_seconds" field.
+func IdleTimeoutSecondsLTE(v int) predicate.VM {
+	return predicate.VM(sql.FieldLTE(FieldIdleTimeoutSeconds, v))
 }
 
 // AuthTokenEncryptedEQ applies the EQ predicate on the "auth_token_encrypted" field.

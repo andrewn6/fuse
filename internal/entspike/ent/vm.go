@@ -39,6 +39,8 @@ type VM struct {
 	Region string `json:"region,omitempty"`
 	// MaxRuntimeSeconds holds the value of the "max_runtime_seconds" field.
 	MaxRuntimeSeconds int `json:"max_runtime_seconds,omitempty"`
+	// IdleTimeoutSeconds holds the value of the "idle_timeout_seconds" field.
+	IdleTimeoutSeconds int `json:"idle_timeout_seconds,omitempty"`
 	// AuthTokenEncrypted holds the value of the "auth_token_encrypted" field.
 	AuthTokenEncrypted []byte `json:"auth_token_encrypted,omitempty"`
 	// SecretsEncrypted holds the value of the "secrets_encrypted" field.
@@ -59,7 +61,7 @@ func (*VM) scanValues(columns []string) ([]any, error) {
 		switch columns[i] {
 		case vm.FieldAuthTokenEncrypted, vm.FieldSecretsEncrypted:
 			values[i] = new([]byte)
-		case vm.FieldCpus, vm.FieldRAMMB, vm.FieldStorageGB, vm.FieldMaxRuntimeSeconds:
+		case vm.FieldCpus, vm.FieldRAMMB, vm.FieldStorageGB, vm.FieldMaxRuntimeSeconds, vm.FieldIdleTimeoutSeconds:
 			values[i] = new(sql.NullInt64)
 		case vm.FieldID, vm.FieldHostID, vm.FieldNetworkHost, vm.FieldState, vm.FieldURL, vm.FieldTaskID, vm.FieldTenantID, vm.FieldRegion, vm.FieldLastError:
 			values[i] = new(sql.NullString)
@@ -151,6 +153,12 @@ func (_m *VM) assignValues(columns []string, values []any) error {
 				return fmt.Errorf("unexpected type %T for field max_runtime_seconds", values[i])
 			} else if value.Valid {
 				_m.MaxRuntimeSeconds = int(value.Int64)
+			}
+		case vm.FieldIdleTimeoutSeconds:
+			if value, ok := values[i].(*sql.NullInt64); !ok {
+				return fmt.Errorf("unexpected type %T for field idle_timeout_seconds", values[i])
+			} else if value.Valid {
+				_m.IdleTimeoutSeconds = int(value.Int64)
 			}
 		case vm.FieldAuthTokenEncrypted:
 			if value, ok := values[i].(*[]byte); !ok {
@@ -250,6 +258,9 @@ func (_m *VM) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("max_runtime_seconds=")
 	builder.WriteString(fmt.Sprintf("%v", _m.MaxRuntimeSeconds))
+	builder.WriteString(", ")
+	builder.WriteString("idle_timeout_seconds=")
+	builder.WriteString(fmt.Sprintf("%v", _m.IdleTimeoutSeconds))
 	builder.WriteString(", ")
 	builder.WriteString("auth_token_encrypted=")
 	builder.WriteString(fmt.Sprintf("%v", _m.AuthTokenEncrypted))

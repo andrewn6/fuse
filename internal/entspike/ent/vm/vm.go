@@ -36,6 +36,8 @@ const (
 	FieldRegion = "region"
 	// FieldMaxRuntimeSeconds holds the string denoting the max_runtime_seconds field in the database.
 	FieldMaxRuntimeSeconds = "max_runtime_seconds"
+	// FieldIdleTimeoutSeconds holds the string denoting the idle_timeout_seconds field in the database.
+	FieldIdleTimeoutSeconds = "idle_timeout_seconds"
 	// FieldAuthTokenEncrypted holds the string denoting the auth_token_encrypted field in the database.
 	FieldAuthTokenEncrypted = "auth_token_encrypted"
 	// FieldSecretsEncrypted holds the string denoting the secrets_encrypted field in the database.
@@ -47,7 +49,7 @@ const (
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
 	FieldUpdatedAt = "updated_at"
 	// Table holds the table name of the vm in the database.
-	Table = "vms"
+	Table = "orchestrator_vms"
 )
 
 // Columns holds all SQL columns for vm fields.
@@ -64,6 +66,7 @@ var Columns = []string{
 	FieldStorageGB,
 	FieldRegion,
 	FieldMaxRuntimeSeconds,
+	FieldIdleTimeoutSeconds,
 	FieldAuthTokenEncrypted,
 	FieldSecretsEncrypted,
 	FieldLastError,
@@ -102,6 +105,8 @@ var (
 	DefaultRegion string
 	// DefaultMaxRuntimeSeconds holds the default value on creation for the "max_runtime_seconds" field.
 	DefaultMaxRuntimeSeconds int
+	// DefaultIdleTimeoutSeconds holds the default value on creation for the "idle_timeout_seconds" field.
+	DefaultIdleTimeoutSeconds int
 	// DefaultLastError holds the default value on creation for the "last_error" field.
 	DefaultLastError string
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
@@ -198,6 +203,11 @@ func ByRegion(opts ...sql.OrderTermOption) OrderOption {
 // ByMaxRuntimeSeconds orders the results by the max_runtime_seconds field.
 func ByMaxRuntimeSeconds(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldMaxRuntimeSeconds, opts...).ToFunc()
+}
+
+// ByIdleTimeoutSeconds orders the results by the idle_timeout_seconds field.
+func ByIdleTimeoutSeconds(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldIdleTimeoutSeconds, opts...).ToFunc()
 }
 
 // ByLastError orders the results by the last_error field.

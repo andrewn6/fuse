@@ -284,20 +284,6 @@ func (_u *HostUpdate) SetNillableArch(v *string) *HostUpdate {
 	return _u
 }
 
-// SetZone sets the "zone" field.
-func (_u *HostUpdate) SetZone(v string) *HostUpdate {
-	_u.mutation.SetZone(v)
-	return _u
-}
-
-// SetNillableZone sets the "zone" field if the given value is not nil.
-func (_u *HostUpdate) SetNillableZone(v *string) *HostUpdate {
-	if v != nil {
-		_u.SetZone(*v)
-	}
-	return _u
-}
-
 // SetLastSeenAt sets the "last_seen_at" field.
 func (_u *HostUpdate) SetLastSeenAt(v time.Time) *HostUpdate {
 	_u.mutation.SetLastSeenAt(v)
@@ -452,9 +438,6 @@ func (_u *HostUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.Arch(); ok {
 		_spec.SetField(host.FieldArch, field.TypeString, value)
-	}
-	if value, ok := _u.mutation.Zone(); ok {
-		_spec.SetField(host.FieldZone, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.LastSeenAt(); ok {
 		_spec.SetField(host.FieldLastSeenAt, field.TypeTime, value)
@@ -738,20 +721,6 @@ func (_u *HostUpdateOne) SetNillableArch(v *string) *HostUpdateOne {
 	return _u
 }
 
-// SetZone sets the "zone" field.
-func (_u *HostUpdateOne) SetZone(v string) *HostUpdateOne {
-	_u.mutation.SetZone(v)
-	return _u
-}
-
-// SetNillableZone sets the "zone" field if the given value is not nil.
-func (_u *HostUpdateOne) SetNillableZone(v *string) *HostUpdateOne {
-	if v != nil {
-		_u.SetZone(*v)
-	}
-	return _u
-}
-
 // SetLastSeenAt sets the "last_seen_at" field.
 func (_u *HostUpdateOne) SetLastSeenAt(v time.Time) *HostUpdateOne {
 	_u.mutation.SetLastSeenAt(v)
@@ -936,9 +905,6 @@ func (_u *HostUpdateOne) sqlSave(ctx context.Context) (_node *Host, err error) {
 	}
 	if value, ok := _u.mutation.Arch(); ok {
 		_spec.SetField(host.FieldArch, field.TypeString, value)
-	}
-	if value, ok := _u.mutation.Zone(); ok {
-		_spec.SetField(host.FieldZone, field.TypeString, value)
 	}
 	if value, ok := _u.mutation.LastSeenAt(); ok {
 		_spec.SetField(host.FieldLastSeenAt, field.TypeTime, value)

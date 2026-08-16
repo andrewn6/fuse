@@ -129,11 +129,6 @@ func Arch(v string) predicate.Host {
 	return predicate.Host(sql.FieldEQ(FieldArch, v))
 }
 
-// Zone applies equality check predicate on the "zone" field. It's identical to ZoneEQ.
-func Zone(v string) predicate.Host {
-	return predicate.Host(sql.FieldEQ(FieldZone, v))
-}
-
 // LastSeenAt applies equality check predicate on the "last_seen_at" field. It's identical to LastSeenAtEQ.
 func LastSeenAt(v time.Time) predicate.Host {
 	return predicate.Host(sql.FieldEQ(FieldLastSeenAt, v))
@@ -797,71 +792,6 @@ func ArchEqualFold(v string) predicate.Host {
 // ArchContainsFold applies the ContainsFold predicate on the "arch" field.
 func ArchContainsFold(v string) predicate.Host {
 	return predicate.Host(sql.FieldContainsFold(FieldArch, v))
-}
-
-// ZoneEQ applies the EQ predicate on the "zone" field.
-func ZoneEQ(v string) predicate.Host {
-	return predicate.Host(sql.FieldEQ(FieldZone, v))
-}
-
-// ZoneNEQ applies the NEQ predicate on the "zone" field.
-func ZoneNEQ(v string) predicate.Host {
-	return predicate.Host(sql.FieldNEQ(FieldZone, v))
-}
-
-// ZoneIn applies the In predicate on the "zone" field.
-func ZoneIn(vs ...string) predicate.Host {
-	return predicate.Host(sql.FieldIn(FieldZone, vs...))
-}
-
-// ZoneNotIn applies the NotIn predicate on the "zone" field.
-func ZoneNotIn(vs ...string) predicate.Host {
-	return predicate.Host(sql.FieldNotIn(FieldZone, vs...))
-}
-
-// ZoneGT applies the GT predicate on the "zone" field.
-func ZoneGT(v string) predicate.Host {
-	return predicate.Host(sql.FieldGT(FieldZone, v))
-}
-
-// ZoneGTE applies the GTE predicate on the "zone" field.
-func ZoneGTE(v string) predicate.Host {
-	return predicate.Host(sql.FieldGTE(FieldZone, v))
-}
-
-// ZoneLT applies the LT predicate on the "zone" field.
-func ZoneLT(v string) predicate.Host {
-	return predicate.Host(sql.FieldLT(FieldZone, v))
-}
-
-// ZoneLTE applies the LTE predicate on the "zone" field.
-func ZoneLTE(v string) predicate.Host {
-	return predicate.Host(sql.FieldLTE(FieldZone, v))
-}
-
-// ZoneContains applies the Contains predicate on the "zone" field.
-func ZoneContains(v string) predicate.Host {
-	return predicate.Host(sql.FieldContains(FieldZone, v))
-}
-
-// ZoneHasPrefix applies the HasPrefix predicate on the "zone" field.
-func ZoneHasPrefix(v string) predicate.Host {
-	return predicate.Host(sql.FieldHasPrefix(FieldZone, v))
-}
-
-// ZoneHasSuffix applies the HasSuffix predicate on the "zone" field.
-func ZoneHasSuffix(v string) predicate.Host {
-	return predicate.Host(sql.FieldHasSuffix(FieldZone, v))
-}
-
-// ZoneEqualFold applies the EqualFold predicate on the "zone" field.
-func ZoneEqualFold(v string) predicate.Host {
-	return predicate.Host(sql.FieldEqualFold(FieldZone, v))
-}
-
-// ZoneContainsFold applies the ContainsFold predicate on the "zone" field.
-func ZoneContainsFold(v string) predicate.Host {
-	return predicate.Host(sql.FieldContainsFold(FieldZone, v))
 }
 
 // LastSeenAtEQ applies the EQ predicate on the "last_seen_at" field.

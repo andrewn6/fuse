@@ -4,6 +4,8 @@ import (
 	"time"
 
 	"entgo.io/ent"
+	"entgo.io/ent/dialect/entsql"
+	"entgo.io/ent/schema"
 	"entgo.io/ent/schema/field"
 	"entgo.io/ent/schema/index"
 )
@@ -15,6 +17,12 @@ type VM struct {
 	ent.Schema
 }
 
+func (VM) Annotations() []schema.Annotation {
+	return []schema.Annotation{
+		entsql.Annotation{Table: "orchestrator_vms"},
+	}
+}
+
 func (VM) Fields() []ent.Field {
 	return []ent.Field{
 		field.String("id").StorageKey("vm_id"),
@@ -24,11 +32,12 @@ func (VM) Fields() []ent.Field {
 		field.String("url").Default(""),
 		field.String("task_id").Default(""),
 		field.String("tenant_id").Default(""),
-		field.Int("cpus").Default(0),
-		field.Int("ram_mb").Default(0),
-		field.Int("storage_gb").Default(0),
+		field.Int("cpus").Default(0).SchemaType(pgInt),
+		field.Int("ram_mb").Default(0).SchemaType(pgInt),
+		field.Int("storage_gb").Default(0).SchemaType(pgInt),
 		field.String("region").Default(""),
-		field.Int("max_runtime_seconds").Default(0),
+		field.Int("max_runtime_seconds").Default(0).SchemaType(pgInt),
+		field.Int("idle_timeout_seconds").Default(0).SchemaType(pgInt),
 		field.Bytes("auth_token_encrypted").Optional(),
 		field.Bytes("secrets_encrypted").Optional(),
 		field.String("last_error").Default(""),

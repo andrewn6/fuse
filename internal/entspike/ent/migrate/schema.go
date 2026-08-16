@@ -3,59 +3,59 @@
 package migrate
 
 import (
+	"entgo.io/ent/dialect/entsql"
 	"entgo.io/ent/dialect/sql/schema"
 	"entgo.io/ent/schema/field"
 )
 
 var (
-	// HostsColumns holds the columns for the "hosts" table.
-	HostsColumns = []*schema.Column{
+	// OrchestratorHostsColumns holds the columns for the "orchestrator_hosts" table.
+	OrchestratorHostsColumns = []*schema.Column{
 		{Name: "host_id", Type: field.TypeString},
 		{Name: "url", Type: field.TypeString},
 		{Name: "token_encrypted", Type: field.TypeBytes, Nullable: true},
 		{Name: "region", Type: field.TypeString, Default: ""},
 		{Name: "state", Type: field.TypeEnum, Enums: []string{"active", "cordoned"}, Default: "active"},
 		{Name: "tenant_id", Type: field.TypeString, Default: ""},
-		{Name: "cpus_total", Type: field.TypeInt, Default: 0},
-		{Name: "ram_mb_total", Type: field.TypeInt, Default: 0},
-		{Name: "storage_gb_total", Type: field.TypeInt, Default: 0},
-		{Name: "vm_count_max", Type: field.TypeInt, Default: 0},
-		{Name: "cpus_allocated", Type: field.TypeInt, Default: 0},
-		{Name: "ram_mb_allocated", Type: field.TypeInt, Default: 0},
-		{Name: "storage_gb_allocated", Type: field.TypeInt, Default: 0},
-		{Name: "vm_count_allocated", Type: field.TypeInt, Default: 0},
-		{Name: "labels", Type: field.TypeJSON},
+		{Name: "cpus_total", Type: field.TypeInt, Default: 0, SchemaType: map[string]string{"postgres": "integer"}},
+		{Name: "ram_mb_total", Type: field.TypeInt, Default: 0, SchemaType: map[string]string{"postgres": "integer"}},
+		{Name: "storage_gb_total", Type: field.TypeInt, Default: 0, SchemaType: map[string]string{"postgres": "integer"}},
+		{Name: "vm_count_max", Type: field.TypeInt, Default: 0, SchemaType: map[string]string{"postgres": "integer"}},
+		{Name: "cpus_allocated", Type: field.TypeInt, Default: 0, SchemaType: map[string]string{"postgres": "integer"}},
+		{Name: "ram_mb_allocated", Type: field.TypeInt, Default: 0, SchemaType: map[string]string{"postgres": "integer"}},
+		{Name: "storage_gb_allocated", Type: field.TypeInt, Default: 0, SchemaType: map[string]string{"postgres": "integer"}},
+		{Name: "vm_count_allocated", Type: field.TypeInt, Default: 0, SchemaType: map[string]string{"postgres": "integer"}},
+		{Name: "labels_json", Type: field.TypeJSON, SchemaType: map[string]string{"postgres": "text"}},
 		{Name: "arch", Type: field.TypeString, Default: ""},
-		{Name: "zone", Type: field.TypeString, Default: ""},
 		{Name: "last_seen_at", Type: field.TypeTime},
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "updated_at", Type: field.TypeTime},
 	}
-	// HostsTable holds the schema information for the "hosts" table.
-	HostsTable = &schema.Table{
-		Name:       "hosts",
-		Columns:    HostsColumns,
-		PrimaryKey: []*schema.Column{HostsColumns[0]},
+	// OrchestratorHostsTable holds the schema information for the "orchestrator_hosts" table.
+	OrchestratorHostsTable = &schema.Table{
+		Name:       "orchestrator_hosts",
+		Columns:    OrchestratorHostsColumns,
+		PrimaryKey: []*schema.Column{OrchestratorHostsColumns[0]},
 		Indexes: []*schema.Index{
 			{
 				Name:    "host_state",
 				Unique:  false,
-				Columns: []*schema.Column{HostsColumns[4]},
+				Columns: []*schema.Column{OrchestratorHostsColumns[4]},
 			},
 			{
 				Name:    "host_region",
 				Unique:  false,
-				Columns: []*schema.Column{HostsColumns[3]},
+				Columns: []*schema.Column{OrchestratorHostsColumns[3]},
 			},
 			{
 				Name:    "host_tenant_id",
 				Unique:  false,
-				Columns: []*schema.Column{HostsColumns[5]},
+				Columns: []*schema.Column{OrchestratorHostsColumns[5]},
 			},
 		},
 	}
-	// VmsColumns holds the columns for the "vms" table.
-	VmsColumns = []*schema.Column{
+	// OrchestratorVmsColumns holds the columns for the "orchestrator_vms" table.
+	OrchestratorVmsColumns = []*schema.Column{
 		{Name: "vm_id", Type: field.TypeString},
 		{Name: "host_id", Type: field.TypeString, Default: ""},
 		{Name: "network_host", Type: field.TypeString, Default: ""},
@@ -63,51 +63,58 @@ var (
 		{Name: "url", Type: field.TypeString, Default: ""},
 		{Name: "task_id", Type: field.TypeString, Default: ""},
 		{Name: "tenant_id", Type: field.TypeString, Default: ""},
-		{Name: "cpus", Type: field.TypeInt, Default: 0},
-		{Name: "ram_mb", Type: field.TypeInt, Default: 0},
-		{Name: "storage_gb", Type: field.TypeInt, Default: 0},
+		{Name: "cpus", Type: field.TypeInt, Default: 0, SchemaType: map[string]string{"postgres": "integer"}},
+		{Name: "ram_mb", Type: field.TypeInt, Default: 0, SchemaType: map[string]string{"postgres": "integer"}},
+		{Name: "storage_gb", Type: field.TypeInt, Default: 0, SchemaType: map[string]string{"postgres": "integer"}},
 		{Name: "region", Type: field.TypeString, Default: ""},
-		{Name: "max_runtime_seconds", Type: field.TypeInt, Default: 0},
+		{Name: "max_runtime_seconds", Type: field.TypeInt, Default: 0, SchemaType: map[string]string{"postgres": "integer"}},
+		{Name: "idle_timeout_seconds", Type: field.TypeInt, Default: 0, SchemaType: map[string]string{"postgres": "integer"}},
 		{Name: "auth_token_encrypted", Type: field.TypeBytes, Nullable: true},
 		{Name: "secrets_encrypted", Type: field.TypeBytes, Nullable: true},
 		{Name: "last_error", Type: field.TypeString, Default: ""},
 		{Name: "created_at", Type: field.TypeTime},
 		{Name: "updated_at", Type: field.TypeTime},
 	}
-	// VmsTable holds the schema information for the "vms" table.
-	VmsTable = &schema.Table{
-		Name:       "vms",
-		Columns:    VmsColumns,
-		PrimaryKey: []*schema.Column{VmsColumns[0]},
+	// OrchestratorVmsTable holds the schema information for the "orchestrator_vms" table.
+	OrchestratorVmsTable = &schema.Table{
+		Name:       "orchestrator_vms",
+		Columns:    OrchestratorVmsColumns,
+		PrimaryKey: []*schema.Column{OrchestratorVmsColumns[0]},
 		Indexes: []*schema.Index{
 			{
 				Name:    "vm_state",
 				Unique:  false,
-				Columns: []*schema.Column{VmsColumns[3]},
+				Columns: []*schema.Column{OrchestratorVmsColumns[3]},
 			},
 			{
 				Name:    "vm_task_id",
 				Unique:  false,
-				Columns: []*schema.Column{VmsColumns[5]},
+				Columns: []*schema.Column{OrchestratorVmsColumns[5]},
 			},
 			{
 				Name:    "vm_host_id",
 				Unique:  false,
-				Columns: []*schema.Column{VmsColumns[1]},
+				Columns: []*schema.Column{OrchestratorVmsColumns[1]},
 			},
 			{
 				Name:    "vm_tenant_id",
 				Unique:  false,
-				Columns: []*schema.Column{VmsColumns[6]},
+				Columns: []*schema.Column{OrchestratorVmsColumns[6]},
 			},
 		},
 	}
 	// Tables holds all the tables in the schema.
 	Tables = []*schema.Table{
-		HostsTable,
-		VmsTable,
+		OrchestratorHostsTable,
+		OrchestratorVmsTable,
 	}
 )
 
 func init() {
+	OrchestratorHostsTable.Annotation = &entsql.Annotation{
+		Table: "orchestrator_hosts",
+	}
+	OrchestratorVmsTable.Annotation = &entsql.Annotation{
+		Table: "orchestrator_vms",
+	}
 }

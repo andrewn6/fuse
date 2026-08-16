@@ -166,6 +166,20 @@ func (_c *VMCreate) SetNillableMaxRuntimeSeconds(v *int) *VMCreate {
 	return _c
 }
 
+// SetIdleTimeoutSeconds sets the "idle_timeout_seconds" field.
+func (_c *VMCreate) SetIdleTimeoutSeconds(v int) *VMCreate {
+	_c.mutation.SetIdleTimeoutSeconds(v)
+	return _c
+}
+
+// SetNillableIdleTimeoutSeconds sets the "idle_timeout_seconds" field if the given value is not nil.
+func (_c *VMCreate) SetNillableIdleTimeoutSeconds(v *int) *VMCreate {
+	if v != nil {
+		_c.SetIdleTimeoutSeconds(*v)
+	}
+	return _c
+}
+
 // SetAuthTokenEncrypted sets the "auth_token_encrypted" field.
 func (_c *VMCreate) SetAuthTokenEncrypted(v []byte) *VMCreate {
 	_c.mutation.SetAuthTokenEncrypted(v)
@@ -301,6 +315,10 @@ func (_c *VMCreate) defaults() {
 		v := vm.DefaultMaxRuntimeSeconds
 		_c.mutation.SetMaxRuntimeSeconds(v)
 	}
+	if _, ok := _c.mutation.IdleTimeoutSeconds(); !ok {
+		v := vm.DefaultIdleTimeoutSeconds
+		_c.mutation.SetIdleTimeoutSeconds(v)
+	}
 	if _, ok := _c.mutation.LastError(); !ok {
 		v := vm.DefaultLastError
 		_c.mutation.SetLastError(v)
@@ -354,6 +372,9 @@ func (_c *VMCreate) check() error {
 	}
 	if _, ok := _c.mutation.MaxRuntimeSeconds(); !ok {
 		return &ValidationError{Name: "max_runtime_seconds", err: errors.New(`ent: missing required field "VM.max_runtime_seconds"`)}
+	}
+	if _, ok := _c.mutation.IdleTimeoutSeconds(); !ok {
+		return &ValidationError{Name: "idle_timeout_seconds", err: errors.New(`ent: missing required field "VM.idle_timeout_seconds"`)}
 	}
 	if _, ok := _c.mutation.LastError(); !ok {
 		return &ValidationError{Name: "last_error", err: errors.New(`ent: missing required field "VM.last_error"`)}
@@ -442,6 +463,10 @@ func (_c *VMCreate) createSpec() (*VM, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.MaxRuntimeSeconds(); ok {
 		_spec.SetField(vm.FieldMaxRuntimeSeconds, field.TypeInt, value)
 		_node.MaxRuntimeSeconds = value
+	}
+	if value, ok := _c.mutation.IdleTimeoutSeconds(); ok {
+		_spec.SetField(vm.FieldIdleTimeoutSeconds, field.TypeInt, value)
+		_node.IdleTimeoutSeconds = value
 	}
 	if value, ok := _c.mutation.AuthTokenEncrypted(); ok {
 		_spec.SetField(vm.FieldAuthTokenEncrypted, field.TypeBytes, value)

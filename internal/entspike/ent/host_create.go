@@ -206,20 +206,6 @@ func (_c *HostCreate) SetNillableArch(v *string) *HostCreate {
 	return _c
 }
 
-// SetZone sets the "zone" field.
-func (_c *HostCreate) SetZone(v string) *HostCreate {
-	_c.mutation.SetZone(v)
-	return _c
-}
-
-// SetNillableZone sets the "zone" field if the given value is not nil.
-func (_c *HostCreate) SetNillableZone(v *string) *HostCreate {
-	if v != nil {
-		_c.SetZone(*v)
-	}
-	return _c
-}
-
 // SetLastSeenAt sets the "last_seen_at" field.
 func (_c *HostCreate) SetLastSeenAt(v time.Time) *HostCreate {
 	_c.mutation.SetLastSeenAt(v)
@@ -347,10 +333,6 @@ func (_c *HostCreate) defaults() {
 		v := host.DefaultArch
 		_c.mutation.SetArch(v)
 	}
-	if _, ok := _c.mutation.Zone(); !ok {
-		v := host.DefaultZone
-		_c.mutation.SetZone(v)
-	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		v := host.DefaultCreatedAt()
 		_c.mutation.SetCreatedAt(v)
@@ -409,9 +391,6 @@ func (_c *HostCreate) check() error {
 	}
 	if _, ok := _c.mutation.Arch(); !ok {
 		return &ValidationError{Name: "arch", err: errors.New(`ent: missing required field "Host.arch"`)}
-	}
-	if _, ok := _c.mutation.Zone(); !ok {
-		return &ValidationError{Name: "zone", err: errors.New(`ent: missing required field "Host.zone"`)}
 	}
 	if _, ok := _c.mutation.LastSeenAt(); !ok {
 		return &ValidationError{Name: "last_seen_at", err: errors.New(`ent: missing required field "Host.last_seen_at"`)}
@@ -516,10 +495,6 @@ func (_c *HostCreate) createSpec() (*Host, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Arch(); ok {
 		_spec.SetField(host.FieldArch, field.TypeString, value)
 		_node.Arch = value
-	}
-	if value, ok := _c.mutation.Zone(); ok {
-		_spec.SetField(host.FieldZone, field.TypeString, value)
-		_node.Zone = value
 	}
 	if value, ok := _c.mutation.LastSeenAt(); ok {
 		_spec.SetField(host.FieldLastSeenAt, field.TypeTime, value)

@@ -210,6 +210,27 @@ func (_u *VMUpdate) AddMaxRuntimeSeconds(v int) *VMUpdate {
 	return _u
 }
 
+// SetIdleTimeoutSeconds sets the "idle_timeout_seconds" field.
+func (_u *VMUpdate) SetIdleTimeoutSeconds(v int) *VMUpdate {
+	_u.mutation.ResetIdleTimeoutSeconds()
+	_u.mutation.SetIdleTimeoutSeconds(v)
+	return _u
+}
+
+// SetNillableIdleTimeoutSeconds sets the "idle_timeout_seconds" field if the given value is not nil.
+func (_u *VMUpdate) SetNillableIdleTimeoutSeconds(v *int) *VMUpdate {
+	if v != nil {
+		_u.SetIdleTimeoutSeconds(*v)
+	}
+	return _u
+}
+
+// AddIdleTimeoutSeconds adds value to the "idle_timeout_seconds" field.
+func (_u *VMUpdate) AddIdleTimeoutSeconds(v int) *VMUpdate {
+	_u.mutation.AddIdleTimeoutSeconds(v)
+	return _u
+}
+
 // SetAuthTokenEncrypted sets the "auth_token_encrypted" field.
 func (_u *VMUpdate) SetAuthTokenEncrypted(v []byte) *VMUpdate {
 	_u.mutation.SetAuthTokenEncrypted(v)
@@ -361,6 +382,12 @@ func (_u *VMUpdate) sqlSave(ctx context.Context) (_node int, err error) {
 	}
 	if value, ok := _u.mutation.AddedMaxRuntimeSeconds(); ok {
 		_spec.AddField(vm.FieldMaxRuntimeSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.IdleTimeoutSeconds(); ok {
+		_spec.SetField(vm.FieldIdleTimeoutSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedIdleTimeoutSeconds(); ok {
+		_spec.AddField(vm.FieldIdleTimeoutSeconds, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.AuthTokenEncrypted(); ok {
 		_spec.SetField(vm.FieldAuthTokenEncrypted, field.TypeBytes, value)
@@ -582,6 +609,27 @@ func (_u *VMUpdateOne) AddMaxRuntimeSeconds(v int) *VMUpdateOne {
 	return _u
 }
 
+// SetIdleTimeoutSeconds sets the "idle_timeout_seconds" field.
+func (_u *VMUpdateOne) SetIdleTimeoutSeconds(v int) *VMUpdateOne {
+	_u.mutation.ResetIdleTimeoutSeconds()
+	_u.mutation.SetIdleTimeoutSeconds(v)
+	return _u
+}
+
+// SetNillableIdleTimeoutSeconds sets the "idle_timeout_seconds" field if the given value is not nil.
+func (_u *VMUpdateOne) SetNillableIdleTimeoutSeconds(v *int) *VMUpdateOne {
+	if v != nil {
+		_u.SetIdleTimeoutSeconds(*v)
+	}
+	return _u
+}
+
+// AddIdleTimeoutSeconds adds value to the "idle_timeout_seconds" field.
+func (_u *VMUpdateOne) AddIdleTimeoutSeconds(v int) *VMUpdateOne {
+	_u.mutation.AddIdleTimeoutSeconds(v)
+	return _u
+}
+
 // SetAuthTokenEncrypted sets the "auth_token_encrypted" field.
 func (_u *VMUpdateOne) SetAuthTokenEncrypted(v []byte) *VMUpdateOne {
 	_u.mutation.SetAuthTokenEncrypted(v)
@@ -763,6 +811,12 @@ func (_u *VMUpdateOne) sqlSave(ctx context.Context) (_node *VM, err error) {
 	}
 	if value, ok := _u.mutation.AddedMaxRuntimeSeconds(); ok {
 		_spec.AddField(vm.FieldMaxRuntimeSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.IdleTimeoutSeconds(); ok {
+		_spec.SetField(vm.FieldIdleTimeoutSeconds, field.TypeInt, value)
+	}
+	if value, ok := _u.mutation.AddedIdleTimeoutSeconds(); ok {
+		_spec.AddField(vm.FieldIdleTimeoutSeconds, field.TypeInt, value)
 	}
 	if value, ok := _u.mutation.AuthTokenEncrypted(); ok {
 		_spec.SetField(vm.FieldAuthTokenEncrypted, field.TypeBytes, value)

@@ -41,11 +41,9 @@ const (
 	// FieldVMCountAllocated holds the string denoting the vm_count_allocated field in the database.
 	FieldVMCountAllocated = "vm_count_allocated"
 	// FieldLabels holds the string denoting the labels field in the database.
-	FieldLabels = "labels"
+	FieldLabels = "labels_json"
 	// FieldArch holds the string denoting the arch field in the database.
 	FieldArch = "arch"
-	// FieldZone holds the string denoting the zone field in the database.
-	FieldZone = "zone"
 	// FieldLastSeenAt holds the string denoting the last_seen_at field in the database.
 	FieldLastSeenAt = "last_seen_at"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
@@ -53,7 +51,7 @@ const (
 	// FieldUpdatedAt holds the string denoting the updated_at field in the database.
 	FieldUpdatedAt = "updated_at"
 	// Table holds the table name of the host in the database.
-	Table = "hosts"
+	Table = "orchestrator_hosts"
 )
 
 // Columns holds all SQL columns for host fields.
@@ -74,7 +72,6 @@ var Columns = []string{
 	FieldVMCountAllocated,
 	FieldLabels,
 	FieldArch,
-	FieldZone,
 	FieldLastSeenAt,
 	FieldCreatedAt,
 	FieldUpdatedAt,
@@ -115,8 +112,6 @@ var (
 	DefaultLabels map[string]string
 	// DefaultArch holds the default value on creation for the "arch" field.
 	DefaultArch string
-	// DefaultZone holds the default value on creation for the "zone" field.
-	DefaultZone string
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
 	DefaultCreatedAt func() time.Time
 	// DefaultUpdatedAt holds the default value on creation for the "updated_at" field.
@@ -222,11 +217,6 @@ func ByVMCountAllocated(opts ...sql.OrderTermOption) OrderOption {
 // ByArch orders the results by the arch field.
 func ByArch(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldArch, opts...).ToFunc()
-}
-
-// ByZone orders the results by the zone field.
-func ByZone(opts ...sql.OrderTermOption) OrderOption {
-	return sql.OrderByField(FieldZone, opts...).ToFunc()
 }
 
 // ByLastSeenAt orders the results by the last_seen_at field.

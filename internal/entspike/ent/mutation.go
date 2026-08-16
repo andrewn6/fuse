@@ -58,7 +58,6 @@ type HostMutation struct {
 	addvm_count_allocated   *int
 	labels                  *map[string]string
 	arch                    *string
-	zone                    *string
 	last_seen_at            *time.Time
 	created_at              *time.Time
 	updated_at              *time.Time
@@ -885,42 +884,6 @@ func (m *HostMutation) ResetArch() {
 	m.arch = nil
 }
 
-// SetZone sets the "zone" field.
-func (m *HostMutation) SetZone(s string) {
-	m.zone = &s
-}
-
-// Zone returns the value of the "zone" field in the mutation.
-func (m *HostMutation) Zone() (r string, exists bool) {
-	v := m.zone
-	if v == nil {
-		return
-	}
-	return *v, true
-}
-
-// OldZone returns the old "zone" field's value of the Host entity.
-// If the Host object wasn't provided to the builder, the object is fetched from the database.
-// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
-func (m *HostMutation) OldZone(ctx context.Context) (v string, err error) {
-	if !m.op.Is(OpUpdateOne) {
-		return v, errors.New("OldZone is only allowed on UpdateOne operations")
-	}
-	if m.id == nil || m.oldValue == nil {
-		return v, errors.New("OldZone requires an ID field in the mutation")
-	}
-	oldValue, err := m.oldValue(ctx)
-	if err != nil {
-		return v, fmt.Errorf("querying old value for OldZone: %w", err)
-	}
-	return oldValue.Zone, nil
-}
-
-// ResetZone resets all changes to the "zone" field.
-func (m *HostMutation) ResetZone() {
-	m.zone = nil
-}
-
 // SetLastSeenAt sets the "last_seen_at" field.
 func (m *HostMutation) SetLastSeenAt(t time.Time) {
 	m.last_seen_at = &t
@@ -1063,7 +1026,7 @@ func (m *HostMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *HostMutation) Fields() []string {
-	fields := make([]string, 0, 19)
+	fields := make([]string, 0, 18)
 	if m.url != nil {
 		fields = append(fields, host.FieldURL)
 	}
@@ -1108,9 +1071,6 @@ func (m *HostMutation) Fields() []string {
 	}
 	if m.arch != nil {
 		fields = append(fields, host.FieldArch)
-	}
-	if m.zone != nil {
-		fields = append(fields, host.FieldZone)
 	}
 	if m.last_seen_at != nil {
 		fields = append(fields, host.FieldLastSeenAt)
@@ -1159,8 +1119,6 @@ func (m *HostMutation) Field(name string) (ent.Value, bool) {
 		return m.Labels()
 	case host.FieldArch:
 		return m.Arch()
-	case host.FieldZone:
-		return m.Zone()
 	case host.FieldLastSeenAt:
 		return m.LastSeenAt()
 	case host.FieldCreatedAt:
@@ -1206,8 +1164,6 @@ func (m *HostMutation) OldField(ctx context.Context, name string) (ent.Value, er
 		return m.OldLabels(ctx)
 	case host.FieldArch:
 		return m.OldArch(ctx)
-	case host.FieldZone:
-		return m.OldZone(ctx)
 	case host.FieldLastSeenAt:
 		return m.OldLastSeenAt(ctx)
 	case host.FieldCreatedAt:
@@ -1327,13 +1283,6 @@ func (m *HostMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetArch(v)
-		return nil
-	case host.FieldZone:
-		v, ok := value.(string)
-		if !ok {
-			return fmt.Errorf("unexpected type %T for field %s", value, name)
-		}
-		m.SetZone(v)
 		return nil
 	case host.FieldLastSeenAt:
 		v, ok := value.(time.Time)
@@ -1558,9 +1507,6 @@ func (m *HostMutation) ResetField(name string) error {
 	case host.FieldArch:
 		m.ResetArch()
 		return nil
-	case host.FieldZone:
-		m.ResetZone()
-		return nil
 	case host.FieldLastSeenAt:
 		m.ResetLastSeenAt()
 		return nil
@@ -1625,33 +1571,35 @@ func (m *HostMutation) ResetEdge(name string) error {
 // VMMutation represents an operation that mutates the VM nodes in the graph.
 type VMMutation struct {
 	config
-	op                     Op
-	typ                    string
-	id                     *string
-	host_id                *string
-	network_host           *string
-	state                  *vm.State
-	url                    *string
-	task_id                *string
-	tenant_id              *string
-	cpus                   *int
-	addcpus                *int
-	ram_mb                 *int
-	addram_mb              *int
-	storage_gb             *int
-	addstorage_gb          *int
-	region                 *string
-	max_runtime_seconds    *int
-	addmax_runtime_seconds *int
-	auth_token_encrypted   *[]byte
-	secrets_encrypted      *[]byte
-	last_error             *string
-	created_at             *time.Time
-	updated_at             *time.Time
-	clearedFields          map[string]struct{}
-	done                   bool
-	oldValue               func(context.Context) (*VM, error)
-	predicates             []predicate.VM
+	op                      Op
+	typ                     string
+	id                      *string
+	host_id                 *string
+	network_host            *string
+	state                   *vm.State
+	url                     *string
+	task_id                 *string
+	tenant_id               *string
+	cpus                    *int
+	addcpus                 *int
+	ram_mb                  *int
+	addram_mb               *int
+	storage_gb              *int
+	addstorage_gb           *int
+	region                  *string
+	max_runtime_seconds     *int
+	addmax_runtime_seconds  *int
+	idle_timeout_seconds    *int
+	addidle_timeout_seconds *int
+	auth_token_encrypted    *[]byte
+	secrets_encrypted       *[]byte
+	last_error              *string
+	created_at              *time.Time
+	updated_at              *time.Time
+	clearedFields           map[string]struct{}
+	done                    bool
+	oldValue                func(context.Context) (*VM, error)
+	predicates              []predicate.VM
 }
 
 var _ ent.Mutation = (*VMMutation)(nil)
@@ -2234,6 +2182,62 @@ func (m *VMMutation) ResetMaxRuntimeSeconds() {
 	m.addmax_runtime_seconds = nil
 }
 
+// SetIdleTimeoutSeconds sets the "idle_timeout_seconds" field.
+func (m *VMMutation) SetIdleTimeoutSeconds(i int) {
+	m.idle_timeout_seconds = &i
+	m.addidle_timeout_seconds = nil
+}
+
+// IdleTimeoutSeconds returns the value of the "idle_timeout_seconds" field in the mutation.
+func (m *VMMutation) IdleTimeoutSeconds() (r int, exists bool) {
+	v := m.idle_timeout_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldIdleTimeoutSeconds returns the old "idle_timeout_seconds" field's value of the VM entity.
+// If the VM object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *VMMutation) OldIdleTimeoutSeconds(ctx context.Context) (v int, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldIdleTimeoutSeconds is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldIdleTimeoutSeconds requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldIdleTimeoutSeconds: %w", err)
+	}
+	return oldValue.IdleTimeoutSeconds, nil
+}
+
+// AddIdleTimeoutSeconds adds i to the "idle_timeout_seconds" field.
+func (m *VMMutation) AddIdleTimeoutSeconds(i int) {
+	if m.addidle_timeout_seconds != nil {
+		*m.addidle_timeout_seconds += i
+	} else {
+		m.addidle_timeout_seconds = &i
+	}
+}
+
+// AddedIdleTimeoutSeconds returns the value that was added to the "idle_timeout_seconds" field in this mutation.
+func (m *VMMutation) AddedIdleTimeoutSeconds() (r int, exists bool) {
+	v := m.addidle_timeout_seconds
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// ResetIdleTimeoutSeconds resets all changes to the "idle_timeout_seconds" field.
+func (m *VMMutation) ResetIdleTimeoutSeconds() {
+	m.idle_timeout_seconds = nil
+	m.addidle_timeout_seconds = nil
+}
+
 // SetAuthTokenEncrypted sets the "auth_token_encrypted" field.
 func (m *VMMutation) SetAuthTokenEncrypted(b []byte) {
 	m.auth_token_encrypted = &b
@@ -2474,7 +2478,7 @@ func (m *VMMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *VMMutation) Fields() []string {
-	fields := make([]string, 0, 16)
+	fields := make([]string, 0, 17)
 	if m.host_id != nil {
 		fields = append(fields, vm.FieldHostID)
 	}
@@ -2507,6 +2511,9 @@ func (m *VMMutation) Fields() []string {
 	}
 	if m.max_runtime_seconds != nil {
 		fields = append(fields, vm.FieldMaxRuntimeSeconds)
+	}
+	if m.idle_timeout_seconds != nil {
+		fields = append(fields, vm.FieldIdleTimeoutSeconds)
 	}
 	if m.auth_token_encrypted != nil {
 		fields = append(fields, vm.FieldAuthTokenEncrypted)
@@ -2553,6 +2560,8 @@ func (m *VMMutation) Field(name string) (ent.Value, bool) {
 		return m.Region()
 	case vm.FieldMaxRuntimeSeconds:
 		return m.MaxRuntimeSeconds()
+	case vm.FieldIdleTimeoutSeconds:
+		return m.IdleTimeoutSeconds()
 	case vm.FieldAuthTokenEncrypted:
 		return m.AuthTokenEncrypted()
 	case vm.FieldSecretsEncrypted:
@@ -2594,6 +2603,8 @@ func (m *VMMutation) OldField(ctx context.Context, name string) (ent.Value, erro
 		return m.OldRegion(ctx)
 	case vm.FieldMaxRuntimeSeconds:
 		return m.OldMaxRuntimeSeconds(ctx)
+	case vm.FieldIdleTimeoutSeconds:
+		return m.OldIdleTimeoutSeconds(ctx)
 	case vm.FieldAuthTokenEncrypted:
 		return m.OldAuthTokenEncrypted(ctx)
 	case vm.FieldSecretsEncrypted:
@@ -2690,6 +2701,13 @@ func (m *VMMutation) SetField(name string, value ent.Value) error {
 		}
 		m.SetMaxRuntimeSeconds(v)
 		return nil
+	case vm.FieldIdleTimeoutSeconds:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetIdleTimeoutSeconds(v)
+		return nil
 	case vm.FieldAuthTokenEncrypted:
 		v, ok := value.([]byte)
 		if !ok {
@@ -2745,6 +2763,9 @@ func (m *VMMutation) AddedFields() []string {
 	if m.addmax_runtime_seconds != nil {
 		fields = append(fields, vm.FieldMaxRuntimeSeconds)
 	}
+	if m.addidle_timeout_seconds != nil {
+		fields = append(fields, vm.FieldIdleTimeoutSeconds)
+	}
 	return fields
 }
 
@@ -2761,6 +2782,8 @@ func (m *VMMutation) AddedField(name string) (ent.Value, bool) {
 		return m.AddedStorageGB()
 	case vm.FieldMaxRuntimeSeconds:
 		return m.AddedMaxRuntimeSeconds()
+	case vm.FieldIdleTimeoutSeconds:
+		return m.AddedIdleTimeoutSeconds()
 	}
 	return nil, false
 }
@@ -2797,6 +2820,13 @@ func (m *VMMutation) AddField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.AddMaxRuntimeSeconds(v)
+		return nil
+	case vm.FieldIdleTimeoutSeconds:
+		v, ok := value.(int)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.AddIdleTimeoutSeconds(v)
 		return nil
 	}
 	return fmt.Errorf("unknown VM numeric field %s", name)
@@ -2872,6 +2902,9 @@ func (m *VMMutation) ResetField(name string) error {
 		return nil
 	case vm.FieldMaxRuntimeSeconds:
 		m.ResetMaxRuntimeSeconds()
+		return nil
+	case vm.FieldIdleTimeoutSeconds:
+		m.ResetIdleTimeoutSeconds()
 		return nil
 	case vm.FieldAuthTokenEncrypted:
 		m.ResetAuthTokenEncrypted()

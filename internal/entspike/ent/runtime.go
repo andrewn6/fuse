@@ -64,16 +64,12 @@ func init() {
 	hostDescArch := hostFields[15].Descriptor()
 	// host.DefaultArch holds the default value on creation for the arch field.
 	host.DefaultArch = hostDescArch.Default.(string)
-	// hostDescZone is the schema descriptor for zone field.
-	hostDescZone := hostFields[16].Descriptor()
-	// host.DefaultZone holds the default value on creation for the zone field.
-	host.DefaultZone = hostDescZone.Default.(string)
 	// hostDescCreatedAt is the schema descriptor for created_at field.
-	hostDescCreatedAt := hostFields[18].Descriptor()
+	hostDescCreatedAt := hostFields[17].Descriptor()
 	// host.DefaultCreatedAt holds the default value on creation for the created_at field.
 	host.DefaultCreatedAt = hostDescCreatedAt.Default.(func() time.Time)
 	// hostDescUpdatedAt is the schema descriptor for updated_at field.
-	hostDescUpdatedAt := hostFields[19].Descriptor()
+	hostDescUpdatedAt := hostFields[18].Descriptor()
 	// host.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	host.DefaultUpdatedAt = hostDescUpdatedAt.Default.(func() time.Time)
 	// host.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.
@@ -120,16 +116,20 @@ func init() {
 	vmDescMaxRuntimeSeconds := vmFields[11].Descriptor()
 	// vm.DefaultMaxRuntimeSeconds holds the default value on creation for the max_runtime_seconds field.
 	vm.DefaultMaxRuntimeSeconds = vmDescMaxRuntimeSeconds.Default.(int)
+	// vmDescIdleTimeoutSeconds is the schema descriptor for idle_timeout_seconds field.
+	vmDescIdleTimeoutSeconds := vmFields[12].Descriptor()
+	// vm.DefaultIdleTimeoutSeconds holds the default value on creation for the idle_timeout_seconds field.
+	vm.DefaultIdleTimeoutSeconds = vmDescIdleTimeoutSeconds.Default.(int)
 	// vmDescLastError is the schema descriptor for last_error field.
-	vmDescLastError := vmFields[14].Descriptor()
+	vmDescLastError := vmFields[15].Descriptor()
 	// vm.DefaultLastError holds the default value on creation for the last_error field.
 	vm.DefaultLastError = vmDescLastError.Default.(string)
 	// vmDescCreatedAt is the schema descriptor for created_at field.
-	vmDescCreatedAt := vmFields[15].Descriptor()
+	vmDescCreatedAt := vmFields[16].Descriptor()
 	// vm.DefaultCreatedAt holds the default value on creation for the created_at field.
 	vm.DefaultCreatedAt = vmDescCreatedAt.Default.(func() time.Time)
 	// vmDescUpdatedAt is the schema descriptor for updated_at field.
-	vmDescUpdatedAt := vmFields[16].Descriptor()
+	vmDescUpdatedAt := vmFields[17].Descriptor()
 	// vm.DefaultUpdatedAt holds the default value on creation for the updated_at field.
 	vm.DefaultUpdatedAt = vmDescUpdatedAt.Default.(func() time.Time)
 	// vm.UpdateDefaultUpdatedAt holds the default value on update for the updated_at field.

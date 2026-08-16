@@ -48,8 +48,6 @@ type Host struct {
 	Labels map[string]string `json:"labels,omitempty"`
 	// Arch holds the value of the "arch" field.
 	Arch string `json:"arch,omitempty"`
-	// Zone holds the value of the "zone" field.
-	Zone string `json:"zone,omitempty"`
 	// LastSeenAt holds the value of the "last_seen_at" field.
 	LastSeenAt time.Time `json:"last_seen_at,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
@@ -68,7 +66,7 @@ func (*Host) scanValues(columns []string) ([]any, error) {
 			values[i] = new([]byte)
 		case host.FieldCpusTotal, host.FieldRAMMBTotal, host.FieldStorageGBTotal, host.FieldVMCountMax, host.FieldCpusAllocated, host.FieldRAMMBAllocated, host.FieldStorageGBAllocated, host.FieldVMCountAllocated:
 			values[i] = new(sql.NullInt64)
-		case host.FieldID, host.FieldURL, host.FieldRegion, host.FieldState, host.FieldTenantID, host.FieldArch, host.FieldZone:
+		case host.FieldID, host.FieldURL, host.FieldRegion, host.FieldState, host.FieldTenantID, host.FieldArch:
 			values[i] = new(sql.NullString)
 		case host.FieldLastSeenAt, host.FieldCreatedAt, host.FieldUpdatedAt:
 			values[i] = new(sql.NullTime)
@@ -185,12 +183,6 @@ func (_m *Host) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.Arch = value.String
 			}
-		case host.FieldZone:
-			if value, ok := values[i].(*sql.NullString); !ok {
-				return fmt.Errorf("unexpected type %T for field zone", values[i])
-			} else if value.Valid {
-				_m.Zone = value.String
-			}
 		case host.FieldLastSeenAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
 				return fmt.Errorf("unexpected type %T for field last_seen_at", values[i])
@@ -289,9 +281,6 @@ func (_m *Host) String() string {
 	builder.WriteString(", ")
 	builder.WriteString("arch=")
 	builder.WriteString(_m.Arch)
-	builder.WriteString(", ")
-	builder.WriteString("zone=")
-	builder.WriteString(_m.Zone)
 	builder.WriteString(", ")
 	builder.WriteString("last_seen_at=")
 	builder.WriteString(_m.LastSeenAt.Format(time.ANSIC))
