@@ -286,7 +286,12 @@ export class EnvironmentsService {
     );
   }
 
-  /** Gracefully drain an environment; returns the updated environment. */
+  /**
+   * Phase-1 only: quiesces the guest workload and moves the environment to
+   * "draining" so you can inspect its output, but does not destroy it. Call
+   * destroy() afterward to remove it - a drained environment left
+   * undestroyed keeps running (and billing) forever.
+   */
   async drain(vmId: string, opts: CallOptions = {}): Promise<EnvironmentInfo> {
     requireArg(vmId, "vm id");
     return this.t.json<EnvironmentInfo>(

@@ -261,6 +261,10 @@ func (s *EnvironmentsService) Create(ctx context.Context, reqBody CreateRequest)
 	return &env, nil
 }
 
+// Drain is phase-1 only: it quiesces the guest workload and moves the vm to
+// "draining" so you can inspect its output, but it does not destroy the vm.
+// Call Destroy afterward to remove it - a drained vm left undestroyed keeps
+// running (and billing) forever.
 func (s *EnvironmentsService) Drain(ctx context.Context, vmID string) (*EnvironmentInfo, error) {
 	return s.action(ctx, vmID, "drain")
 }

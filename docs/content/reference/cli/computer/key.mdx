@@ -1,0 +1,25 @@
+---
+title: fuse computer key
+sidebar:
+  icon: command
+  label: key
+description: Send a key or key combo to a desktop environment
+---
+
+```bash
+fuse computer key <id> <combo>
+fuse computer key fuse-task-1 Return
+fuse computer key fuse-task-1 ctrl+shift+t
+fuse computer key fuse-task-1 alt+F4
+```
+
+Combos use xdotool keysym notation: key names joined with `+`. The guest
+agent holds combos to a strict charset (letters, digits, underscore and `+`),
+so anything else is rejected with a 400 before it can reach the display.
+
+Common keysyms: `Return`, `Tab`, `Escape`, `BackSpace`, `Delete`, `Home`,
+`End`, `Page_Up`, `Page_Down`, `F1`–`F12`, and the `ctrl`, `alt`, `shift`,
+`super` modifiers.
+
+To produce text instead of pressing keys, use
+[`fuse computer type`](/reference/cli/computer/type).

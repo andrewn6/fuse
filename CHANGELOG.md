@@ -1,5 +1,31 @@
 # Changelog
 
+## [0.27.0](https://github.com/folsomintel/fuse/compare/v0.26.0...v0.27.0) (2026-08-16)
+
+
+### Features
+
+* ent orm spike for the orchestrator state store ([#206](https://github.com/folsomintel/fuse/issues/206)) ([f5fbe66](https://github.com/folsomintel/fuse/commit/f5fbe66dc7d673ec9fed4fde8810e3ec540b6bb3))
+
+## [0.26.0](https://github.com/folsomintel/fuse/compare/v0.25.0...v0.26.0) (2026-08-16)
+
+
+### Features
+
+* **sdks:** rust sdk ([#200](https://github.com/folsomintel/fuse/issues/200)) ([a446ae6](https://github.com/folsomintel/fuse/commit/a446ae6967792e8be20b8f34c461c25257f43b46))
+
+## [0.25.0](https://github.com/folsomintel/fuse/compare/v0.24.0...v0.25.0) (2026-08-16)
+
+
+### Features
+
+* **cli:** fuse computer commands and the desktop detail row ([#198](https://github.com/folsomintel/fuse/issues/198)) ([e20145d](https://github.com/folsomintel/fuse/commit/e20145daeb4ad74de974ac6ac4c9a5b96db017b2))
+
+
+### Bug Fixes
+
+* **host-agent:** four bugs in the desktop rootfs bake, found live-verifying computer use ([#197](https://github.com/folsomintel/fuse/issues/197)) ([1565428](https://github.com/folsomintel/fuse/commit/1565428051b7432891cff6848f7d13737513dea1))
+
 ## [0.24.0](https://github.com/folsomintel/fuse/compare/v0.23.0...v0.24.0) (2026-08-15)
 
 

@@ -1,0 +1,29 @@
+# the package is folsom-fuse on crates.io (fuse is taken), but the library
+# target is `fuse` so `use fuse::Client` mirrors the python sdk's `import fuse`.
+[package]
+name = "folsom-fuse"
+version = "0.27.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Rust client for the Fuse microVM control plane"
+license = "MIT"
+repository = "https://github.com/folsomintel/fuse"
+readme = "README.md"
+keywords = ["fuse", "microvm", "firecracker", "sandbox", "sdk"]
+categories = ["api-bindings", "virtualization"]
+
+[lib]
+name = "fuse"
+
+[dependencies]
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["serde", "std"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "charset", "http2", "rustls-tls"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+url = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+wiremock = "0.6"
