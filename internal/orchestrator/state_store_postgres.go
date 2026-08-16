@@ -10,7 +10,12 @@ import (
 	"sort"
 	"time"
 
+	"entgo.io/ent/dialect"
+	entsql "entgo.io/ent/dialect/sql"
 	_ "github.com/jackc/pgx/v5/stdlib"
+
+	"github.com/folsomintel/fuse/internal/entspike/ent"
+	entvm "github.com/folsomintel/fuse/internal/entspike/ent/vm"
 )
 
 const migrationsTableName = "orchestrator_schema_migrations"
@@ -19,13 +24,21 @@ const migrationsTableName = "orchestrator_schema_migrations"
 var migrationFiles embed.FS
 
 // PostgresStateStore persists orchestrator state in Postgres.
+// The vm entity goes through the ent client (first entity of the ent
+// adoption, see internal/entspike); everything else is still raw sql.
+// Both share the same *sql.DB, and migrations stay owned by
+// ApplyMigrations: ent issues DML only, never DDL.
 type PostgresStateStore struct {
-	db *sql.DB
+	db   *sql.DB
+	entc *ent.Client
 }
 
 // NewPostgresStateStore creates a Postgres-backed state store.
 func NewPostgresStateStore(db *sql.DB) *PostgresStateStore {
-	return &PostgresStateStore{db: db}
+	return &PostgresStateStore{
+		db:   db,
+		entc: ent.NewClient(ent.Driver(entsql.OpenDB(dialect.Postgres, db))),
+	}
 }
 
 // ApplyMigrations creates and upgrades orchestrator state tables.
@@ -125,64 +138,34 @@ func (s *PostgresStateStore) UpsertVM(ctx context.Context, vm VMRecord) error {
 	if err != nil {
 		return fmt.Errorf("marshal mig instance uuids for vm %s: %w", vm.ID, err)
 	}
-	_, err = s.db.ExecContext(ctx, `
-		INSERT INTO orchestrator_vms (
-			vm_id, host_id, network_host, state, url, task_id, tenant_id,
-			cpus, ram_mb, storage_gb, region, max_runtime_seconds,
-			auth_token_encrypted, secrets_encrypted, last_error, endpoints_json, created_at, updated_at,
-			gpus, gpu_kind, gpu_profile, gpu_uuids, mig_instance_uuids,
-			idle_timeout_seconds
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)
-		ON CONFLICT (vm_id) DO UPDATE SET
-			host_id=EXCLUDED.host_id,
-			network_host=EXCLUDED.network_host,
-			state=EXCLUDED.state,
-			url=EXCLUDED.url,
-			task_id=EXCLUDED.task_id,
-			tenant_id=EXCLUDED.tenant_id,
-			cpus=EXCLUDED.cpus,
-			ram_mb=EXCLUDED.ram_mb,
-			storage_gb=EXCLUDED.storage_gb,
-			region=EXCLUDED.region,
-			max_runtime_seconds=EXCLUDED.max_runtime_seconds,
-			auth_token_encrypted=EXCLUDED.auth_token_encrypted,
-			secrets_encrypted=EXCLUDED.secrets_encrypted,
-			last_error=EXCLUDED.last_error,
-			endpoints_json=EXCLUDED.endpoints_json,
-			created_at=EXCLUDED.created_at,
-			updated_at=EXCLUDED.updated_at,
-			gpus=EXCLUDED.gpus,
-			gpu_kind=EXCLUDED.gpu_kind,
-			gpu_profile=EXCLUDED.gpu_profile,
-			gpu_uuids=EXCLUDED.gpu_uuids,
-			mig_instance_uuids=EXCLUDED.mig_instance_uuids,
-			idle_timeout_seconds=EXCLUDED.idle_timeout_seconds
-	`,
-		vm.ID,
-		vm.HostID,
-		vm.NetworkHost,
-		string(vm.State),
-		vm.URL,
-		vm.TaskID,
-		vm.TenantID,
-		vm.Spec.CPUs,
-		vm.Spec.RamMB,
-		vm.Spec.StorageGB,
-		vm.Spec.Region,
-		maxRuntimeSeconds,
-		vm.AuthTokenEncrypted,
-		vm.SecretsEncrypted,
-		vm.LastError,
-		string(endpointsJSON),
-		vm.CreatedAt.UTC(),
-		vm.UpdatedAt.UTC(),
-		vm.Spec.GPUs,
-		vm.Spec.GPUKind,
-		vm.Spec.GPUProfile,
-		string(gpuUUIDsJSON),
-		string(migInstanceUUIDsJSON),
-		idleTimeoutSeconds,
-	)
+	err = s.entc.VM.Create().
+		SetID(vm.ID).
+		SetHostID(vm.HostID).
+		SetNetworkHost(vm.NetworkHost).
+		SetState(entvm.State(vm.State)).
+		SetURL(vm.URL).
+		SetTaskID(vm.TaskID).
+		SetTenantID(vm.TenantID).
+		SetCpus(vm.Spec.CPUs).
+		SetRAMMB(vm.Spec.RamMB).
+		SetStorageGB(vm.Spec.StorageGB).
+		SetRegion(vm.Spec.Region).
+		SetMaxRuntimeSeconds(maxRuntimeSeconds).
+		SetIdleTimeoutSeconds(idleTimeoutSeconds).
+		SetAuthTokenEncrypted(vm.AuthTokenEncrypted).
+		SetSecretsEncrypted(vm.SecretsEncrypted).
+		SetLastError(vm.LastError).
+		SetEndpoints(json.RawMessage(endpointsJSON)).
+		SetGpus(vm.Spec.GPUs).
+		SetGpuKind(vm.Spec.GPUKind).
+		SetGpuProfile(vm.Spec.GPUProfile).
+		SetGpuUuids(json.RawMessage(gpuUUIDsJSON)).
+		SetMigInstanceUuids(json.RawMessage(migInstanceUUIDsJSON)).
+		SetCreatedAt(vm.CreatedAt.UTC()).
+		SetUpdatedAt(vm.UpdatedAt.UTC()).
+		OnConflictColumns(entvm.FieldID).
+		UpdateNewValues().
+		Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("upsert vm %s: %w", vm.ID, err)
 	}
@@ -190,95 +173,69 @@ func (s *PostgresStateStore) UpsertVM(ctx context.Context, vm VMRecord) error {
 }
 
 func (s *PostgresStateStore) DeleteVM(ctx context.Context, vmID string) error {
-	if _, err := s.db.ExecContext(ctx, "DELETE FROM orchestrator_vms WHERE vm_id=$1", vmID); err != nil {
+	// Delete().Where(), not DeleteOneID: stays a no-op for a missing row,
+	// same as the plain sql DELETE it replaces
+	if _, err := s.entc.VM.Delete().Where(entvm.ID(vmID)).Exec(ctx); err != nil {
 		return fmt.Errorf("delete vm %s: %w", vmID, err)
 	}
 	return nil
 }
 
 func (s *PostgresStateStore) ListVMs(ctx context.Context) ([]VMRecord, error) {
-	rows, err := s.db.QueryContext(ctx, `
-		SELECT vm_id, host_id, network_host, state, url, task_id, tenant_id,
-		       cpus, ram_mb, storage_gb, region, max_runtime_seconds,
-		       auth_token_encrypted, secrets_encrypted, last_error, endpoints_json, created_at, updated_at,
-		       gpus, gpu_kind, gpu_profile, gpu_uuids, mig_instance_uuids,
-		       idle_timeout_seconds
-		FROM orchestrator_vms
-	`)
+	rows, err := s.entc.VM.Query().All(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list vms: %w", err)
 	}
-	defer func() { _ = rows.Close() }()
 
 	var out []VMRecord
-	for rows.Next() {
-		var (
-			record             VMRecord
-			state              string
-			maxRuntimeSeconds  int
-			idleTimeoutSeconds int
-			endpointsJSON      string
-			gpuUUIDsJSON       []byte
-			migInstUUIDsJSON   []byte
-		)
-		if err := rows.Scan(
-			&record.ID,
-			&record.HostID,
-			&record.NetworkHost,
-			&state,
-			&record.URL,
-			&record.TaskID,
-			&record.TenantID,
-			&record.Spec.CPUs,
-			&record.Spec.RamMB,
-			&record.Spec.StorageGB,
-			&record.Spec.Region,
-			&maxRuntimeSeconds,
-			&record.AuthTokenEncrypted,
-			&record.SecretsEncrypted,
-			&record.LastError,
-			&endpointsJSON,
-			&record.CreatedAt,
-			&record.UpdatedAt,
-			&record.Spec.GPUs,
-			&record.Spec.GPUKind,
-			&record.Spec.GPUProfile,
-			&gpuUUIDsJSON,
-			&migInstUUIDsJSON,
-			&idleTimeoutSeconds,
-		); err != nil {
-			return nil, fmt.Errorf("scan vm row: %w", err)
+	for _, row := range rows {
+		record := VMRecord{
+			ID:                 row.ID,
+			HostID:             row.HostID,
+			NetworkHost:        row.NetworkHost,
+			State:              VMState(row.State),
+			URL:                row.URL,
+			TaskID:             row.TaskID,
+			TenantID:           row.TenantID,
+			AuthTokenEncrypted: row.AuthTokenEncrypted,
+			SecretsEncrypted:   row.SecretsEncrypted,
+			LastError:          row.LastError,
+			CreatedAt:          row.CreatedAt,
+			UpdatedAt:          row.UpdatedAt,
 		}
-		record.State = VMState(state)
-		if maxRuntimeSeconds > 0 {
-			record.Spec.MaxRuntime = time.Duration(maxRuntimeSeconds) * time.Second
+		record.Spec.CPUs = row.Cpus
+		record.Spec.RamMB = row.RAMMB
+		record.Spec.StorageGB = row.StorageGB
+		record.Spec.Region = row.Region
+		record.Spec.GPUs = row.Gpus
+		record.Spec.GPUKind = row.GpuKind
+		record.Spec.GPUProfile = row.GpuProfile
+		if row.MaxRuntimeSeconds > 0 {
+			record.Spec.MaxRuntime = time.Duration(row.MaxRuntimeSeconds) * time.Second
 		}
-		if idleTimeoutSeconds > 0 {
-			record.Spec.IdleTimeout = time.Duration(idleTimeoutSeconds) * time.Second
+		if row.IdleTimeoutSeconds > 0 {
+			record.Spec.IdleTimeout = time.Duration(row.IdleTimeoutSeconds) * time.Second
 		}
-		if endpointsJSON != "" {
-			if err := json.Unmarshal([]byte(endpointsJSON), &record.Endpoints); err != nil {
+		if len(row.Endpoints) > 0 {
+			if err := json.Unmarshal(row.Endpoints, &record.Endpoints); err != nil {
 				return nil, fmt.Errorf("unmarshal endpoints for vm %s: %w", record.ID, err)
 			}
 		}
 		// gpu_uuids defaults to '[]'; a legacy null or empty scan leaves
 		// GPUUUIDs nil (no per-device binding), which is the correct signal.
-		if len(gpuUUIDsJSON) > 0 {
-			if err := json.Unmarshal(gpuUUIDsJSON, &record.Spec.GPUUUIDs); err != nil {
+		if len(row.GpuUuids) > 0 {
+			if err := json.Unmarshal(row.GpuUuids, &record.Spec.GPUUUIDs); err != nil {
 				return nil, fmt.Errorf("unmarshal gpu uuids for vm %s: %w", record.ID, err)
 			}
 		}
 		// mig_instance_uuids defaults to '[]'; an empty scan leaves
 		// MIGInstanceUUIDs nil (count-map host, no per-instance binding).
-		if len(migInstUUIDsJSON) > 0 {
-			if err := json.Unmarshal(migInstUUIDsJSON, &record.Spec.MIGInstanceUUIDs); err != nil {
+		if len(row.MigInstanceUuids) > 0 {
+			if err := json.Unmarshal(row.MigInstanceUuids, &record.Spec.MIGInstanceUUIDs); err != nil {
 				return nil, fmt.Errorf("unmarshal mig instance uuids for vm %s: %w", record.ID, err)
 			}
 		}
 		out = append(out, record)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate vms: %w", err)
 	}
 	return out, nil
 }
