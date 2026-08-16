@@ -120,7 +120,13 @@ if [ ! -f "$WORK/desktop-full.tar" ]; then
       | grep -E "^[a-zA-Z0-9]" | sort -u > /tmp/desktop-closure
     { cat /tmp/new-pkgs /tmp/desktop-closure; for p in $DESKTOP_PACKAGES; do echo "$p"; done; } \
       | sort -u > /tmp/wanted-pkgs
-    while read -r p; do dpkg -L "$p" 2>/dev/null; done < /tmp/wanted-pkgs | sort -u > /tmp/paths
+    # the closure above names packages that were never actually installed
+    # (virtual/alternative deps, things --no-recommends excluded); dpkg -L on
+    # one of those fails, and under set -e that silently kills this loop
+    # partway through - everything sorted after the first failure never makes
+    # it into the bundle. || true keeps one absent package from taking the
+    # rest down with it.
+    while read -r p; do dpkg -L "$p" 2>/dev/null || true; done < /tmp/wanted-pkgs | sort -u > /tmp/paths
     # gtk apps need the caches the package triggers generated in this
     # container; dpkg does not own them, so they are listed by hand
     glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || true
