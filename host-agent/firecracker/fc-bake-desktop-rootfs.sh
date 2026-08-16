@@ -110,7 +110,12 @@ if [ ! -f "$WORK/desktop-full.tar" ]; then
     apt-get install -y --no-install-recommends $DESKTOP_PACKAGES >/dev/null
     dpkg-query -W -f="\${Package}\n" | sort > /tmp/after
     comm -13 /tmp/before /tmp/after > /tmp/new-pkgs
-    while read -r p; do dpkg -L "$p"; done < /tmp/new-pkgs | sort -u > /tmp/paths
+    # union with the packages named in DESKTOP_PACKAGES directly: one of them
+    # (dbus, for dbus-run-session) is pulled in transitively by
+    # software-properties-common earlier, so it never shows up as "new" here
+    # even though the desktop stack explicitly depends on its files.
+    { cat /tmp/new-pkgs; for p in $DESKTOP_PACKAGES; do echo "$p"; done; } | sort -u > /tmp/wanted-pkgs
+    while read -r p; do dpkg -L "$p" 2>/dev/null; done < /tmp/wanted-pkgs | sort -u > /tmp/paths
     # gtk apps need the caches the package triggers generated in this
     # container; dpkg does not own them, so they are listed by hand
     glib-compile-schemas /usr/share/glib-2.0/schemas 2>/dev/null || true
