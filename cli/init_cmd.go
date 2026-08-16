@@ -22,6 +22,13 @@ import (
 const initScaffold = `# yaml-language-server: $schema=https://raw.githubusercontent.com/folsomintel/fuse/main/schema/fusefile-v1.json
 version: 1
 
+# the task id this file boots under, and with it the environment's name: the
+# orchestrator prefixes it, so 'name: sandbox' is the environment
+# 'fuse-sandbox'. 'fuse up --task-id' overrides it. leave it out and the cli
+# falls back to this directory's name, which collides across two checkouts of
+# the same repo.
+# name: sandbox
+
 # base rootfs to boot, by name. this is NOT an oci image ref: the host agent
 # resolves it against the rootfs images baked on the host, so the name must
 # already exist there. omit it to boot the host's default base rootfs.

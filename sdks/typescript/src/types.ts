@@ -89,6 +89,102 @@ export interface HealthcheckSpec {
 }
 
 /**
+ * DesktopSpec is the geometry of the environment's graphical session (the
+ * Fusefile's `desktop:` block). It requires an image that carries the desktop
+ * stack; on any other image the declaration is inert and the computer surface
+ * reports the display as absent.
+ *
+ * Both fields are required, 320 to 3840 each: a guessed dimension would
+ * silently shift every coordinate a computer-use model emits.
+ */
+export interface DesktopSpec {
+  /** Display width in pixels. */
+  width: number;
+  /** Display height in pixels. */
+  height: number;
+}
+
+/**
+ * ComputerAction is one computer-use action, in the same shape Anthropic's
+ * computer tool emits as tool_use input, so translating a tool_use block into
+ * a call is mechanical. Only action is required; which other fields apply
+ * depends on the action, and the guest agent enforces the full schema.
+ */
+export interface ComputerAction {
+  /** The action to perform, e.g. "screenshot", "left_click", "type", "key",
+   * "scroll", "zoom". */
+  action: string;
+  /** [x, y] target for pointer actions. */
+  coordinate?: number[];
+  /** [x, y] origin for left_click_drag. */
+  start_coordinate?: number[];
+  /** The payload for type, the keysym combo for key/hold_key, or modifiers
+   * held during a click action. */
+  text?: string;
+  /** [x1, y1, x2, y2] crop for zoom. */
+  region?: number[];
+  /** Seconds for hold_key and wait, capped guest-side at 100. */
+  duration?: number;
+  scroll_direction?: "up" | "down" | "left" | "right";
+  /** Wheel clicks for scroll, 1 to 100. */
+  scroll_amount?: number;
+}
+
+/**
+ * ComputerResult is the guest's answer to one action. screenshot is a base64
+ * PNG, present on every action that implies one; for zoom it is the cropped
+ * region at full resolution.
+ */
+export interface ComputerResult {
+  output?: string;
+  screenshot?: string;
+}
+
+/**
+ * ComputerDisplay reports the environment's display: whether it is up and at
+ * what geometry, so a caller can populate display_width_px /
+ * display_height_px in its computer tool definition without hardcoding them.
+ */
+export interface ComputerDisplay {
+  display?: string;
+  up: boolean;
+  /** Live display width in pixels, 0 when the display is down. */
+  width: number;
+  /** Live display height in pixels, 0 when the display is down. */
+  height: number;
+  /** Why the display is down, when it is. */
+  error?: string;
+}
+
+/** ToolResultImageSource is a Messages-API base64 image source. */
+export interface ToolResultImageSource {
+  type: "base64";
+  media_type: "image/png";
+  data: string;
+}
+
+/**
+ * ToolResultBlock is one content block of a Messages API tool_result. The
+ * field names match the Messages API, so the blocks can be sent back verbatim
+ * as the tool_result content.
+ */
+export interface ToolResultBlock {
+  type: "text" | "image";
+  text?: string;
+  source?: ToolResultImageSource;
+}
+
+/**
+ * ComputerToolResult is what goes back to Claude for one computer tool_use:
+ * the content blocks and whether they describe an error. Map it onto the
+ * tool_result block for the tool_use's id and the loop is closed.
+ */
+export interface ComputerToolResult {
+  content: ToolResultBlock[];
+  is_error?: boolean;
+}
+
+/**
  * Health is the last verdict of an environment's healthcheck.
  *
  * It is deliberately not folded into EnvironmentInfo.state: that vocabulary is
@@ -128,6 +224,9 @@ export interface CreateRequest {
    * evaluated inside create: the call returns as soon as the VM is up, and
    * the verdict arrives on later reads. */
   healthcheck?: HealthcheckSpec;
+  /** Graphical session geometry. Omit it for an environment with no desktop,
+   * in which case a desktop image keeps its baked default geometry. */
+  desktop?: DesktopSpec;
 }
 
 /** EnvironmentInfo is the server's view of a single microVM. */

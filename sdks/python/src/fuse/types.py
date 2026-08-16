@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -111,6 +111,73 @@ class HealthcheckSpec(_Model):
     start_period_seconds: Optional[int] = None
 
 
+class DesktopSpec(_Model):
+    # the geometry of the environment's graphical session (the fusefile's
+    # `desktop:` block). requires an image that carries the desktop stack; on
+    # any other image the declaration is inert and the computer surface
+    # reports the display as absent.
+    #
+    # both fields are required, 320 to 3840 each: a guessed dimension would
+    # silently shift every coordinate a computer-use model emits.
+    width: int
+    height: int
+
+
+class ComputerAction(_Model):
+    # one computer-use action, in the same shape anthropic's computer tool
+    # emits as tool_use input, so translating a tool_use block into a call is
+    # mechanical. only action is required; which other fields apply depends on
+    # the action, and the guest agent enforces the full schema.
+    action: str
+    # [x, y] target for pointer actions.
+    coordinate: Optional[list[int]] = None
+    # [x, y] origin for left_click_drag.
+    start_coordinate: Optional[list[int]] = None
+    # the payload for type, the keysym combo for key/hold_key, or modifiers
+    # held during a click action.
+    text: Optional[str] = None
+    # [x1, y1, x2, y2] crop for zoom.
+    region: Optional[list[int]] = None
+    # seconds for hold_key and wait, capped guest-side at 100.
+    duration: Optional[float] = None
+    scroll_direction: Optional[str] = None
+    # wheel clicks for scroll, 1 to 100.
+    scroll_amount: Optional[int] = None
+
+
+class ComputerResult(_Model):
+    # the guest's answer to one action. screenshot is a base64 png, present on
+    # every action that implies one; for zoom it is the cropped region at full
+    # resolution.
+    output: str = ""
+    screenshot: str = ""
+
+
+class ComputerDisplay(_Model):
+    # the environment's display report: whether it is up and at what geometry,
+    # so a caller can populate display_width_px / display_height_px in its
+    # computer tool definition without hardcoding them.
+    display: str = ""
+    up: bool = False
+    # live display size in pixels, 0 when the display is down.
+    width: int = 0
+    height: int = 0
+    # why the display is down, when it is.
+    error: str = ""
+
+
+class ComputerToolResult(_Model):
+    # what goes back to claude for one computer tool_use: the content blocks
+    # and whether they describe an error. the blocks are plain dicts already
+    # in the messages api shape, so they can be placed on a tool_result block
+    # verbatim:
+    #
+    #   {"type": "tool_result", "tool_use_id": block.id,
+    #    "content": result.content, "is_error": result.is_error}
+    content: list[dict[str, Any]] = Field(default_factory=list)
+    is_error: bool = False
+
+
 class Health(_Model):
     # the last verdict of an environment's healthcheck.
     #
@@ -146,6 +213,9 @@ class CreateRequest(_Model):
     # evaluated inside create: the call returns as soon as the vm is up, and
     # the verdict arrives on later reads.
     healthcheck: Optional[HealthcheckSpec] = None
+    # graphical session geometry. none for an environment with no desktop, in
+    # which case a desktop image keeps its baked default geometry.
+    desktop: Optional[DesktopSpec] = None
 
 
 class EnvironmentInfo(_Model):

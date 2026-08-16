@@ -76,6 +76,14 @@ type HealthcheckHTTP struct {
 	Path string
 }
 
+// DesktopSpec is the compiled desktop block. It mirrors
+// internal/api.DesktopSpec field-for-field, the same arrangement
+// HealthcheckSpec uses.
+type DesktopSpec struct {
+	Width  int
+	Height int
+}
+
 // Compiled is the result of compiling a Fusefile: the resource spec, the
 // manifest json to upload to the guest, the startup script to run, the
 // secrets the environment needs at create time, and any ports to expose.
@@ -90,6 +98,12 @@ type Compiled struct {
 	// author declared none. It does not travel in the manifest: the manifest
 	// describes services, and this probe is about the environment.
 	Healthcheck *HealthcheckSpec
+
+	// Desktop is the graphical session's geometry, or nil when the author
+	// declared none. Like Healthcheck it rides beside the manifest, not in
+	// it: the manifest describes services, and the desktop is about the
+	// environment.
+	Desktop *DesktopSpec
 
 	// Copy is the compiled `copy` block: one entry per authored entry, with
 	// its guest path resolved against the workspace. The sources are named,
@@ -260,6 +274,20 @@ func ValidLabel(s string) bool {
 // max. The name is how an endpoint is addressed, so it is held to what a
 // hostname component can carry rather than to arbitrary text.
 var exposeNamePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+
+// namePattern is the accepted form for the top-level name: a DNS label, the
+// same shape as expose[].as.
+//
+// The rule is not cosmetic. The orchestrator names the vm `<prefix><task id>`,
+// so this string ends up as a vm identity that the host agent puts into file
+// paths and iptables rules. A task id is unvalidated at the API today, so the
+// Fusefile is the layer that can still hold it to something safe to render.
+var namePattern = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
+
+// ValidName reports whether s is a well-formed top-level name.
+func ValidName(s string) bool {
+	return namePattern.MatchString(s)
+}
 
 // ValidExposeName reports whether s is a well-formed expose[].as name.
 func ValidExposeName(s string) bool {
@@ -488,8 +516,19 @@ func Compile(f *Fusefile) (*Compiled, error) {
 		Copy:                  copySpecs,
 		Expose:                compileExpose(f),
 		Healthcheck:           healthcheck,
+		Desktop:               compileDesktop(f),
 		StartupTimeoutSeconds: startupTimeoutSeconds,
 	}, nil
+}
+
+// compileDesktop turns the authored desktop block into its wire form. It
+// returns nil when the author declared none; validation already held the
+// geometry to its bounds, so there is nothing to fail here.
+func compileDesktop(f *Fusefile) *DesktopSpec {
+	if f.Desktop == nil {
+		return nil
+	}
+	return &DesktopSpec{Width: f.Desktop.Width, Height: f.Desktop.Height}
 }
 
 // compileHealthcheck turns the authored healthcheck block into its wire form,

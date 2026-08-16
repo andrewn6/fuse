@@ -543,5 +543,101 @@ class PublicHostTest(unittest.TestCase):
                     qemu_agent.resolve_public_host()
 
 
+class ComposeUpCommandTest(unittest.TestCase):
+    """The guest runs podman, not docker.
+
+    Compose defaults to /var/run/docker.sock, which no guest has, so an
+    unqualified `docker-compose up` fails to reach any runtime. That failure is
+    not contained to the service: compose runs ahead of fused under `set -e`, so
+    the whole create returns a 500 and no environment starts.
+    """
+
+    def test_points_at_podmans_socket(self):
+        cmd = qemu_agent.compose_up_command()
+        self.assertIn("DOCKER_HOST=unix:///run/podman/podman.sock", cmd)
+
+    def test_never_relies_on_the_docker_socket_default(self):
+        # The regression this pins is an *absent* env var, so asserting the
+        # docker socket is unmentioned is what actually catches a revert.
+        self.assertNotIn("/var/run/docker.sock", qemu_agent.compose_up_command())
+
+    def test_sets_the_variable_for_the_compose_command(self):
+        # A prefix assignment, not a bare export earlier in the script: the
+        # variable has to survive into the compose invocation itself.
+        cmd = qemu_agent.compose_up_command()
+        self.assertIn(
+            "DOCKER_HOST=unix:///run/podman/podman.sock "
+            "/usr/local/bin/docker-compose -f /fuse/compose.yaml up -d",
+            cmd,
+        )
+
+    def test_is_guarded_on_the_compose_file(self):
+        # An environment with no services declares no compose.yaml, and must not
+        # have its boot fail on a missing file.
+        self.assertTrue(
+            qemu_agent.compose_up_command().startswith("if [ -f /fuse/compose.yaml ]; then")
+        )
+
+class UploadRemoteCommandTest(unittest.TestCase):
+    """/fuse holds credentials in cleartext and must not be world readable.
+
+    The upload wire carries no mode, so everything the orchestrator puts in
+    /fuse used to land at the session default of 0644: the resolved secrets in
+    `env`, the guest agent's `auth-token`, the TLS key. Any unprivileged process
+    in the guest could read them.
+    """
+
+    RESERVED = [
+        "/fuse/env",
+        "/fuse/auth-token",
+        "/fuse/secrets.json",
+        "/fuse/manifest.json",
+        "/fuse/compose.yaml",
+        "/fuse/tls/key.pem",
+    ]
+
+    def test_reserved_files_are_root_only(self):
+        for path in self.RESERVED:
+            with self.subTest(path=path):
+                cmd = qemu_agent.upload_remote_command(path)
+                self.assertIn(f"chmod 0600 {path}", cmd)
+
+    def test_reserved_files_are_created_restricted(self):
+        # chmod alone would leave the content world readable between `cat` and
+        # the chmod, so the mode is also set at creation.
+        for path in self.RESERVED:
+            with self.subTest(path=path):
+                self.assertTrue(
+                    qemu_agent.upload_remote_command(path).startswith("umask 0077 &&")
+                )
+
+    def test_reserved_directory_is_locked_down(self):
+        # A pre-existing /fuse keeps its own mode through umask, so it is
+        # chmod'd explicitly. A nested path locks both it and its parent.
+        self.assertIn("chmod 0700 /fuse", qemu_agent.upload_remote_command("/fuse/env"))
+        nested = qemu_agent.upload_remote_command("/fuse/tls/key.pem")
+        self.assertIn("/fuse", nested)
+        self.assertIn("/fuse/tls", nested)
+
+    def test_ordinary_paths_are_unchanged(self):
+        # Caller files keep the previous behaviour and the default mode: a
+        # workload's own files are not the agent's to restrict.
+        cmd = qemu_agent.upload_remote_command("/workspace/app/main.py")
+        self.assertEqual(cmd, "mkdir -p /workspace/app && cat > /workspace/app/main.py")
+
+    def test_a_path_merely_prefixed_fuse_is_not_reserved(self):
+        # /fused and /fuse-backup share the prefix but are not the directory.
+        for path in ["/fused/x", "/fuse-backup/x"]:
+            with self.subTest(path=path):
+                self.assertNotIn("chmod", qemu_agent.upload_remote_command(path))
+
+    def test_traversal_cannot_aim_the_chmod_outside_fuse(self):
+        # The dangerous shape: a reserved-looking path that normalizes out of
+        # /fuse would otherwise chmod 0700 a directory like / or /etc.
+        cmd = qemu_agent.upload_remote_command("/fuse/../etc/passwd")
+        self.assertNotIn("chmod", cmd)
+        self.assertIn("cat > /etc/passwd", cmd)
+
+
 if __name__ == "__main__":
     unittest.main()

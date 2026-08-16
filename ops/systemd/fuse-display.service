@@ -1,0 +1,11 @@
+[Unit]
+Description=Fuse desktop display (Xvfb on :1)
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/fuse-display-run
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

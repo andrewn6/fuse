@@ -1,0 +1,12 @@
+version: 1
+
+# more cpu than any registered host has (phantom is 12). must be refused by the
+# scheduler at create, not queued and not silently trimmed to fit.
+resources:
+  cpus: 512
+  memory: 1GB
+  storage: 2GB
+  max_runtime: 10m
+
+run: |
+  echo "should never run" > /workspace/never.txt

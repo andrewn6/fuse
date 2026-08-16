@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.24.0](https://github.com/folsomintel/fuse/compare/v0.23.0...v0.24.0) (2026-08-15)
+
+
+### Features
+
+* desktop block in the fusefile and the computer wire ([#191](https://github.com/folsomintel/fuse/issues/191)) ([fef55df](https://github.com/folsomintel/fuse/commit/fef55df8b27dc6049b4639792f17870b3aa5a4eb))
+* **sdks:** computer use adapter, worked example, and guide ([#193](https://github.com/folsomintel/fuse/issues/193)) ([52fdc23](https://github.com/folsomintel/fuse/commit/52fdc23dbd9df5ca7c9b5e180651a83311ca3a1a))
+
+## [0.23.0](https://github.com/folsomintel/fuse/compare/v0.22.2...v0.23.0) (2026-08-15)
+
+
+### Features
+
+* **fused:** computer control surface for the desktop image ([#190](https://github.com/folsomintel/fuse/issues/190)) ([6a72abd](https://github.com/folsomintel/fuse/commit/6a72abd77baba08e8e5f6d48ce2b94b8fcc2eaa5))
+* **host-agent:** bake a desktop rootfs for computer use ([#189](https://github.com/folsomintel/fuse/issues/189)) ([141c1e0](https://github.com/folsomintel/fuse/commit/141c1e0d7062dd19c5302934eeb560df875d8071))
+
+## [0.22.2](https://github.com/folsomintel/fuse/compare/v0.22.1...v0.22.2) (2026-08-15)
+
+
+### Bug Fixes
+
+* **ci:** always clear the release label, without needing read:org ([09b968f](https://github.com/folsomintel/fuse/commit/09b968f741ca6262ed160df8d22ba8241d86ddef))
+
+## [0.22.1](https://github.com/folsomintel/fuse/compare/v0.22.0...v0.22.1) (2026-08-15)
+
+
+### Bug Fixes
+
+* **host-agent:** point compose at podman's socket so services can start ([25b5692](https://github.com/folsomintel/fuse/commit/25b56928dca808d0e0c4bb9fb1015d65f8d93665))
+* **host-agent:** write /fuse credentials readable by root only ([25cbd9c](https://github.com/folsomintel/fuse/commit/25cbd9cfd8159925eddcf9c2ce38b4eeab666f4a))
+* **orchestrator:** name the gpu when a gpu-less fleet refuses a gpu request ([2d16005](https://github.com/folsomintel/fuse/commit/2d160053ba75ee904536656e2e240fbdc3f8d832))
+
+## [0.22.0](https://github.com/folsomintel/fuse/compare/v0.21.0...v0.22.0) (2026-08-15)
+
+
+### Features
+
+* **fusefile:** add a top-level name that sets the task id ([#179](https://github.com/folsomintel/fuse/issues/179)) ([b712c06](https://github.com/folsomintel/fuse/commit/b712c0643503cf68e095b59f90a84e51c043b591))
+
 ## [0.21.0](https://github.com/folsomintel/fuse/compare/v0.20.0...v0.21.0) (2026-08-15)
 
 

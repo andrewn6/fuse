@@ -66,6 +66,11 @@ keeps describing the format you wrote against.
 # yaml-language-server: $schema=https://raw.githubusercontent.com/folsomintel/fuse/main/schema/fusefile-v1.json
 version: 1
 
+# the task id this file boots under, and with it the environment's name: the
+# orchestrator prefixes it, so this is the environment `fuse-sandbox`. omit it
+# and the cli falls back to the parent directory's name.
+name: sandbox
+
 # base rootfs to boot, by name. NOT an oci ref -- the host agent resolves it
 # against the rootfs images baked on that host. omit for the host's default.
 image: worker-base
@@ -206,6 +211,7 @@ you can stop reading at [The setup layer cache](#the-setup-layer-cache).
 | Field | Type | Notes |
 | --- | --- | --- |
 | `version` | int | Currently always `1`. A Fusefile is a single yaml document; anything after a second `---` is rejected rather than silently dropped. |
+| `name` | string | The task id this Fusefile boots under, and through it the environment's identity: the orchestrator prefixes it, so `name: sandbox` is the environment `fuse-sandbox`. Optional. A DNS label: lowercase letters, digits and dashes, alphanumeric at both ends, 63 chars max. See [Naming an environment](#naming-an-environment). |
 | `image` | string | Name of a rootfs pre-baked on the host, **not** an OCI image ref. There is no OCI pull: fc-agent resolves it to `<IMAGES_DIR>/<image>.ext4` and qemu-agent to `<IMAGES_DIR>/<image>.qcow2`, and returns a 400 if no such file exists. An operator bakes and places it out of band (e.g. with `fc-bake-rootfs.sh`). Omit to use the baked base rootfs. See [Base images](#base-images-are-not-oci-images). |
 | `files` | list of `{path, source \| content, mode}` | Files written into the guest before the `build` steps run. See [Files](#files). |
 | `copy` | list of `{from, to}` | Local files **and directories** copied into the guest before the `build` steps run. See [Copy](#copy). |
@@ -243,7 +249,44 @@ you can stop reading at [The setup layer cache](#the-setup-layer-cache).
 | `healthcheck.timeout` | string | Go duration bounding one attempt. Omit for the guest agent's default (`2s`). Attempts run one at a time, so a value above `interval` is rejected rather than silently stretching the interval. |
 | `healthcheck.retries` | int | Consecutive failures that flip the verdict to `failing`. Omit for the guest agent's default (`3`). A single failed attempt is never a verdict. |
 | `healthcheck.start_period` | string | Go duration measured from the first attempt, during which failures are not counted. It ends for good once the probe passes once. |
+| `desktop` | `{width, height}` | The geometry of the environment's graphical session, both required, 320 to 3840 each. Requires an image baked with the desktop stack; on any other image the block is inert. Omit the whole block to keep a desktop image's baked default. See [Desktop](#desktop). |
 | `secrets` | list of strings | Secret *names* this environment requires. An empty name is rejected: nothing you could pass to `--secret` would satisfy it. Values are supplied out-of-band via `--secret key=value` or `--secrets-file`, never written into the Fusefile itself. |
+
+## Naming an environment
+
+An environment's id is its task id with the orchestrator's prefix on the front,
+so a task id of `sandbox` is the environment `fuse-sandbox`. That is the name
+you pass to `fuse environment exec`, `fuse snapshot create`, and everything
+else that addresses a running environment.
+
+Three things can supply the task id, in order:
+
+1. `fuse up --task-id <id>`, which always wins.
+2. `name:` in the Fusefile.
+3. The Fusefile's parent directory name, as a fallback.
+
+Only the third is a guess, and it is the only one `up` announces. It is also
+the one that bites: two checkouts of the same repo derive the same id, so the
+second `fuse up` fails with `task already assigned`. Declaring `name:` makes
+the id a property of the project instead of of wherever the file happens to
+sit.
+
+```yaml
+version: 1
+name: sandbox
+run: ./start.sh
+```
+
+```bash
+$ fuse up
+# -> environment fuse-sandbox
+$ fuse environment exec fuse-sandbox -- uname -r
+```
+
+The collision is deliberate. Because the name is stable, a second `fuse up`
+against a live environment is refused rather than quietly starting a duplicate
+you would have to find and clean up. To run several at once, give each one its
+own id with `--task-id`.
 
 ## Build and run
 
@@ -441,6 +484,36 @@ unhealthy *inside the guest*: nothing about it reaches the orchestrator.
 The top-level `healthcheck:` is about the environment as a whole, is evaluated
 by the guest agent, and its verdict travels back to the control plane. Both can
 be set on the same Fusefile; they do not interact.
+
+## Desktop
+
+```yaml
+image: desktop
+
+desktop:
+  width: 1280
+  height: 800
+
+resources:
+  memory: 4GB # a browser session does not fit the 1GB default
+```
+
+`desktop:` sets the geometry of the environment's graphical session, for
+environments meant to be driven by a computer-use agent. It requires an image
+baked with the desktop stack (see the
+[desktop environments guide](/docs/guides/desktop-environments)); on any other
+image the block is inert and the computer surface reports the display as
+absent.
+
+Both dimensions are required. A guessed dimension would silently shift every
+coordinate a computer-use model emits, which presents as model failure rather
+than as the config error it is — so there is deliberately no default to fall
+back to. Omitting the whole block is different: that keeps the desktop image's
+baked default (1024x768).
+
+The geometry travels to the guest as `/fuse/desktop.json`, and the guest agent
+restarts the display at the declared size if it came up at a different one.
+The display number is fixed at `:1`.
 
 ## Base images are not OCI images
 

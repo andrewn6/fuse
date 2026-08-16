@@ -1050,6 +1050,49 @@ def snapshot_restore(vm_id: str, snapshot_id: str) -> None:
 
 # -- Upload / Exec / start-agent ----------------------------------------------
 
+# Everything under this directory belongs to the guest agent rather than the
+# caller: the manifest, the resolved secrets, the rendered env file, the auth
+# token and the TLS key all land here. Both the API and the Fusefile compiler
+# already refuse a caller file addressed into it.
+RESERVED_GUEST_DIR = "/fuse"
+
+
+def is_reserved_guest_path(path: str) -> bool:
+    """Whether an already-normalized path lives under the reserved directory."""
+    return path == RESERVED_GUEST_DIR or path.startswith(RESERVED_GUEST_DIR + "/")
+
+
+def upload_remote_command(path: str) -> str:
+    """Shell that writes one uploaded file, taking its content on stdin.
+
+    Files under the reserved directory hold credentials in cleartext: the
+    resolved secrets in `env`, the guest agent's own `auth-token`, the TLS key.
+    The upload wire carries no mode, so every one of them used to land at the
+    session's default 0644 and any unprivileged process in the guest could read
+    them. They are written root-only here instead.
+
+    The path is normalized first so a `..` segment cannot make an ordinary
+    destination look reserved and turn the chmod loose on a directory outside
+    /fuse. Callers cannot reach that today, since the API rejects both `..` and
+    reserved paths, so this is the second line of defence rather than the only
+    one.
+    """
+    path = os.path.normpath(path)
+    parent = str(Path(path).parent)
+    if not is_reserved_guest_path(path):
+        return f"mkdir -p {shlex.quote(parent)} && cat > {shlex.quote(path)}"
+    # The umask covers the file and any directory mkdir creates. The explicit
+    # chmods cover directories that already exist, which is the common case:
+    # /fuse is created by whichever upload happens to land first, and a baked
+    # rootfs may ship it world readable.
+    targets = " ".join(shlex.quote(d) for d in sorted({RESERVED_GUEST_DIR, parent}))
+    return (
+        f"umask 0077 && mkdir -p {shlex.quote(parent)} && "
+        f"chmod 0700 {targets} && "
+        f"cat > {shlex.quote(path)} && chmod 0600 {shlex.quote(path)}"
+    )
+
+
 def do_upload(vm_id: str, path: str, content_b64: str) -> None:
     """Write base64 content to a path inside the guest (over SSH)."""
     meta = load_meta(vm_id)
@@ -1059,9 +1102,7 @@ def do_upload(vm_id: str, path: str, content_b64: str) -> None:
         data = base64.b64decode(content_b64)
     except Exception as e:
         raise HTTPError(400, f"bad base64: {e}")
-    remote = (
-        f"mkdir -p {shlex.quote(str(Path(path).parent))} && cat > {shlex.quote(path)}"
-    )
+    remote = upload_remote_command(path)
     rc, out, err = ssh_exec(meta["guest_ip"], remote, stdin=data, timeout=60.0)
     if rc != 0:
         raise HTTPError(500, f"upload failed: {err.decode(errors='replace')}")
@@ -1085,6 +1126,30 @@ def do_exec(vm_id: str, cmd: list[str], timeout_ms: int = 0) -> dict:
         "stdout": base64.b64encode(out).decode(),
         "stderr": base64.b64encode(err).decode(),
     }
+
+
+# The guest has no docker. The rootfs bakes in docker's compose v2 binary as a
+# compose *provider* and drives podman through podman.socket
+# (qemu-bake-cuda-rootfs.sh enables the socket for exactly this reason). Compose
+# still defaults to /var/run/docker.sock, which does not exist in the guest, so
+# DOCKER_HOST has to name podman's socket explicitly. Without it compose cannot
+# reach a runtime and fails the whole create, not just the service: `docker
+# compose up` runs before fused starts, under `set -e`.
+PODMAN_SOCKET = "/run/podman/podman.sock"
+
+
+def compose_up_command() -> str:
+    """Shell that starts the compose project, for a guest that declared services.
+
+    Guarded on the file's presence: an environment with no `services` in its
+    Fusefile has no compose.yaml and this is a no-op.
+    """
+    return (
+        "if [ -f /fuse/compose.yaml ]; then "
+        f"DOCKER_HOST=unix://{PODMAN_SOCKET} "
+        "/usr/local/bin/docker-compose -f /fuse/compose.yaml up -d; "
+        "fi; "
+    )
 
 
 def do_start_agent(vm_id: str, manifest_path: str, secrets_path: str,
@@ -1146,11 +1211,7 @@ def do_start_agent(vm_id: str, manifest_path: str, secrets_path: str,
         "[Install]\n"
         "WantedBy=multi-user.target\n"
     )
-    compose_up = (
-        "if [ -f /fuse/compose.yaml ]; then "
-        "/usr/local/bin/docker-compose -f /fuse/compose.yaml up -d; "
-        "fi; "
-    )
+    compose_up = compose_up_command()
     remote = (
         "export LC_ALL=C; set -e; "
         f"test -x {shlex.quote(binary_path)} || {{ echo 'agent binary not found at {binary_path}' >&2; exit 127; }}; "

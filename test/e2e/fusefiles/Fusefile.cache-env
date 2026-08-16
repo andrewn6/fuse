@@ -1,0 +1,47 @@
+version: 1
+
+# the same env block as Fusefile.env-secrets, but with the layer cache on.
+#
+# this one exists to pin down a discrepancy rather than to prove a feature.
+# schema/fusefile-v1.json documents env as "set for every build step and for
+# run", but internal/fusefile/compile.go keeps /fuse/env out of BuildScript on
+# purpose (compile_test.go:961 calls the build path "deliberately left alone"),
+# and with cache on the build steps run through that path. so either the schema
+# or the compiler is wrong. the runner records what actually happens instead of
+# asserting a verdict.
+cache:
+  enabled: true
+
+resources:
+  cpus: 1
+  memory: 512MB
+  storage: 2GB
+  max_runtime: 20m
+
+env:
+  APP_MODE:
+    value: production
+  API_TOKEN:
+    secret: api_token
+
+secrets:
+  - api_token
+
+build:
+  # THE case that matters: a cacheable step, so it runs through the layer-cache
+  # build path rather than the startup script. if env is missing anywhere, it is
+  # missing here.
+  - 'printf "%s" "${APP_MODE:-UNSET}" > /workspace/cached-build-mode.txt'
+  # an uncacheable step by contrast falls back to the startup script, which does
+  # source /fuse/env. running both isolates which path is responsible.
+  - run: 'printf "%s" "${APP_MODE:-UNSET}" > /workspace/build-mode.txt'
+    cache: false
+  # a step that reads a secret must be uncacheable: its output would otherwise
+  # be baked into a layer keyed only by the step text.
+  - run: 'printf "%s" "${API_TOKEN:-UNSET}" > /workspace/build-token.txt'
+    cache: false
+
+run: |
+  printf "%s" "${APP_MODE:-UNSET}" > /workspace/run-mode.txt
+
+workspace: /workspace

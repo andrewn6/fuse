@@ -1,0 +1,31 @@
+version: 1
+
+# the control case. no cache, no services, no secrets: if this fails, nothing
+# below it is worth reading, because scheduling, boot, build, run and workspace
+# are all it touches.
+#
+# image: is deliberately omitted. a host with no IMAGES_DIR has no named images
+# and the agent 400s on any image: value, so the base rootfs is the only option.
+resources:
+  cpus: 1
+  memory: 512MB
+  storage: 2GB
+  max_runtime: 20m
+
+# with cache off, build steps are folded into the startup script rather than
+# run through the layer-cache exec path. Fusefile.cache covers the other one.
+build:
+  - 'echo "build ran" > /workspace/build.marker'
+  # a step's workdir is wrapped in a subshell, so it must not leak into the next
+  # step. the next step writes a relative path and we assert it landed in the
+  # workspace, not in /tmp.
+  - run: 'echo "scoped" > scoped.marker'
+    workdir: /tmp
+  - 'echo "$PWD" > /workspace/cwd.marker'
+
+# run executes synchronously during create. anything long-lived has to be
+# backgrounded or the create hangs until the startup timeout and 500s.
+run: |
+  echo "run ran" > /workspace/run.marker
+
+workspace: /workspace

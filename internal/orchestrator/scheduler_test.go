@@ -967,6 +967,90 @@ func TestSchedule_labelMissOnFullHostsStillReportsCapacity(t *testing.T) {
 	}
 }
 
+// A fleet with no gpus at all used to refuse a gpu request with a bare
+// cpu/ram/disk shortfall, for a spec whose cpu and ram plainly fit. The reader
+// was sent to look at resources that were never the problem.
+func TestSchedule_gpuOnGPUlessFleetNamesTheGPU(t *testing.T) {
+	// A firecracker host with cpu and ram to spare: the only thing it cannot
+	// provide is the gpu.
+	h := gpuHost("fc-1", BackendFirecracker, 0, "")
+	_, _, err := Schedule(gpuSpec(1, ""), []*Host{h}, PlacementSpread)
+	if !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("err = %v, want ErrNoCapacity", err)
+	}
+	if !strings.Contains(err.Error(), "gpu") {
+		t.Errorf("err = %q, want the gpu named as the reason", err)
+	}
+	if !strings.Contains(err.Error(), "serves gpus") {
+		t.Errorf("err = %q, want the fleet-wide reason, not a per-host fit", err)
+	}
+	// The old message. Reporting a cpu/ram/disk shortfall for a 1 cpu request
+	// against an 8 cpu host is what made this worth fixing.
+	if strings.Contains(err.Error(), "no eligible host fits") {
+		t.Errorf("err = %q, still reports a bare capacity shortfall", err)
+	}
+}
+
+func TestSchedule_gpuRefusalReportsKindAndProfile(t *testing.T) {
+	// The request is echoed back in the vocabulary the Fusefile used, so a
+	// gpu_kind or gpu_profile typo is visible in the refusal itself.
+	s := gpuSpec(2, "a100")
+	s.GPUProfile = "1g.10gb"
+	_, _, err := Schedule(s, []*Host{gpuHost("fc-1", BackendFirecracker, 0, "")}, PlacementSpread)
+	if err == nil {
+		t.Fatal("expected a refusal")
+	}
+	for _, want := range []string{"1g.10gb", "a100", "2"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("err = %q, want it to mention %q", err, want)
+		}
+	}
+}
+
+// The mirror case: a fleet that does serve gpus but has none free right now is
+// a genuine capacity shortfall and must keep saying so.
+func TestSchedule_busyGPUFleetStillReportsCapacity(t *testing.T) {
+	h := gpuHost("gpu-1", BackendQEMU, 2, "a100")
+	h.Allocated.GPUs = 2
+	_, _, err := Schedule(gpuSpec(1, "a100"), []*Host{h}, PlacementSpread)
+	if !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("err = %v, want ErrNoCapacity", err)
+	}
+	if strings.Contains(err.Error(), "serves gpus") {
+		t.Errorf("err = %q, a busy gpu fleet is a shortfall, not a gpu-less fleet", err)
+	}
+	// It should still say a gpu was wanted, so the reader knows which
+	// dimension ran out.
+	if !strings.Contains(err.Error(), "gpu") {
+		t.Errorf("err = %q, want the gpu named in the capacity message", err)
+	}
+}
+
+// A cordoned gpu host does not make the fleet gpu-capable: it cannot take work.
+func TestSchedule_cordonedGPUHostIsNotAServingFleet(t *testing.T) {
+	h := gpuHost("gpu-1", BackendQEMU, 2, "a100")
+	h.State = HostCordoned
+	_, _, err := Schedule(gpuSpec(1, ""), []*Host{h}, PlacementSpread)
+	if !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("err = %v, want ErrNoCapacity", err)
+	}
+	if !strings.Contains(err.Error(), "serves gpus") {
+		t.Errorf("err = %q, want the gpu-less-fleet reason for a cordoned gpu host", err)
+	}
+}
+
+// The common case must not regress: a cpu-only spec says nothing about gpus.
+func TestSchedule_cpuOnlyRefusalMentionsNoGPU(t *testing.T) {
+	h := host("h1", 1, 256, 10, 10, HostActive)
+	_, _, err := Schedule(spec(64, 256, 10), []*Host{h}, PlacementSpread)
+	if !errors.Is(err, ErrNoCapacity) {
+		t.Fatalf("err = %v, want ErrNoCapacity", err)
+	}
+	if strings.Contains(err.Error(), "gpu") {
+		t.Errorf("err = %q, a cpu-only spec must not mention gpus", err)
+	}
+}
+
 func TestSchedule_pinPlusLabelsBothApply(t *testing.T) {
 	h1 := labelledHost("h1", map[string]string{"disk": "nvme"})
 	h2 := labelledHost("h2", map[string]string{"disk": "nvme"})

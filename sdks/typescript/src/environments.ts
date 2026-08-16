@@ -1,13 +1,18 @@
 import type { CallOptions, Transport } from "./transport.js";
 import type {
+  ComputerAction,
+  ComputerDisplay,
+  ComputerResult,
+  ComputerToolResult,
   CreateRequest,
   EnvironmentInfo,
   Event,
   ExecRequest,
   ExecResult,
   ForkOptions,
+  ToolResultBlock,
 } from "./types.js";
-import { FuseError } from "./errors.js";
+import { FuseError, isFuseApiError } from "./errors.js";
 import { requireArg } from "./validate.js";
 import { streamEvents } from "./events.js";
 
@@ -146,6 +151,111 @@ export class EnvironmentsService {
       "POST",
       `/v1/environments/${encodeURIComponent(vmId)}`,
       { query: { action: "exec" }, body, signal: opts.signal },
+    );
+  }
+
+  /**
+   * Relay one computer-use action to the environment's desktop and return the
+   * result, usually carrying a base64 PNG screenshot. Requires an environment
+   * booted from a desktop image; on any other image the server answers 503
+   * with a reason.
+   *
+   * @example
+   * const res = await client.environments.computer(id, {
+   *   action: "left_click",
+   *   coordinate: [512, 384],
+   * });
+   */
+  async computer(
+    vmId: string,
+    action: ComputerAction,
+    opts: CallOptions = {},
+  ): Promise<ComputerResult> {
+    requireArg(vmId, "vm id");
+    requireArg(action?.action, "action");
+    return this.t.json<ComputerResult>(
+      "POST",
+      `/v1/environments/${encodeURIComponent(vmId)}/computer`,
+      { body: action, signal: opts.signal },
+    );
+  }
+
+  /**
+   * Execute one computer tool_use against the environment and shape the
+   * answer for the Messages API: the tool_use block's `input` goes in
+   * verbatim (it is already the wire shape the computer endpoint takes), and
+   * content blocks for the tool_result come out.
+   *
+   * An action the environment refuses (a malformed coordinate, a display
+   * that is not up) resolves to `is_error` content rather than throwing: the
+   * agent loop should feed it to the model, which is the party that can
+   * correct it. A throw is reserved for failures the model cannot fix —
+   * transport, auth, an unknown environment.
+   *
+   * @example
+   * for (const block of msg.content) {
+   *   if (block.type === "tool_use" && block.name === "computer") {
+   *     const result = await client.environments.computerToolResult(id, block.input);
+   *     toolResults.push({ type: "tool_result", tool_use_id: block.id, ...result });
+   *   }
+   * }
+   */
+  async computerToolResult(
+    vmId: string,
+    input: unknown,
+    opts: CallOptions = {},
+  ): Promise<ComputerToolResult> {
+    requireArg(vmId, "vm id");
+    const action = (input as { action?: string } | null)?.action ?? "";
+    if (action === "") {
+      return {
+        is_error: true,
+        content: [{ type: "text", text: "tool input names no action" }],
+      };
+    }
+    let res: ComputerResult;
+    try {
+      res = await this.t.json<ComputerResult>(
+        "POST",
+        `/v1/environments/${encodeURIComponent(vmId)}/computer`,
+        { body: input, signal: opts.signal },
+      );
+    } catch (err) {
+      if (
+        isFuseApiError(err) &&
+        (err.status === 400 || err.status === 409 || err.status === 503)
+      ) {
+        return {
+          is_error: true,
+          content: [{ type: "text", text: err.message || "the computer action failed" }],
+        };
+      }
+      throw err;
+    }
+    const content: ToolResultBlock[] = [];
+    if (res.output) content.push({ type: "text", text: res.output });
+    if (res.screenshot) {
+      content.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: "image/png",
+          data: res.screenshot,
+        },
+      });
+    }
+    if (content.length === 0) content.push({ type: "text", text: "done" });
+    return { content };
+  }
+
+  /** Report whether the environment has a live display and at what geometry.
+   * up is false with a reason on an image with no desktop. */
+  async computerDisplay(vmId: string, opts: CallOptions = {}): Promise<ComputerDisplay> {
+    requireArg(vmId, "vm id");
+    return this.t.json<ComputerDisplay>(
+      "GET",
+      `/v1/environments/${encodeURIComponent(vmId)}/computer`,
+      { signal: opts.signal },
     );
   }
 

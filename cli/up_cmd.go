@@ -155,13 +155,20 @@ func newUpCmd() *cobra.Command {
 				return fmt.Errorf("missing required secrets: %s (pass --allow-empty-secrets to accept empty values)", strings.Join(missing, ", "))
 			}
 
+			// --task-id wins, then the Fusefile's name:, then the parent
+			// directory. only the last one is a guess, so it is the only one
+			// announced: a declared name is what the author asked for and
+			// does not need narrating back at them.
+			if taskID == "" && f.Name != "" {
+				taskID = f.Name
+			}
 			if taskID == "" {
 				taskID = defaultTaskID(path)
-				// the Fusefile has no task id field, so the cli invents one
-				// from the parent directory name. say so before the create,
-				// since two checkouts of the same repo derive the same id and
-				// the second one collides.
-				infof("no --task-id: using %q, derived from the Fusefile's directory", taskID)
+				// nothing declared a name, so the cli invents one from the
+				// parent directory. say so before the create, since two
+				// checkouts of the same repo derive the same id and the
+				// second one collides.
+				infof("no --task-id and no `name:` in the Fusefile: using %q, derived from the Fusefile's directory", taskID)
 			}
 
 			// a build artifact already carries the setup phase's result baked
@@ -246,6 +253,7 @@ func newUpCmd() *cobra.Command {
 				StartupScriptTimeoutSeconds: c.StartupTimeoutSeconds,
 				Expose:                      toSDKExpose(c.Expose),
 				Healthcheck:                 toSDKHealthcheck(c.Healthcheck),
+				Desktop:                     toSDKDesktop(c.Desktop),
 				SeedSnapshotID:              seedID,
 				// the gateway carries a credential, so it is a flag rather
 				// than a Fusefile field. matching `fuse environment create`
@@ -449,6 +457,16 @@ func toSDKHealthcheck(in *fusefile.HealthcheckSpec) *fuse.HealthcheckSpec {
 		out.HTTP = &fuse.HealthcheckHTTP{Port: in.HTTP.Port, Path: in.HTTP.Path}
 	}
 	return out
+}
+
+// toSDKDesktop converts the compiler's desktop block into the SDK wire type.
+// Nil in, nil out: a Fusefile with no `desktop:` block must send no desktop,
+// which is what tells the server to ship no geometry file into the guest.
+func toSDKDesktop(in *fusefile.DesktopSpec) *fuse.DesktopSpec {
+	if in == nil {
+		return nil
+	}
+	return &fuse.DesktopSpec{Width: in.Width, Height: in.Height}
 }
 
 // missingSecrets returns the entries of required that have does not supply a

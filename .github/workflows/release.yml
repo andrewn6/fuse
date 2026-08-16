@@ -99,15 +99,48 @@ jobs:
             gh release create "v${V}" --title "v${V}" --generate-notes
           fi
 
-          # Let release-please move on instead of aborting on an untagged,
-          # merged release PR next cycle.
-          PR="$(gh pr list --state merged --label 'autorelease: pending' \
-                  --limit 1 --json number -q '.[0].number // empty')"
-          if [ -n "${PR}" ]; then
-            gh pr edit "${PR}" --remove-label 'autorelease: pending' \
-                               --add-label 'autorelease: tagged'
-            echo "relabelled release PR #${PR} as autorelease: tagged"
+      # Its own step, and `always()`, because the tagging step above returns
+      # early on two paths that both leave a merged release PR sitting at
+      # `autorelease: pending`: no version in the manifest, and "already
+      # tagged". That second one is the common case. release-please usually
+      # tags correctly and just does not move the label, and a stale label is
+      # on its own enough to abort EVERY later run with "untagged, merged
+      # release PRs outstanding" while reporting success and creating no PR.
+      # The release that gets blocked is never the one being cut here, so this
+      # has to run whether or not this job had anything to tag.
+      - name: Clear the release PR label that blocks the next cycle
+        if: always()
+        env:
+          GH_TOKEN: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          PENDING: "autorelease: pending"
+          TAGGED: "autorelease: tagged"
+        run: |
+          set -euo pipefail
+
+          # REST, not `gh pr list`/`gh pr edit`. Those go through GraphQL, which
+          # resolves author/org fields and so demands `read:org`; the token here
+          # is a classic repo-scope PAT, because the org is on the free plan and
+          # fine-grained tokens cannot write to it. The GraphQL calls failed with
+          # "the 'login' field requires ['read:org']" and took the whole job down
+          # AFTER the release had been cut successfully, which is the worst
+          # possible place to fail: a red job and a shipped release.
+          # The issues endpoint serves pull requests too and needs only `repo`.
+          PR="$(gh api -X GET "repos/${GITHUB_REPOSITORY}/issues" \
+                  -f state=closed -f "labels=${PENDING}" -f per_page=20 \
+                  --jq '[.[] | select(.pull_request != null)][0].number // empty')"
+
+          if [ -z "${PR}" ]; then
+            echo "no merged release PR left at '${PENDING}'; nothing to clear"
+            exit 0
           fi
+
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/issues/${PR}/labels" \
+            -f "labels[]=${TAGGED}" >/dev/null
+          # The label name contains a space, so it is percent-encoded into the
+          # path rather than interpolated raw.
+          gh api -X DELETE \
+            "repos/${GITHUB_REPOSITORY}/issues/${PR}/labels/${PENDING// /%20}" >/dev/null
+          echo "relabelled release PR #${PR} as '${TAGGED}'"
 
   # full gate, run on the pushed tag (race detector + all linters) before any publish.
   verify:

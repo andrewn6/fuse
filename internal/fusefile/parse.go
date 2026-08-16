@@ -72,6 +72,14 @@ func validate(f *Fusefile) error {
 		errs = append(errs, fmt.Errorf("version: must be 1"))
 	}
 
+	// name is optional. an explicit `name: ""` is indistinguishable from an
+	// absent key on a plain string field, so both mean "fall back to the
+	// directory" rather than one of them being an error.
+	if f.Name != "" && !ValidName(f.Name) {
+		errs = append(errs, fmt.Errorf(
+			"name: invalid name %q, must be lowercase letters, digits and dashes, alphanumeric at both ends, 63 chars max", f.Name))
+	}
+
 	// placement labels: keys are sorted first so the joined message is stable
 	// regardless of map iteration order.
 	labelKeys := make([]string, 0, len(f.Placement.Labels))
@@ -275,6 +283,7 @@ func validate(f *Fusefile) error {
 	}
 
 	errs = append(errs, validateHealthProbe(f.Healthcheck)...)
+	errs = append(errs, validateDesktop(f.Desktop)...)
 
 	// an empty secret name is a requirement no `--secret` flag can satisfy, and
 	// the server's ExtractRequiredSecrets skips empty refs, so the two sides
@@ -334,6 +343,34 @@ func validateHealthProbe(hc *HealthProbe) []error {
 		errs = append(errs, fmt.Errorf("healthcheck.retries: must not be negative"))
 	}
 
+	return errs
+}
+
+// desktop geometry bounds. the floor is the smallest session anything can
+// usefully render into; the ceiling is 4k, beyond which xvfb memory and
+// screenshot payloads stop being reasonable.
+const (
+	minDesktopDim = 320
+	maxDesktopDim = 3840
+)
+
+// validateDesktop checks the geometry of the desktop block. Unlike the
+// healthcheck fields, both dimensions are required: a guessed dimension would
+// silently shift every coordinate a computer-use model emits, so an omitted
+// one is a config error, not a default.
+//
+// A nil desktop is the common case (the block is optional) and yields nothing.
+func validateDesktop(d *Desktop) []error {
+	if d == nil {
+		return nil
+	}
+	var errs []error
+	if d.Width < minDesktopDim || d.Width > maxDesktopDim {
+		errs = append(errs, fmt.Errorf("desktop.width: must be between %d and %d, got %d", minDesktopDim, maxDesktopDim, d.Width))
+	}
+	if d.Height < minDesktopDim || d.Height > maxDesktopDim {
+		errs = append(errs, fmt.Errorf("desktop.height: must be between %d and %d, got %d", minDesktopDim, maxDesktopDim, d.Height))
+	}
 	return errs
 }
 

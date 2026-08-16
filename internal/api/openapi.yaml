@@ -718,6 +718,97 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/environments/{vmId}/computer:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    post:
+      tags: [environments]
+      operationId: computerAction
+      summary: Drive the environment's desktop
+      description: |
+        Relay one computer-use action to the environment's guest agent:
+        move the mouse, click, type, scroll, screenshot, or zoom into a
+        region. The response carries a base64 PNG screenshot on every
+        action that implies one, which is what a computer-use agent loop
+        feeds back to the model as the tool_result.
+
+        The action vocabulary is the guest agent's (it matches Anthropic's
+        `computer_20251124` tool): `screenshot`, `left_click`,
+        `right_click`, `middle_click`, `double_click`, `triple_click`,
+        `left_click_drag`, `left_mouse_down`, `left_mouse_up`,
+        `mouse_move`, `type`, `key`, `hold_key`, `scroll`, `wait`, `zoom`,
+        `cursor_position`. Fields this server has not learned yet pass
+        through to the guest untouched, so a newer image's actions work
+        through an older control plane.
+
+        Requires an environment booted from a desktop image; on any other
+        image the guest answers with 503 and a reason. Unlike exec this
+        accepts API keys: an action here is a mouse click on a display the
+        image chose to run, not a root shell.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ComputerActionRequest"
+      responses:
+        "200":
+          description: The action's result, usually carrying a screenshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComputerActionResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The environment is not running.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          $ref: "#/components/responses/Unimplemented"
+        "503":
+          description: The environment has no display (not a desktop image, or the display is still starting).
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          $ref: "#/components/responses/InternalError"
+    get:
+      tags: [environments]
+      operationId: computerDisplay
+      summary: Report the environment's display
+      description: |
+        Report whether the environment has a live display and at what
+        geometry, so a caller can populate `display_width_px` /
+        `display_height_px` in its computer tool definition without
+        hardcoding them. Answers 200 with `up: false` (and a reason) on an
+        image with no desktop, because "is there a desktop" is exactly the
+        question this route exists to answer.
+      responses:
+        "200":
+          description: The display report.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ComputerDisplay"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The environment is not running.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          $ref: "#/components/responses/Unimplemented"
+        "500":
+          $ref: "#/components/responses/InternalError"
+
   /v1/environments/{vmId}/snapshots:
     parameters:
       - $ref: "#/components/parameters/VMID"
@@ -1562,6 +1653,119 @@ components:
             Grace window from the first attempt during which failures are
             not counted. It ends for good once the probe passes once.
 
+    DesktopSpec:
+      type: object
+      required: [width, height]
+      description: |
+        The geometry of the environment's graphical session (the
+        Fusefile's `desktop:` block). Requires an image that carries the
+        desktop stack; on any other image the declaration is inert. Both
+        fields are required: a guessed dimension would silently shift
+        every coordinate a computer-use model emits.
+      properties:
+        width:
+          type: integer
+          minimum: 320
+          maximum: 3840
+          description: Display width in pixels.
+        height:
+          type: integer
+          minimum: 320
+          maximum: 3840
+          description: Display height in pixels.
+
+    ComputerActionRequest:
+      type: object
+      required: [action]
+      description: |
+        One computer-use action, in the same shape Anthropic's computer
+        tool emits as tool_use input, so a caller's translation layer is
+        mechanical. Only `action` is validated here; the guest agent owns
+        the full schema and unknown fields pass through to it untouched.
+      properties:
+        action:
+          type: string
+          description: |
+            The action to perform, e.g. `screenshot`, `left_click`,
+            `type`, `key`, `scroll`, `zoom`.
+          example: left_click
+        coordinate:
+          type: array
+          items:
+            type: integer
+          minItems: 2
+          maxItems: 2
+          description: "[x, y] target for pointer actions."
+          example: [512, 384]
+        start_coordinate:
+          type: array
+          items:
+            type: integer
+          minItems: 2
+          maxItems: 2
+          description: "[x, y] origin for left_click_drag."
+        text:
+          type: string
+          description: |
+            The payload for `type`, the keysym combo for `key` and
+            `hold_key` (e.g. `ctrl+shift+t`), or modifiers held during a
+            click action.
+        region:
+          type: array
+          items:
+            type: integer
+          minItems: 4
+          maxItems: 4
+          description: "[x1, y1, x2, y2] crop for `zoom`."
+        duration:
+          type: number
+          description: Seconds for `hold_key` and `wait`, capped guest-side at 100.
+        scroll_direction:
+          type: string
+          enum: [up, down, left, right]
+        scroll_amount:
+          type: integer
+          description: Wheel clicks for `scroll`, 1 to 100.
+      example:
+        action: left_click
+        coordinate: [512, 384]
+
+    ComputerActionResponse:
+      type: object
+      description: The guest's answer to one action.
+      properties:
+        output:
+          type: string
+          description: Textual output, e.g. the pointer location for `cursor_position`.
+        screenshot:
+          type: string
+          description: |
+            Base64 PNG of the display after the action settled. Present on
+            every action that implies one; for `zoom` it is the cropped
+            region at full resolution.
+
+    ComputerDisplay:
+      type: object
+      required: [up, width, height]
+      description: The guest display report.
+      properties:
+        display:
+          type: string
+          description: The X display driven by the computer surface.
+          example: ":1"
+        up:
+          type: boolean
+          description: Whether the display is serving.
+        width:
+          type: integer
+          description: Live display width in pixels, 0 when the display is down.
+        height:
+          type: integer
+          description: Live display height in pixels, 0 when the display is down.
+        error:
+          type: string
+          description: Why the display is down, when it is.
+
     Health:
       type: object
       required: [state]
@@ -1669,6 +1873,13 @@ components:
             populated. It is not evaluated inside this request: create
             returns as soon as the VM is up, and the verdict arrives on
             later reads of the environment.
+        desktop:
+          allOf:
+            - $ref: "#/components/schemas/DesktopSpec"
+          description: |
+            Graphical session geometry. Omit it for an environment with no
+            desktop, in which case a desktop image keeps its baked default
+            geometry.
 
     Environment:
       type: object

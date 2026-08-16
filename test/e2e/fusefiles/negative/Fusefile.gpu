@@ -1,0 +1,15 @@
+version: 1
+
+# a gpu request against a fleet with no gpu host. the guardrail that matters is
+# that this is refused rather than scheduled onto a cpu host, where the workload
+# would boot and then fail at first cuda call.
+resources:
+  cpus: 2
+  memory: 2GB
+  storage: 4GB
+  gpu: 1
+  gpu_kind: a100
+  max_runtime: 10m
+
+run: |
+  nvidia-smi -L > /workspace/gpu.txt 2>&1

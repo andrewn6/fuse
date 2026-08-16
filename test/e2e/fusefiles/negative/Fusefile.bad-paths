@@ -1,0 +1,16 @@
+version: 1
+
+# /fuse belongs to the guest agent: it holds the auth token, the resolved
+# secrets and the TLS material. a copy: that lands there would let a Fusefile
+# overwrite its own credentials, so the destination is refused at parse time.
+resources:
+  cpus: 1
+  memory: 512MB
+  storage: 2GB
+
+copy:
+  - from: ../assets/app/version.txt
+    to: /fuse/version.txt
+
+run: |
+  echo hi

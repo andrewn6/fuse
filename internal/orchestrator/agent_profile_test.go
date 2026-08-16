@@ -279,3 +279,32 @@ func TestFusedAgentSpecNoHealthcheckFileWhenUnset(t *testing.T) {
 		t.Errorf("wrote %s for an environment with no healthcheck", GuestHealthcheckPath)
 	}
 }
+
+// The desktop geometry reaches the guest the same way the probe does: as a
+// file, because Files is the only channel the firecracker host agent carries.
+func TestFusedAgentSpecWritesDesktopFile(t *testing.T) {
+	spec := FusedAgentSpec(DefaultFusedManifest, nil, nil, BootOptions{
+		Desktop: &DesktopSpec{Width: 1280, Height: 800},
+	})
+
+	raw, ok := spec.Files[GuestDesktopPath]
+	if !ok {
+		t.Fatalf("expected a desktop file at %s", GuestDesktopPath)
+	}
+	var got DesktopSpec
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatalf("desktop file is not valid json: %v", err)
+	}
+	if got.Width != 1280 || got.Height != 800 {
+		t.Errorf("desktop = %+v, want 1280x800", got)
+	}
+}
+
+// No desktop block means no file: its absence is what tells the image to keep
+// its baked default geometry.
+func TestFusedAgentSpecNoDesktopFileWhenUnset(t *testing.T) {
+	spec := FusedAgentSpec(DefaultFusedManifest, nil, nil, BootOptions{})
+	if _, ok := spec.Files[GuestDesktopPath]; ok {
+		t.Errorf("wrote %s for an environment with no desktop", GuestDesktopPath)
+	}
+}

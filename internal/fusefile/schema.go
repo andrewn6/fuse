@@ -12,7 +12,22 @@ import (
 
 // Fusefile is the v1 authoring contract.
 type Fusefile struct {
-	Version   int         `yaml:"version"`
+	Version int `yaml:"version"`
+
+	// Name is the task id this Fusefile boots under, and through it the
+	// environment's identity: the orchestrator names the vm by prefixing the
+	// task id, so `name: sandbox` is the environment `fuse-sandbox`.
+	//
+	// It is optional and `fuse up --task-id` still wins, but declaring it is
+	// what makes the name a property of the project rather than of whatever
+	// directory the file happens to sit in. Without it the CLI falls back to
+	// the parent directory's name, so two checkouts of the same repo derive
+	// the same id and the second `up` collides.
+	//
+	// Held to a DNS label for the same reason expose[].as is: it becomes part
+	// of a vm name rather than free text.
+	Name string `yaml:"name,omitempty"`
+
 	Image     string      `yaml:"image,omitempty"`
 	Resources Resources   `yaml:"resources,omitempty"`
 	Placement Placement   `yaml:"placement,omitempty"`
@@ -63,6 +78,13 @@ type Fusefile struct {
 	// and there is at most one: the point of the block is that the whole
 	// sandbox has a single verdict.
 	Healthcheck *HealthProbe `yaml:"healthcheck,omitempty"`
+
+	// Desktop declares that the environment boots a graphical session and at
+	// what geometry. It requires an image that carries the desktop stack
+	// (see fc-bake-desktop-rootfs.sh); on any other image the declaration is
+	// inert and the computer surface answers 503. Nil means no desktop, and
+	// stays nil all the way down, the same contract Healthcheck has.
+	Desktop *Desktop `yaml:"desktop,omitempty"`
 
 	// StartupTimeout bounds the generated startup script (build + run) as a
 	// go duration, e.g. "45s". Empty means the orchestrator's default. The
@@ -448,6 +470,19 @@ type HealthProbeHTTP struct {
 	Port int `yaml:"port"`
 	// Path is the request path, which must start with "/". Empty means "/".
 	Path string `yaml:"path,omitempty"`
+}
+
+// Desktop is the geometry of the environment's graphical session. Both
+// fields are required: a desktop with a guessed dimension would silently
+// shift every coordinate a computer-use model emits, which presents as model
+// failure rather than as the config error it is. The display number is fixed
+// at :1 and deliberately not authorable until something needs a second
+// display.
+type Desktop struct {
+	// Width is the display width in pixels.
+	Width int `yaml:"width"`
+	// Height is the display height in pixels.
+	Height int `yaml:"height"`
 }
 
 // EnvValue is either a literal value or a secret reference. exactly one is set.

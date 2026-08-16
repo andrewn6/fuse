@@ -1,0 +1,143 @@
+---
+title: Computer use
+sidebar:
+  icon: mouse-pointer
+description: Point Claude's computer use tool at a Fuse environment and let it drive the desktop
+---
+
+Computer use is a client-side tool: Claude never connects to the sandbox.
+Claude emits a `tool_use` block, your agent loop translates it into actions
+against an environment you control, captures a screenshot, and returns it as
+the `tool_result`. Fuse is the environment underneath — per-VM isolation, a
+baked desktop image, and an authenticated action surface — and the SDKs ship
+the translation layer, so the loop you write is short.
+
+## What you need
+
+- A host with the desktop image baked and published
+  (see [Desktop environments](/docs/guides/desktop-environments))
+- A Fusefile that names the image and declares the geometry:
+
+```yaml
+version: 1
+image: desktop
+
+desktop:
+  width: 1280
+  height: 800
+
+resources:
+  cpus: 2
+  memory: 4GB
+```
+
+- An Anthropic API key, and a model that takes the `computer_20251124` tool:
+  Opus 5, Sonnet 5, Opus 4.8, 4.7, 4.6, Sonnet 4.6, or Opus 4.5, with the
+  `computer-use-2025-11-24` beta header. Older models use `computer_20250124`
+  and `computer-use-2025-01-24`, which lack the `zoom` action.
+
+## The tool definition
+
+The tool definition is yours, not Fuse's — it goes in your Messages API
+request. Size it from the environment's live display rather than hardcoding:
+
+```json
+{
+  "type": "computer_20251124",
+  "name": "computer",
+  "display_width_px": 1280,
+  "display_height_px": 800,
+  "display_number": 1,
+  "enable_zoom": true
+}
+```
+
+`GET /v1/environments/{id}/computer` (SDK: `computerDisplay` /
+`computer_display`) reports the live geometry and whether the display is up,
+so the two `display_*` fields never drift from reality.
+
+## The loop
+
+Each SDK has a `computerToolResult` / `computer_tool_result` /
+`ComputerToolResult` helper that takes a `tool_use` block's input verbatim,
+executes it against the environment, and returns content blocks shaped for
+the Messages API. An action the environment refuses comes back as `is_error`
+content rather than an exception, so the model can correct itself.
+
+```ts
+import Anthropic from "@anthropic-ai/sdk";
+import { FuseClient } from "@folsom/fuse";
+
+const fuse = new FuseClient({ baseUrl: process.env.FUSE_URL!, token: process.env.FUSE_TOKEN! });
+const claude = new Anthropic();
+
+const display = await fuse.environments.computerDisplay(envId);
+const tool = {
+  type: "computer_20251124" as const,
+  name: "computer" as const,
+  display_width_px: display.width,
+  display_height_px: display.height,
+  display_number: 1,
+  enable_zoom: true,
+};
+
+const messages: Anthropic.Beta.BetaMessageParam[] = [{ role: "user", content: task }];
+while (true) {
+  const msg = await claude.beta.messages.create({
+    model: "claude-opus-5",
+    max_tokens: 4096,
+    tools: [tool],
+    betas: ["computer-use-2025-11-24"],
+    messages,
+  });
+  messages.push({ role: "assistant", content: msg.content });
+  if (msg.stop_reason !== "tool_use") break;
+
+  const results = [];
+  for (const block of msg.content) {
+    if (block.type === "tool_use" && block.name === "computer") {
+      const r = await fuse.environments.computerToolResult(envId, block.input);
+      results.push({ type: "tool_result" as const, tool_use_id: block.id, ...r });
+    }
+  }
+  messages.push({ role: "user", content: results });
+}
+```
+
+The same loop in Python is a runnable example at
+[`sdks/python/examples/computer_use.py`](https://github.com/folsomintel/fuse/blob/main/sdks/python/examples/computer_use.py):
+create the environment, loop `messages.create`, feed `tool_use` through the
+adapter, stop on `end_turn`, drain.
+
+## Resolution and cost
+
+A computer-use loop sends a screenshot back on every step, and the model
+bills for each one — up to roughly 4784 tokens per image on Opus 4.7 and
+later at the 2576px maximum. Resolution is therefore the main cost lever:
+
+- 1080p (1920x1080) is the documented balance point
+- 720p or 1366x768 for cost-sensitive runs
+- the image default, 1024x768, is a fine floor for simple tasks
+
+On Opus 4.7 and later, coordinates map 1:1 to image pixels, so no
+scale-factor math is needed anywhere in the loop. The tokens are billed to
+your Anthropic account, not your Fuse host — but the `desktop:` block is
+where you pick the trade-off.
+
+## Isolation, honestly
+
+The whole point of computer use is running untrusted, model-chosen actions
+with a browser present. What Fuse gives you today: each environment is its
+own Firecracker microVM with its own kernel, and the computer surface is
+bearer-authenticated end to end (your API key to the orchestrator, a per-VM
+guest token from the orchestrator to the agent). What it does not give you
+yet: per-environment egress policy — the browser can reach whatever the host
+can. Treat the environment as a blast-radius boundary, not a network policy,
+and keep secrets out of desktop environments a model is driving.
+
+## Read next
+
+- [Desktop environments](/docs/guides/desktop-environments) — baking and
+  using the image
+- [`fuse computer`](/reference/cli/computer) — poking at a session by hand
+- [Agent sandboxes](/docs/guides/agent-sandboxes) — the isolation story
