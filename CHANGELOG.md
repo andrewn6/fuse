@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.28.0](https://github.com/folsomintel/fuse/compare/v0.27.0...v0.28.0) (2026-08-19)
+
+
+### Features
+
+* **desktop:** live view of the desktop with human takeover ([#207](https://github.com/folsomintel/fuse/issues/207)) ([480215e](https://github.com/folsomintel/fuse/commit/480215e8ce24132aad00c270e6349775b7b17c98))
+
+
+### Bug Fixes
+
+* keep firecracker api sockets under a short path to respect sun_len ([#214](https://github.com/folsomintel/fuse/issues/214)) ([566b22d](https://github.com/folsomintel/fuse/commit/566b22d7eafe522c1d0bed308f81f9f4f82ed352))
+
 ## [0.27.0](https://github.com/folsomintel/fuse/compare/v0.26.0...v0.27.0) (2026-08-16)
 
 
