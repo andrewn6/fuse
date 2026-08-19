@@ -22,6 +22,9 @@ pub(crate) struct Transport {
     // by something else (a long-running exec, an sse stream). do not use it
     // for normal requests.
     stream_http: reqwest::Client,
+    // upgrade_http is http/1.1-only and has no total timeout, for connection
+    // upgrades (the desktop stream). do not use it for anything else.
+    upgrade_http: reqwest::Client,
     bearer: Option<String>,
     user_agent: String,
     request_id: Option<Arc<RequestIdFn>>,
@@ -32,6 +35,7 @@ impl Transport {
         base_url: Url,
         http: reqwest::Client,
         stream_http: reqwest::Client,
+        upgrade_http: reqwest::Client,
         bearer: Option<String>,
         user_agent: String,
         request_id: Option<Arc<RequestIdFn>>,
@@ -40,6 +44,7 @@ impl Transport {
             base_url,
             http,
             stream_http,
+            upgrade_http,
             bearer,
             user_agent,
             request_id,
@@ -94,6 +99,12 @@ impl Transport {
     /// lifecycle.
     pub(crate) fn stream_request(&self, method: Method, segments: &[&str]) -> RequestBuilder {
         self.build(&self.stream_http, method, segments)
+    }
+
+    /// Starts a request on the http/1.1-only upgrade client, for calls that
+    /// switch protocols and hand the socket back to the caller.
+    pub(crate) fn upgrade_request(&self, method: Method, segments: &[&str]) -> RequestBuilder {
+        self.build(&self.upgrade_http, method, segments)
     }
 
     /// Returns the response for 2xx statuses and an [`Error::Api`]

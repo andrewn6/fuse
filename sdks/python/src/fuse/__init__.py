@@ -1,4 +1,5 @@
 from ._core import VERSION
+from ._stream import VNC_PROTO, ComputerStream
 from .client import Client
 from .errors import (
     CODE_CONFLICT,
@@ -61,6 +62,8 @@ from .types import (
 __all__ = [
     "VERSION",
     "Client",
+    "ComputerStream",
+    "VNC_PROTO",
     # errors
     "ApiError",
     "as_api_error",

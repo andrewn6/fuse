@@ -51,6 +51,7 @@
 mod apikeys;
 mod client;
 mod computer;
+mod computer_stream;
 mod environments;
 mod error;
 mod events;
@@ -66,6 +67,7 @@ pub use computer::{
     ComputerAction, ComputerActionKind, ComputerDisplay, ComputerResult, ComputerToolResult,
     Coordinate, ImageSource, Region, ScrollDirection, ToolResultBlock,
 };
+pub use computer_stream::{ComputerStream, VNC_PROTO};
 pub use environments::{
     EnvironmentPage, Environments, ExecCommand, ExecRequest, ExecResult, ListEnvironmentsOptions,
 };

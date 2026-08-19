@@ -199,11 +199,20 @@ impl ClientBuilder {
         let stream_http = reqwest::Client::builder()
             .build()
             .map_err(Error::Transport)?;
+        // http/1.1 pinned and no total timeout, for connection upgrades: an
+        // upgrade does not exist in http/2, so tls alpn must not be allowed
+        // to negotiate it, and the stream that follows lives as long as the
+        // caller keeps it.
+        let upgrade_http = reqwest::Client::builder()
+            .http1_only()
+            .build()
+            .map_err(Error::Transport)?;
         Ok(Client {
             transport: Arc::new(Transport::new(
                 base_url,
                 http,
                 stream_http,
+                upgrade_http,
                 self.token,
                 self.user_agent,
                 self.request_id,

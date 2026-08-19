@@ -5,7 +5,7 @@ export type { FuseClientOptions } from "./client.js";
 export { VERSION } from "./version.js";
 
 // Services and their option types.
-export { EnvironmentsService } from "./environments.js";
+export { EnvironmentsService, VNC_PROTO } from "./environments.js";
 export type { ListEnvironmentsOptions } from "./environments.js";
 export { SnapshotsService } from "./snapshots.js";
 export type { ListSnapshotsOptions } from "./snapshots.js";
