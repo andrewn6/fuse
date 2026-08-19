@@ -200,19 +200,24 @@ func (s *EnvironmentsService) Attach(ctx context.Context, vmID string, opts Atta
 	}
 
 	path := "/v1/environments/" + url.PathEscape(vmID) + "/attach"
-	return s.t.dialAttach(ctx, path, q)
+	conn, br, err := s.t.dialUpgrade(ctx, path, q, AttachProto, "attach")
+	if err != nil {
+		return nil, err
+	}
+	return &AttachStream{conn: conn, r: br}, nil
 }
 
-// dialAttach performs an HTTP/1.1 upgrade by hand and hands back the socket.
+// dialUpgrade performs an HTTP/1.1 upgrade by hand and hands back the socket,
+// with reads going through the bufio.Reader that consumed the response head.
 //
 // It cannot go through http.Client for two structural reasons: net/http gives a
 // client no way to reclaim the connection after a response (only servers get
 // Hijack), and an http.Client over TLS may negotiate HTTP/2, which has no
 // connection upgrade at all. Writing the request onto a raw conn pins us to
 // HTTP/1.1, where the upgrade is well defined.
-func (t *transport) dialAttach(ctx context.Context, path string, query url.Values) (*AttachStream, error) {
+func (t *transport) dialUpgrade(ctx context.Context, path string, query url.Values, proto, label string) (net.Conn, *bufio.Reader, error) {
 	if t == nil || t.baseURL == nil {
-		return nil, errors.New("transport is nil")
+		return nil, nil, errors.New("transport is nil")
 	}
 
 	u := *t.baseURL
@@ -240,7 +245,7 @@ func (t *transport) dialAttach(ctx context.Context, path string, query url.Value
 		conn, err = d.DialContext(ctx, "tcp", host)
 	}
 	if err != nil {
-		return nil, fmt.Errorf("attach: dial: %w", err)
+		return nil, nil, fmt.Errorf("%s: dial: %w", label, err)
 	}
 
 	// Bound the handshake, then hand back a deadline-free socket: an
@@ -254,10 +259,10 @@ func (t *transport) dialAttach(ctx context.Context, path string, query url.Value
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		_ = conn.Close()
-		return nil, err
+		return nil, nil, err
 	}
 	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", AttachProto)
+	req.Header.Set("Upgrade", proto)
 	if t.bearer != "" {
 		req.Header.Set("Authorization", "Bearer "+t.bearer)
 	}
@@ -266,14 +271,14 @@ func (t *transport) dialAttach(ctx context.Context, path string, query url.Value
 	}
 	if err := req.Write(conn); err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("attach: write upgrade request: %w", err)
+		return nil, nil, fmt.Errorf("%s: write upgrade request: %w", label, err)
 	}
 
 	br := bufio.NewReader(conn)
 	resp, err := http.ReadResponse(br, req)
 	if err != nil {
 		_ = conn.Close()
-		return nil, fmt.Errorf("attach: read upgrade response: %w", err)
+		return nil, nil, fmt.Errorf("%s: read upgrade response: %w", label, err)
 	}
 	if resp.StatusCode != http.StatusSwitchingProtocols {
 		// The server answered with a normal HTTP error, so surface it in the
@@ -281,9 +286,9 @@ func (t *transport) dialAttach(ctx context.Context, path string, query url.Value
 		err := CheckResponse(resp)
 		_ = conn.Close()
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
-		return nil, fmt.Errorf("attach: unexpected status %d", resp.StatusCode)
+		return nil, nil, fmt.Errorf("%s: unexpected status %d", label, resp.StatusCode)
 	}
 
 	_ = conn.SetDeadline(time.Time{})
@@ -291,7 +296,7 @@ func (t *transport) dialAttach(ctx context.Context, path string, query url.Value
 	// Reads go through br: ReadResponse may have pulled stream bytes into its
 	// buffer along with the response head, and reading the socket directly
 	// would drop them.
-	return &AttachStream{conn: conn, r: br}, nil
+	return conn, br, nil
 }
 
 // ReadFrame returns the next frame from the stream. It returns io.EOF when the

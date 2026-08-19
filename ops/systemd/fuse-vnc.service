@@ -1,0 +1,24 @@
+[Unit]
+Description=Fuse desktop vnc server (x11vnc on :1)
+After=fuse-wm.service
+Requires=fuse-display.service
+
+[Service]
+Type=simple
+Environment=DISPLAY=:1
+# the display unit is up as soon as xvfb forks, not as soon as the socket
+# exists; wait for the socket so x11vnc never races its own display
+ExecStartPre=/bin/sh -c 'i=0; while [ ! -S /tmp/.X11-unix/X1 ]; do i=$((i+1)); [ $i -gt 100 ] && exit 1; sleep 0.2; done'
+# paint the root window before x11vnc starts: a fresh xvfb is black, and an
+# initial black frame can stay cached in the viewer
+ExecStartPre=/usr/bin/xsetroot -solid "#404550"
+# -localhost: only reachable through fused's authed stream route, never raw.
+# -noxdamage: xdamage misses composited repaints under xvfb and leaves the
+# stream showing a stale frame; full-framebuffer polling is cheap because
+# xvfb keeps it in ram.
+ExecStart=/usr/bin/x11vnc -display :1 -rfbport 5900 -localhost -shared -forever -noxdamage -nopw -quiet
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

@@ -809,6 +809,85 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
 
+  /v1/environments/{vmId}/computer/stream:
+    parameters:
+      - $ref: "#/components/parameters/VMID"
+    get:
+      tags: [environments]
+      operationId: computerStream
+      summary: Stream the environment's desktop live
+      description: |
+        Upgrades the connection to `fuse-vnc/1` and relays a raw RFB (VNC)
+        byte stream between the caller and the vnc server inside the guest,
+        both directions, until either end closes. This is the live view of
+        the desktop, and — because RFB carries input — human takeover of a
+        session an agent is driving.
+
+        **Handshake.** The request must carry `Upgrade: fuse-vnc/1` (and,
+        per HTTP, `Connection: Upgrade`). On success the server answers
+        `101 Switching Protocols`; the first byte after the response head
+        is the first byte of the vnc server's RFB greeting. There is no
+        frame protocol on top: the stream is RFB verbatim, so any VNC
+        client can speak it once the upgrade and bearer auth are handled
+        (the `fuse desktop` CLI command wraps this in a browser viewer).
+
+        The vnc server inside the guest binds localhost only; this authed
+        route is the only way to reach it. Unlike exec and attach this
+        accepts API keys, for the same reason the computer action route
+        does: the stream views and drives the same display an API key can
+        already drive click by click.
+
+        An open stream counts as environment activity for as long as it is
+        open, so a watched-but-idle desktop is not reaped.
+      responses:
+        "101":
+          description: |
+            Upgrade accepted. The connection leaves HTTP and carries raw
+            RFB bytes in both directions until either end closes it.
+          headers:
+            Upgrade:
+              schema:
+                type: string
+                enum: [fuse-vnc/1]
+            Connection:
+              schema:
+                type: string
+                enum: [Upgrade]
+        "400":
+          description: |
+            The request did not carry `Upgrade: fuse-vnc/1`.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The environment is not running.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "501":
+          $ref: "#/components/responses/Unimplemented"
+        "503":
+          description: |
+            The guest is running but has nothing to stream: not a desktop
+            image, the display is still starting, or the vnc unit is down.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+        "500":
+          description: |
+            The guest stream could not be opened, or the connection was
+            not hijackable. Raised before the upgrade; once the socket is
+            hijacked there is no ResponseWriter left to report through.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+
   /v1/environments/{vmId}/snapshots:
     parameters:
       - $ref: "#/components/parameters/VMID"

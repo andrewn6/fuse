@@ -5,9 +5,12 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/folsomintel/fuse/internal/orchestrator"
 )
 
 // The computer endpoint: the control-plane door to the guest's
@@ -76,6 +79,63 @@ func (h *Handler) computerDisplay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	relayGuestComputer(w, res.Status, res.Body)
+}
+
+// computerStream upgrades the connection and relays a fuse-vnc/1 stream —
+// raw RFB bytes — between the client and the vnc server inside the guest.
+//
+// Like attach, the orchestrator is a byte pump here and nothing more. Unlike
+// attach it is not master-token only, for the reason documented at the top
+// of this file: the stream grants a view of, and input to, the same display
+// an API key can already drive click by click through computerAction.
+func (h *Handler) computerStream(w http.ResponseWriter, r *http.Request) {
+	if !strings.EqualFold(r.Header.Get("Upgrade"), orchestrator.VNCProto) {
+		writeError(w, http.StatusBadRequest, CodeInvalidArgument,
+			"stream requires Upgrade: "+orchestrator.VNCProto, nil)
+		return
+	}
+
+	vmID := chi.URLParam(r, "vmId")
+
+	// Open the guest stream before hijacking. Once the connection is hijacked
+	// there is no ResponseWriter left to report a failure through, so every
+	// error that can be expressed as HTTP must be raised while we still can.
+	guest, err := h.Fleet.ComputerStream(r.Context(), vmID)
+	if err != nil {
+		writeFleetError(w, err)
+		return
+	}
+	defer func() { _ = guest.Close() }()
+
+	// ResponseController, not a direct w.(http.Hijacker) assertion: the
+	// metrics middleware wraps the ResponseWriter, and only the controller
+	// walks the Unwrap chain to find the transport underneath.
+	rc := http.NewResponseController(w)
+	client, buf, err := rc.Hijack()
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, CodeInternal,
+			"stream requires a hijackable HTTP/1.1 connection: "+err.Error(), nil)
+		return
+	}
+	defer func() { _ = client.Close() }()
+
+	// a watched-but-idle desktop produces zero RFB traffic; clearing the
+	// deadline is what keeps the session from being cut out from under the
+	// viewer.
+	_ = client.SetDeadline(time.Time{})
+
+	if _, err := buf.WriteString(
+		"HTTP/1.1 101 Switching Protocols\r\n" +
+			"Upgrade: " + orchestrator.VNCProto + "\r\n" +
+			"Connection: Upgrade\r\n\r\n",
+	); err != nil {
+		return
+	}
+	if err := buf.Flush(); err != nil {
+		return
+	}
+
+	relay(client, buf.Reader, guest)
 }
 
 // relayGuestComputer forwards a guest agent answer to the caller. A 2xx body

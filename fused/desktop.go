@@ -94,14 +94,14 @@ func applyDesktop(path, display string) {
 	}
 
 	// the display runner reads the declared geometry from the same file this
-	// agent just did, so a restart is all it takes. the wm and panel are
-	// restarted with it: they die with their display and systemd does not
-	// bring a Requires= dependent back on its own.
+	// agent just did, so a restart is all it takes. the wm, panel, and vnc
+	// server are restarted with it: they die with their display and systemd
+	// does not bring a Requires= dependent back on its own.
 	log.Printf("display is %dx%d, desktop declares %dx%d; restarting display units", w, h, spec.Width, spec.Height)
 	restartCtx, cancelRestart := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancelRestart()
 	cmd := exec.CommandContext(restartCtx, "systemctl", "restart",
-		"fuse-display.service", "fuse-wm.service", "fuse-panel.service")
+		"fuse-display.service", "fuse-wm.service", "fuse-panel.service", "fuse-vnc.service")
 	if out, err := cmd.CombinedOutput(); err != nil {
 		log.Printf("WARNING: display restart failed: %v (%s)", err, string(out))
 	}
