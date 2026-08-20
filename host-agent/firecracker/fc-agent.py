@@ -2034,7 +2034,15 @@ class Handler(BaseHTTPRequestHandler):
                         return self._json(200, {"ok": True, "endpoints": endpoints})
                     if action == "snapshot" and method == "POST":
                         body = self._read_json()
-                        rec = snapshot_create(vm_id, body.get("comment", ""))
+                        # live rides on the existing verb as an optional flag
+                        # rather than getting a verb of its own: it is the same
+                        # operation on the same store producing the same kind
+                        # of id, and a caller that does not know about it (or
+                        # a host that cannot do it) keeps getting a disk
+                        # snapshot, which is the fallback by design.
+                        rec = snapshot_create(
+                            vm_id, body.get("comment", ""), live=bool(body.get("live", False))
+                        )
                         # the digest goes back on the response because this is
                         # the only moment it is available to the caller: it is
                         # computed while the artifact is written and nothing
@@ -2047,6 +2055,8 @@ class Handler(BaseHTTPRequestHandler):
                             {
                                 "snapshot_id": rec["snapshot_id"],
                                 "digest": rec.get("digest", ""),
+                                "kind": rec.get("kind", "disk"),
+                                "size_bytes": rec.get("size_bytes", 0),
                             },
                         )
                     if action == "snapshots" and method == "GET":
