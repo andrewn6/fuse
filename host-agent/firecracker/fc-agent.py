@@ -693,11 +693,24 @@ def destroy_vm(vm_id: str) -> None:
     sudo(["rm", "-rf", str(vm_dir(vm_id))], check=False)
 
 
-# -- Snapshots (disk-only) ----------------------------------------------------
-# TODO: Implement Firecracker memory snapshots (Pause + CreateSnapshot with
-# snapshot_type=Full) to capture RAM + vCPU state. Current disk-only snapshots
-# still require a full cold boot on restore (~5-15s). Memory snapshots would
-# enable sub-second (<200ms) resume, eliminating cold start latency.
+# -- Snapshots ----------------------------------------------------------------
+# Two kinds share one store. A "disk" snapshot copies the rootfs and nothing
+# else, so restoring it cold-boots the guest (~5-15s). A "live" snapshot
+# additionally pauses the VM and has firecracker write vCPU state and the whole
+# guest memory next to that rootfs, so restoring it resumes the guest exactly
+# where it stopped instead of booting it.
+#
+# Live is opt-in, and stays opt-in: it costs mem_size_mib of disk on EVERY
+# create (there is no sparseness to hide behind, firecracker writes the full
+# memory image) plus a pause window as long as it takes to write that much.
+# Disk remains the default and the fallback.
+#
+# Writing that memory image happens inside a single firecracker API call, and
+# fc_api's 5s default would turn a slow one into a soft 599 that reads like a
+# socket problem rather than a snapshot that is still running. Snapshot calls
+# get a budget measured in minutes instead.
+SNAPSHOT_API_TIMEOUT = float(os.environ.get("FC_AGENT_SNAPSHOT_API_TIMEOUT", "600"))
+
 
 def snapshot_rootfs(vm_id: str, snapshot_id: str) -> Path:
     """Resolve a snapshot's rootfs, preferring the host-global store.
@@ -757,22 +770,78 @@ def file_digest(path: Path | str) -> str:
         return cp.stdout.decode().split()[0]
 
 
-def snapshot_create(vm_id: str, comment: str) -> dict:
+def copy_rootfs(src: str, dst: Path) -> None:
+    """Copy a rootfs image, reflinking when the filesystem allows it.
+
+    cp goes through sudo because the live rootfs can be root-owned; the plain
+    copy is the fallback for a filesystem with no reflink support, where cp
+    --reflink=auto still exits non-zero on some coreutils versions.
+    """
+    sudo(["cp", "--reflink=auto", src, str(dst)], check=False)
+    if not dst.exists():
+        shutil.copyfile(src, dst)
+
+
+def snapshot_create(vm_id: str, comment: str, live: bool = False) -> dict:
     meta = load_meta(vm_id)
     if not meta:
         raise HTTPError(404, "vm not found")
+    # Anything that can refuse the request is checked before the store dir is
+    # created, so a rejected snapshot leaves nothing behind to be swept up.
+    sock = meta.get("sock") or ""
+    if live and not sock:
+        raise HTTPError(409, "vm has no firecracker socket; live snapshot needs a running vm")
     snap_id = f"snap-{int(time.time())}-{uuid.uuid4().hex[:6]}"
     snap_dir = SNAPSHOTS_DIR / snap_id
     snap_dir.mkdir(parents=True)
-    # Quiesce guest FS then copy.
-    ssh_exec(meta["guest_ip"], "sync; sync", timeout=10.0)
     snap_rootfs = snap_dir / "rootfs.ext4"
-    sudo(["cp", "--reflink=auto", meta["rootfs"], str(snap_rootfs)], check=False)
-    if not snap_rootfs.exists():
-        shutil.copyfile(meta["rootfs"], snap_rootfs)
+    extra_bytes = 0
+    if live:
+        # Both halves of the snapshot are taken inside ONE pause window. The
+        # memory image holds the guest's view of its own disk (page cache,
+        # dirty pages, in-flight writes), so a rootfs copied after the resume
+        # would already have drifted from the memory that is about to be
+        # restored on top of it, and the guest would wake up believing things
+        # about a filesystem that no longer says them.
+        #
+        # No `sync` on this path: the page cache IS in the memory image, so
+        # flushing it buys nothing, and an ssh round trip is real time added to
+        # a window during which the guest is stopped.
+        fc_vm_state(sock, "Paused")
+        try:
+            copy_rootfs(meta["rootfs"], snap_rootfs)
+            code, resp = fc_api(
+                sock, "PUT", "/snapshot/create",
+                {
+                    "snapshot_type": "Full",
+                    "snapshot_path": str(snap_dir / "vmstate"),
+                    "mem_file_path": str(snap_dir / "mem"),
+                },
+                timeout=SNAPSHOT_API_TIMEOUT,
+            )
+            if code >= 300:
+                raise RuntimeError(f"firecracker API /snapshot/create -> {code}: {resp!r}")
+        finally:
+            # Resume unconditionally. The realistic failure here is a full
+            # disk (the mem file is mem_size_mib every single time), and the
+            # cost of not doing this is a guest frozen forever over a snapshot
+            # nobody got: a bad snapshot is recoverable, a stopped VM that no
+            # call path will ever resume is not.
+            fc_vm_state(sock, "Resumed")
+        extra_bytes = (
+            os.path.getsize(snap_dir / "vmstate") + os.path.getsize(snap_dir / "mem")
+        )
+    else:
+        # Quiesce guest FS then copy.
+        ssh_exec(meta["guest_ip"], "sync; sync", timeout=10.0)
+        copy_rootfs(meta["rootfs"], snap_rootfs)
     # Hashing is inline and blocking, so the snapshot is not reported ready
     # until its digest is known. A digest that arrives later is a digest that
     # some caller has already raced past.
+    #
+    # It covers the rootfs and only the rootfs, on both kinds. The artifact
+    # transfer path moves one file, so a live snapshot handed to another host
+    # arrives as its disk half; the digest describes exactly what travels.
     digest = file_digest(snap_rootfs)
     # origin_vm_id records provenance only. It is deliberately NOT a lifetime
     # link: the origin vm may be destroyed while this artifact stays usable.
@@ -782,6 +851,16 @@ def snapshot_create(vm_id: str, comment: str) -> dict:
         "created_at": now_iso(),
         "origin_vm_id": vm_id,
         "digest": digest,
+        # kind is written down, never inferred from which files are present. A
+        # dir left half-finished by a create that ran out of disk has a rootfs
+        # and no memory image, which is indistinguishable by inspection from a
+        # deliberate disk snapshot, and restoring it as one would silently cold
+        # boot a guest the caller believed it had frozen.
+        "kind": "live" if live else "disk",
+        # Live snapshots are a different order of size from disk ones (a whole
+        # memory image per create), so what the snapshot occupies is reported
+        # rather than left for a caller to stat.
+        "size_bytes": os.path.getsize(snap_rootfs) + extra_bytes,
     }
     (snap_dir / "meta.json").write_text(json.dumps(record))
     meta.setdefault("snapshots", []).append(record)
