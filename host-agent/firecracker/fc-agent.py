@@ -712,8 +712,8 @@ def destroy_vm(vm_id: str) -> None:
 SNAPSHOT_API_TIMEOUT = float(os.environ.get("FC_AGENT_SNAPSHOT_API_TIMEOUT", "600"))
 
 
-def snapshot_rootfs(vm_id: str, snapshot_id: str) -> Path:
-    """Resolve a snapshot's rootfs, preferring the host-global store.
+def snapshot_file(vm_id: str, snapshot_id: str, name: str, required: bool = True) -> Path | None:
+    """Resolve one file inside a snapshot dir, preferring the host-global store.
 
     snapshot_id names the request into a filesystem path, so both candidates are
     realpath'd and confirmed to stay under their root: "../../etc/shadow", or
@@ -724,24 +724,58 @@ def snapshot_rootfs(vm_id: str, snapshot_id: str) -> Path:
     so that location stays readable. Nothing writes there any more. Pass an
     empty vm_id to restrict the lookup to the store, which is what a seed with
     no live source vm needs.
+
+    `name` is a literal from a call site (rootfs.ext4, vmstate, mem,
+    meta.json), never request-derived -- every artifact of a snapshot goes
+    through this one guard rather than being joined onto the rootfs's dirname
+    somewhere else. required=False answers "not there" with None instead of a
+    404, for a file a snapshot may legitimately lack.
     """
     store_root = os.path.realpath(str(SNAPSHOTS_DIR))
-    resolved = os.path.realpath(os.path.join(store_root, snapshot_id, "rootfs.ext4"))
+    resolved = os.path.realpath(os.path.join(store_root, snapshot_id, name))
     if not resolved.startswith(store_root + os.sep):
         raise HTTPError(400, f"invalid snapshot id: {snapshot_id!r}")
     if os.path.exists(resolved):
         return Path(resolved)
 
     if not vm_id:
-        raise HTTPError(404, "snapshot not found")
+        if required:
+            raise HTTPError(404, "snapshot not found")
+        return None
 
     legacy_root = os.path.realpath(os.path.join(str(vm_dir(vm_id)), "snapshots"))
-    legacy = os.path.realpath(os.path.join(legacy_root, snapshot_id, "rootfs.ext4"))
+    legacy = os.path.realpath(os.path.join(legacy_root, snapshot_id, name))
     if not legacy.startswith(legacy_root + os.sep):
         raise HTTPError(400, f"invalid snapshot id: {snapshot_id!r}")
     if not os.path.exists(legacy):
-        raise HTTPError(404, "snapshot not found")
+        if required:
+            raise HTTPError(404, "snapshot not found")
+        return None
     return Path(legacy)
+
+
+def snapshot_rootfs(vm_id: str, snapshot_id: str) -> Path:
+    """Resolve a snapshot's rootfs. See snapshot_file for the containment rules."""
+    return snapshot_file(vm_id, snapshot_id, "rootfs.ext4")
+
+
+def snapshot_kind(vm_id: str, snapshot_id: str) -> str:
+    """Read a snapshot's recorded kind, "live" or "disk".
+
+    Reads the recorded value rather than looking for a memory image, for the
+    reason spelled out in snapshot_create. Anything unreadable, unrecognised,
+    or predating live snapshots is disk: restoring a live snapshot as a disk
+    one costs a cold boot, while restoring a disk one as live would hand
+    firecracker a memory file that does not exist.
+    """
+    p = snapshot_file(vm_id, snapshot_id, "meta.json", required=False)
+    if not p:
+        return "disk"
+    try:
+        rec = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return "disk"
+    return "live" if rec.get("kind") == "live" else "disk"
 
 
 def file_digest(path: Path | str) -> str:
@@ -884,6 +918,7 @@ def snapshot_restore(vm_id: str, snapshot_id: str) -> None:
     # Restore stays scoped to this vm's own snapshots plus the store; it cannot
     # be steered at "../../<other-vm>/snapshots/<id>".
     snap_rootfs = snapshot_rootfs(vm_id, snapshot_id)
+    kind = snapshot_kind(vm_id, snapshot_id)
     # Stop firecracker, swap rootfs, recreate the TAP (the dead fc process
     # may still be holding it briefly), restart with same config.
     stop_firecracker(meta)
@@ -907,6 +942,39 @@ def snapshot_restore(vm_id: str, snapshot_id: str) -> None:
     sudo(["cp", str(snap_rootfs), tmp_rootfs])
     sudo(["mv", tmp_rootfs, meta["rootfs"]])
     sudo(["chmod", "666", meta["rootfs"]], check=False)
+    if kind == "live":
+        vmstate = snapshot_file(vm_id, snapshot_id, "vmstate")
+        mem = snapshot_file(vm_id, snapshot_id, "mem")
+        # spawn only. /snapshot/load is the one call firecracker will accept
+        # exclusively on a process that has never been configured, so the
+        # boot_firecracker half must NOT run here -- /boot-source or
+        # InstanceStart first and the load is rejected outright.
+        #
+        # Nothing has to be told about the network either. This is a restore in
+        # place, so setup_tap above derived the same tap name, IPs and MAC from
+        # the same meta["index"] the frozen guest was using, and the device the
+        # memory image expects to find is the device that now exists.
+        spawn_firecracker(meta)
+        code, resp = fc_api(
+            meta["sock"], "PUT", "/snapshot/load",
+            {
+                "snapshot_path": str(vmstate),
+                "mem_backend": {"backend_type": "File", "backend_path": str(mem)},
+                "resume_vm": True,
+            },
+            timeout=SNAPSHOT_API_TIMEOUT,
+        )
+        if code >= 300:
+            raise RuntimeError(f"firecracker API /snapshot/load -> {code}: {resp!r}")
+        save_meta(meta)
+        # Seconds, not the cold-boot budget: a resumed guest already has a
+        # booted userspace and sshd, so it answers immediately or it is broken,
+        # and waiting 30s on it only delays finding that out. The ssh control
+        # master was unlinked above because every connection the memory image
+        # remembers is dead on the wire.
+        if not wait_for_ssh(meta["guest_ip"], timeout=5.0):
+            print(f"[fc-agent] live restore {snapshot_id}: no ssh from {meta['guest_ip']} after resume", flush=True)
+        return
     start_firecracker(meta)
     save_meta(meta)
     wait_for_ssh(meta["guest_ip"], timeout=30.0)
