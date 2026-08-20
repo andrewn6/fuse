@@ -527,7 +527,14 @@ def boot_firecracker(meta: dict) -> None:
                              "is_root_device": True, "is_read_only": False}),
         ("/network-interfaces/eth0", {"iface_id": "eth0", "host_dev_name": meta["tap"],
                                         "guest_mac": meta["mac"]}),
-        ("/machine-config", {"vcpu_count": meta["cpus"], "mem_size_mib": meta["memory_mb"]}),
+        # track_dirty_pages is set at boot on every VM, not just ones that will
+        # be snapshotted, because it cannot be backfilled: firecracker only
+        # honours it from the first boot, so a VM booted without it can never
+        # take a diff snapshot for the rest of its life. The cost is one dirty
+        # bitmap in the host's KVM slot, which is cheap next to re-booting a
+        # guest to gain the capability.
+        ("/machine-config", {"vcpu_count": meta["cpus"], "mem_size_mib": meta["memory_mb"],
+                              "track_dirty_pages": True}),
         ("/actions", {"action_type": "InstanceStart"}),
     ]
     for path, body in steps:
