@@ -248,6 +248,22 @@ def fc_api(sock_path: str, method: str, path: str, body: dict | None = None, tim
         conn.close()
 
 
+def fc_vm_state(sock_path: str, state: str) -> None:
+    """Pause or resume a running guest. state is "Paused" or "Resumed".
+
+    Firecracker will only take a snapshot of a paused VM, so this is the gate
+    around the whole live-snapshot window. It raises rather than returning a
+    code because there is no useful partial outcome: a caller that fails to
+    pause must not go on to snapshot, and a caller that fails to resume has a
+    frozen guest it needs to shout about.
+    """
+    if state not in ("Paused", "Resumed"):
+        raise ValueError(f"invalid vm state: {state!r}")
+    code, resp = fc_api(sock_path, "PATCH", "/vm", {"state": state})
+    if code >= 300:
+        raise RuntimeError(f"firecracker API /vm {state} -> {code}: {resp!r}")
+
+
 # -- Networking ---------------------------------------------------------------
 
 def pick_index() -> int:
