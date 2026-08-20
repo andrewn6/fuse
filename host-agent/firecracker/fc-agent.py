@@ -223,10 +223,10 @@ class UnixHTTPConnection(http.client.HTTPConnection):
 
 def fc_api(sock_path: str, method: str, path: str, body: dict | None = None, timeout: float = 5.0) -> tuple[int, bytes]:
     # Speaks to the socket directly rather than shelling out to `sudo curl`:
-    # start_firecracker chmods it 0666 the moment it appears, so both the
+    # spawn_firecracker chmods it 0666 the moment it appears, so both the
     # root service unit and the foreground dev path can open it, and no
     # caller-supplied value ever lands one argv slot away from a command line.
-    # method/path are always literals from call sites (see start_firecracker's
+    # method/path are always literals from call sites (see boot_firecracker's
     # `steps`), never guest- or request-derived; validate anyway so this stays
     # true even if a future caller forwards something less trusted.
     if method not in ("GET", "PUT", "POST", "DELETE", "PATCH"):
@@ -466,7 +466,13 @@ def sock_path(vm_id: str) -> Path:
     return SOCK_DIR / f"{name}.sock"
 
 
-def start_firecracker(meta: dict) -> None:
+def spawn_firecracker(meta: dict) -> None:
+    """Launch the firecracker process and leave it unconfigured.
+
+    Split out of start_firecracker because a snapshot restore needs a process
+    that has never seen /boot-source or InstanceStart: PUT /snapshot/load is
+    only legal on a virgin process. A cold boot is this plus boot_firecracker.
+    """
     d = vm_dir(meta["vm_id"])
     sock = sock_path(meta["vm_id"])
     log = d / "fc.log"
@@ -506,6 +512,10 @@ def start_firecracker(meta: dict) -> None:
     # not just a convenience for poking at it by hand.
     sudo(["chmod", "666", str(sock)], check=False)
 
+
+def boot_firecracker(meta: dict) -> None:
+    """Configure a spawned firecracker process and cold-boot the guest."""
+    sock = meta["sock"]
     # Configure boot, drive, net, machine-config, start.
     boot_args = (
         "console=ttyS0 reboot=k panic=1 pci=off "
@@ -524,6 +534,11 @@ def start_firecracker(meta: dict) -> None:
         code, resp = fc_api(str(sock), "PUT", path, body)
         if code >= 300:
             raise RuntimeError(f"firecracker API {path} -> {code}: {resp!r}")
+
+
+def start_firecracker(meta: dict) -> None:
+    spawn_firecracker(meta)
+    boot_firecracker(meta)
 
 
 def stop_firecracker(meta: dict) -> None:
