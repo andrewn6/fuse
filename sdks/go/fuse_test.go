@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -156,6 +157,65 @@ func TestSnapshotsCreate(t *testing.T) {
 	}
 }
 
+func TestSnapshotsCreate_sendsLiveAndDecodesKind(t *testing.T) {
+	var body []byte
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"snap-1","vm_id":"vm-1","kind":"live","created_at":"2024-01-01T00:00:00Z"}`)
+	})
+	defer cleanup()
+
+	snap, err := c.Snapshots.Create(context.Background(), "vm-1", SnapshotRequest{Live: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !strings.Contains(string(body), `"live":true`) {
+		t.Fatalf("request body missing live flag: %s", body)
+	}
+	if snap.Kind != "live" {
+		t.Fatalf("Kind = %q, want live", snap.Kind)
+	}
+}
+
+// the flag is a request, not a guarantee: an agent too old to honour it
+// answers with a disk snapshot, and the sdk must surface that rather than let
+// a caller read its own request back.
+func TestSnapshotsCreate_liveServedAsDiskDecodesDiskKind(t *testing.T) {
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"snap-1","vm_id":"vm-1","kind":"disk","created_at":"2024-01-01T00:00:00Z"}`)
+	})
+	defer cleanup()
+
+	snap, err := c.Snapshots.Create(context.Background(), "vm-1", SnapshotRequest{Live: true})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if snap.Kind != "disk" {
+		t.Fatalf("Kind = %q, want disk", snap.Kind)
+	}
+}
+
+// an omitted Live must not travel: `"live":false` on every ordinary create
+// would be noise, and the server default is already disk.
+func TestSnapshotsCreate_omitsLiveWhenUnset(t *testing.T) {
+	var body []byte
+	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"snap-1","vm_id":"vm-1","kind":"disk","created_at":"2024-01-01T00:00:00Z"}`)
+	})
+	defer cleanup()
+
+	if _, err := c.Snapshots.Create(context.Background(), "vm-1", SnapshotRequest{Comment: "c"}); err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if strings.Contains(string(body), `"live"`) {
+		t.Fatalf("live sent when unset: %s", body)
+	}
+}
+
 func TestSnapshotsList(t *testing.T) {
 	var got recordedRequest
 	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
@@ -236,7 +296,7 @@ func TestSnapshotsListPage_omitsUnsetLayerFilters(t *testing.T) {
 func TestSnapshotsGet_decodesArtifactFields(t *testing.T) {
 	c, cleanup := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		io.WriteString(w, `{"id":"snap-1","vm_id":"vm-1","mode":"build","layer_key":"abc123","arch":"amd64","digest":"deadbeef","created_at":"2024-01-01T00:00:00Z"}`)
+		io.WriteString(w, `{"id":"snap-1","vm_id":"vm-1","mode":"build","layer_key":"abc123","arch":"amd64","digest":"deadbeef","kind":"live","created_at":"2024-01-01T00:00:00Z"}`)
 	})
 	defer cleanup()
 
@@ -252,6 +312,11 @@ func TestSnapshotsGet_decodesArtifactFields(t *testing.T) {
 	}
 	if snap.Digest != "deadbeef" {
 		t.Fatalf("Digest = %q, want deadbeef", snap.Digest)
+	}
+	// kind has to decode on get, not only on create: the docs tell callers to
+	// check it, which they can only do wherever they read the snapshot.
+	if snap.Kind != "live" {
+		t.Fatalf("Kind = %q, want live", snap.Kind)
 	}
 }
 

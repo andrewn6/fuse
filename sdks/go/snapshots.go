@@ -59,6 +59,15 @@ type SnapshotPage struct {
 	NextCursor string `json:"next_cursor,omitempty"`
 }
 
+// Create checkpoints a running environment. The zero SnapshotRequest takes a
+// disk snapshot, the rootfs and nothing else; set Live to capture the guest's
+// memory and vCPU state as well.
+//
+// The returned Snapshot.Kind reports what was actually written, which can be
+// "disk" even for a Live request that reached a host too old to honour it. A
+// caller that depends on the memory being there should check it. Live against
+// a backend with no live-snapshot support is a 501 unimplemented, not a
+// conflict.
 func (s *SnapshotsService) Create(ctx context.Context, vmID string, reqBody SnapshotRequest) (*Snapshot, error) {
 	if s == nil || s.t == nil {
 		return nil, errors.New("snapshots service is not configured")

@@ -319,6 +319,23 @@ type SnapshotRequest struct {
 	// The scope it is filed under comes from how the caller authenticated and
 	// is not settable here.
 	LayerKey string `json:"layer_key,omitempty"`
+
+	// Live captures the guest's memory and vCPU state alongside the rootfs,
+	// so restoring resumes the guest instead of cold-booting it. The zero
+	// value is a disk-only snapshot, which is the default and the fallback.
+	//
+	// It costs the environment's full configured memory in bytes on every
+	// create, pauses the guest for the length of the capture, and produces an
+	// artifact pinned to the host that took it. Fork reads only a snapshot's
+	// rootfs, so forking a live snapshot yields a cold-booting environment
+	// with none of the memory, and nothing errors when it does.
+	//
+	// Against a backend with no live-snapshot support this is a 501
+	// unimplemented, not a conflict, so IsConflict does not match it.
+	//
+	// It is a request, not a guarantee: read Snapshot.Kind to find out what
+	// was actually written.
+	Live bool `json:"live,omitempty"`
 }
 
 // resolveSnapshotResponse is the wire envelope for a layer lookup. It stays
@@ -371,6 +388,19 @@ type Snapshot struct {
 	// different rootfs bytes (timestamps, inode ordering, package caches).
 	// It can never be used as a cache key.
 	Digest string `json:"digest,omitempty"`
+
+	// Kind is "disk" or "live": whether this artifact is the rootfs alone, or
+	// the rootfs plus the guest's memory and vCPU state. Restoring a disk
+	// snapshot cold-boots the guest; restoring a live one resumes it.
+	//
+	// It is what the host agent reports it actually wrote, not what was
+	// requested. A host running an agent too old to know about live snapshots
+	// answers SnapshotRequest.Live with a disk snapshot, and this then says
+	// "disk". Branch on it rather than on your own request.
+	//
+	// A server that predates live snapshots omits it entirely, which reads
+	// back as the empty string; treat that as "disk".
+	Kind string `json:"kind,omitempty"`
 
 	SizeBytes      int64            `json:"size_bytes,omitempty"`
 	CreatedAt      time.Time        `json:"created_at"`
