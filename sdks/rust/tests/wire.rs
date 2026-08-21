@@ -3,7 +3,8 @@
 
 use fuse::{
     Arch, ComputerAction, CreateRequest, EnvironmentState, Event, EventKind, ExecRequest,
-    ExposeSpec, HealthcheckHttp, HealthcheckSpec, MissReason, ScrollDirection, Spec,
+    ExposeSpec, HealthcheckHttp, HealthcheckSpec, MissReason, ScrollDirection, Snapshot,
+    SnapshotKind, SnapshotRequest, Spec,
 };
 use serde_json::json;
 
@@ -148,4 +149,43 @@ fn step_event_deserializes() {
     assert_eq!(event.state, None);
     assert_eq!(event.miss_reason, Some(MissReason::InputsChanged));
     assert_eq!(event.index, 2);
+}
+
+#[test]
+fn snapshot_request_omits_live_unless_asked() {
+    // an ordinary create must not put "live": false on the wire: the flag is
+    // opt-in on both ends, and an agent that does not read it should see a
+    // request identical to the one every caller sent before live existed.
+    assert_eq!(
+        serde_json::to_value(SnapshotRequest::new().comment("nightly")).unwrap(),
+        json!({"comment": "nightly"})
+    );
+    assert_eq!(
+        serde_json::to_value(SnapshotRequest::new().live(true)).unwrap(),
+        json!({"live": true})
+    );
+}
+
+#[test]
+fn snapshot_kind_decodes_and_survives_an_unknown_value() {
+    let live: Snapshot = serde_json::from_value(json!({
+        "id": "snap-1", "kind": "live", "created_at": "2026-01-15T10:00:00Z",
+    }))
+    .unwrap();
+    assert_eq!(live.kind, Some(SnapshotKind::Live));
+
+    // absent means disk: a server predating live snapshots never sends it.
+    let old: Snapshot = serde_json::from_value(json!({
+        "id": "snap-2", "created_at": "2026-01-15T10:00:00Z",
+    }))
+    .unwrap();
+    assert_eq!(old.kind, None);
+
+    // a kind this sdk has never heard of passes through rather than failing
+    // the whole decode, so an old client keeps working against a new server.
+    let future: Snapshot = serde_json::from_value(json!({
+        "id": "snap-3", "kind": "filesystem", "created_at": "2026-01-15T10:00:00Z",
+    }))
+    .unwrap();
+    assert_eq!(future.kind, Some(SnapshotKind::Other("filesystem".into())));
 }

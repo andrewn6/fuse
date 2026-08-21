@@ -77,6 +77,6 @@ pub use types::{
     ApiKey, Arch, CreateRequest, CreatedApiKey, DesktopSpec, Endpoint, EnvironmentInfo,
     EnvironmentState, Event, EventKind, ExposeSpec, ForkOptions, GpuDevice, Health, HealthState,
     HealthcheckHttp, HealthcheckProbe, HealthcheckSpec, Host, HostBackend, HostCapacity, HostState,
-    MigInstance, MissReason, RegisterHostRequest, Snapshot, SnapshotExport, SnapshotMode,
-    SnapshotRequest, SnapshotState, Spec, VersionInfo,
+    MigInstance, MissReason, RegisterHostRequest, Snapshot, SnapshotExport, SnapshotKind,
+    SnapshotMode, SnapshotRequest, SnapshotState, Spec, VersionInfo,
 };

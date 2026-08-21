@@ -111,6 +111,24 @@ string_enum! {
     }
 }
 
+string_enum! {
+    /// What a snapshot actually captured, in [`Snapshot::kind`].
+    ///
+    /// This is a different axis from [`SnapshotMode`]: mode is why the
+    /// snapshot was taken, kind is what is inside it. A `Disk` snapshot holds
+    /// the rootfs only and cold-boots on restore; a `Live` one also holds
+    /// guest memory and vCPU state, and resumes.
+    ///
+    /// It reports what the host actually wrote, which is not always what was
+    /// asked for: a host agent too old to know about live snapshots answers
+    /// [`SnapshotRequest::live`] with a disk snapshot. Check this rather than
+    /// assuming the request was honoured.
+    pub enum SnapshotKind {
+        Disk => "disk",
+        Live => "live",
+    }
+}
+
 /// The hardware/runtime spec for a microVM.
 ///
 /// Every field is optional; the orchestrator substitutes defaults. Build one
@@ -747,6 +765,15 @@ pub struct SnapshotRequest {
     pub export_ref: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub export_status: Option<String>,
+    /// Asks for guest memory and vCPU state to be captured alongside the
+    /// rootfs, so restoring resumes the guest instead of cold-booting it.
+    ///
+    /// Opt-in, and it costs the VM's full RAM in extra bytes per snapshot
+    /// while briefly pausing the guest. Not every backend can do it: a GPU
+    /// environment never can, and a provider without live support answers
+    /// 501. Read [`Snapshot::kind`] back to see what was actually written.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub live: Option<bool>,
     /// Labels this snapshot as the artifact of one cacheable setup step,
     /// which is what makes it findable by recipe rather than by its random
     /// id. `None` for an ordinary snapshot.
@@ -793,6 +820,12 @@ impl SnapshotRequest {
         self
     }
 
+    /// Captures guest memory alongside the rootfs. See [`SnapshotRequest::live`].
+    pub fn live(mut self, live: bool) -> Self {
+        self.live = Some(live);
+        self
+    }
+
     pub fn layer_key(mut self, layer_key: impl Into<String>) -> Self {
         self.layer_key = Some(layer_key.into());
         self
@@ -828,6 +861,11 @@ pub struct Snapshot {
     pub parent_snapshot_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mode: Option<SnapshotMode>,
+    /// What the snapshot captured, disk-only or disk plus guest memory. See
+    /// [`SnapshotKind`]; absent from a server that predates live snapshots,
+    /// which means disk.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<SnapshotKind>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub state: Option<SnapshotState>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
