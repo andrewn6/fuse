@@ -223,10 +223,10 @@ class UnixHTTPConnection(http.client.HTTPConnection):
 
 def fc_api(sock_path: str, method: str, path: str, body: dict | None = None, timeout: float = 5.0) -> tuple[int, bytes]:
     # Speaks to the socket directly rather than shelling out to `sudo curl`:
-    # start_firecracker chmods it 0666 the moment it appears, so both the
+    # spawn_firecracker chmods it 0666 the moment it appears, so both the
     # root service unit and the foreground dev path can open it, and no
     # caller-supplied value ever lands one argv slot away from a command line.
-    # method/path are always literals from call sites (see start_firecracker's
+    # method/path are always literals from call sites (see boot_firecracker's
     # `steps`), never guest- or request-derived; validate anyway so this stays
     # true even if a future caller forwards something less trusted.
     if method not in ("GET", "PUT", "POST", "DELETE", "PATCH"):
@@ -246,6 +246,22 @@ def fc_api(sock_path: str, method: str, path: str, body: dict | None = None, tim
         return 599, f"{type(e).__name__}: {e}".encode()
     finally:
         conn.close()
+
+
+def fc_vm_state(sock_path: str, state: str) -> None:
+    """Pause or resume a running guest. state is "Paused" or "Resumed".
+
+    Firecracker will only take a snapshot of a paused VM, so this is the gate
+    around the whole live-snapshot window. It raises rather than returning a
+    code because there is no useful partial outcome: a caller that fails to
+    pause must not go on to snapshot, and a caller that fails to resume has a
+    frozen guest it needs to shout about.
+    """
+    if state not in ("Paused", "Resumed"):
+        raise ValueError(f"invalid vm state: {state!r}")
+    code, resp = fc_api(sock_path, "PATCH", "/vm", {"state": state})
+    if code >= 300:
+        raise RuntimeError(f"firecracker API /vm {state} -> {code}: {resp!r}")
 
 
 # -- Networking ---------------------------------------------------------------
@@ -401,6 +417,37 @@ def ssh_exec(guest_ip: str, remote_cmd: str, stdin: bytes | None = None, timeout
     return cp.returncode, cp.stdout, cp.stderr
 
 
+def resync_guest_clock(guest_ip: str) -> None:
+    """Push the host's wall clock into a guest resumed from a memory snapshot.
+
+    A resumed guest's clock is whatever it was when the snapshot was taken, so
+    it wakes up stale by however long the snapshot sat. Nothing in the guest
+    notices on its own: the kernel is not rebooting, so there is no point at
+    which it re-reads the RTC. Everything that reasons about time then reasons
+    from a wrong now, and the failures land far from here -- a TLS handshake
+    rejecting a certificate as not-yet-valid, a token that looks unexpired
+    long after it is not.
+
+    The host clock is the source rather than chrony inside the guest, because
+    that would make correctness depend on which daemons a particular baked
+    rootfs happens to carry, and the images are not uniform. `date -s` needs
+    nothing but coreutils.
+
+    Best effort: a guest with a wrong clock is degraded, but a restore that
+    already put the guest back is not worth failing over it. The warning is
+    the deliverable when this cannot be done.
+
+    The sub-second drift between reading the host clock and the guest applying
+    it is not corrected. Certificate windows and token lifetimes are the things
+    that care here and they have minutes of slack; anything needing better than
+    that wants a real time daemon, not this.
+    """
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    rc, _, err = ssh_exec(guest_ip, f"date -u -s {shlex.quote(now)}", timeout=10.0)
+    if rc != 0:
+        print(f"[fc-agent] clock resync failed for {guest_ip}: rc={rc} {err!r}", flush=True)
+
+
 def wait_for_ssh(guest_ip: str, timeout: float = 30.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -466,7 +513,13 @@ def sock_path(vm_id: str) -> Path:
     return SOCK_DIR / f"{name}.sock"
 
 
-def start_firecracker(meta: dict) -> None:
+def spawn_firecracker(meta: dict) -> None:
+    """Launch the firecracker process and leave it unconfigured.
+
+    Split out of start_firecracker because a snapshot restore needs a process
+    that has never seen /boot-source or InstanceStart: PUT /snapshot/load is
+    only legal on a virgin process. A cold boot is this plus boot_firecracker.
+    """
     d = vm_dir(meta["vm_id"])
     sock = sock_path(meta["vm_id"])
     log = d / "fc.log"
@@ -506,6 +559,10 @@ def start_firecracker(meta: dict) -> None:
     # not just a convenience for poking at it by hand.
     sudo(["chmod", "666", str(sock)], check=False)
 
+
+def boot_firecracker(meta: dict) -> None:
+    """Configure a spawned firecracker process and cold-boot the guest."""
+    sock = meta["sock"]
     # Configure boot, drive, net, machine-config, start.
     boot_args = (
         "console=ttyS0 reboot=k panic=1 pci=off "
@@ -517,13 +574,25 @@ def start_firecracker(meta: dict) -> None:
                              "is_root_device": True, "is_read_only": False}),
         ("/network-interfaces/eth0", {"iface_id": "eth0", "host_dev_name": meta["tap"],
                                         "guest_mac": meta["mac"]}),
-        ("/machine-config", {"vcpu_count": meta["cpus"], "mem_size_mib": meta["memory_mb"]}),
+        # track_dirty_pages is set at boot on every VM, not just ones that will
+        # be snapshotted, because it cannot be backfilled: firecracker only
+        # honours it from the first boot, so a VM booted without it can never
+        # take a diff snapshot for the rest of its life. The cost is one dirty
+        # bitmap in the host's KVM slot, which is cheap next to re-booting a
+        # guest to gain the capability.
+        ("/machine-config", {"vcpu_count": meta["cpus"], "mem_size_mib": meta["memory_mb"],
+                              "track_dirty_pages": True}),
         ("/actions", {"action_type": "InstanceStart"}),
     ]
     for path, body in steps:
         code, resp = fc_api(str(sock), "PUT", path, body)
         if code >= 300:
             raise RuntimeError(f"firecracker API {path} -> {code}: {resp!r}")
+
+
+def start_firecracker(meta: dict) -> None:
+    spawn_firecracker(meta)
+    boot_firecracker(meta)
 
 
 def stop_firecracker(meta: dict) -> None:
@@ -655,14 +724,27 @@ def destroy_vm(vm_id: str) -> None:
     sudo(["rm", "-rf", str(vm_dir(vm_id))], check=False)
 
 
-# -- Snapshots (disk-only) ----------------------------------------------------
-# TODO: Implement Firecracker memory snapshots (Pause + CreateSnapshot with
-# snapshot_type=Full) to capture RAM + vCPU state. Current disk-only snapshots
-# still require a full cold boot on restore (~5-15s). Memory snapshots would
-# enable sub-second (<200ms) resume, eliminating cold start latency.
+# -- Snapshots ----------------------------------------------------------------
+# Two kinds share one store. A "disk" snapshot copies the rootfs and nothing
+# else, so restoring it cold-boots the guest (~5-15s). A "live" snapshot
+# additionally pauses the VM and has firecracker write vCPU state and the whole
+# guest memory next to that rootfs, so restoring it resumes the guest exactly
+# where it stopped instead of booting it.
+#
+# Live is opt-in, and stays opt-in: it costs mem_size_mib of disk on EVERY
+# create (there is no sparseness to hide behind, firecracker writes the full
+# memory image) plus a pause window as long as it takes to write that much.
+# Disk remains the default and the fallback.
+#
+# Writing that memory image happens inside a single firecracker API call, and
+# fc_api's 5s default would turn a slow one into a soft 599 that reads like a
+# socket problem rather than a snapshot that is still running. Snapshot calls
+# get a budget measured in minutes instead.
+SNAPSHOT_API_TIMEOUT = float(os.environ.get("FC_AGENT_SNAPSHOT_API_TIMEOUT", "600"))
 
-def snapshot_rootfs(vm_id: str, snapshot_id: str) -> Path:
-    """Resolve a snapshot's rootfs, preferring the host-global store.
+
+def snapshot_file(vm_id: str, snapshot_id: str, name: str, required: bool = True) -> Path | None:
+    """Resolve one file inside a snapshot dir, preferring the host-global store.
 
     snapshot_id names the request into a filesystem path, so both candidates are
     realpath'd and confirmed to stay under their root: "../../etc/shadow", or
@@ -673,24 +755,58 @@ def snapshot_rootfs(vm_id: str, snapshot_id: str) -> Path:
     so that location stays readable. Nothing writes there any more. Pass an
     empty vm_id to restrict the lookup to the store, which is what a seed with
     no live source vm needs.
+
+    `name` is a literal from a call site (rootfs.ext4, vmstate, mem,
+    meta.json), never request-derived -- every artifact of a snapshot goes
+    through this one guard rather than being joined onto the rootfs's dirname
+    somewhere else. required=False answers "not there" with None instead of a
+    404, for a file a snapshot may legitimately lack.
     """
     store_root = os.path.realpath(str(SNAPSHOTS_DIR))
-    resolved = os.path.realpath(os.path.join(store_root, snapshot_id, "rootfs.ext4"))
+    resolved = os.path.realpath(os.path.join(store_root, snapshot_id, name))
     if not resolved.startswith(store_root + os.sep):
         raise HTTPError(400, f"invalid snapshot id: {snapshot_id!r}")
     if os.path.exists(resolved):
         return Path(resolved)
 
     if not vm_id:
-        raise HTTPError(404, "snapshot not found")
+        if required:
+            raise HTTPError(404, "snapshot not found")
+        return None
 
     legacy_root = os.path.realpath(os.path.join(str(vm_dir(vm_id)), "snapshots"))
-    legacy = os.path.realpath(os.path.join(legacy_root, snapshot_id, "rootfs.ext4"))
+    legacy = os.path.realpath(os.path.join(legacy_root, snapshot_id, name))
     if not legacy.startswith(legacy_root + os.sep):
         raise HTTPError(400, f"invalid snapshot id: {snapshot_id!r}")
     if not os.path.exists(legacy):
-        raise HTTPError(404, "snapshot not found")
+        if required:
+            raise HTTPError(404, "snapshot not found")
+        return None
     return Path(legacy)
+
+
+def snapshot_rootfs(vm_id: str, snapshot_id: str) -> Path:
+    """Resolve a snapshot's rootfs. See snapshot_file for the containment rules."""
+    return snapshot_file(vm_id, snapshot_id, "rootfs.ext4")
+
+
+def snapshot_kind(vm_id: str, snapshot_id: str) -> str:
+    """Read a snapshot's recorded kind, "live" or "disk".
+
+    Reads the recorded value rather than looking for a memory image, for the
+    reason spelled out in snapshot_create. Anything unreadable, unrecognised,
+    or predating live snapshots is disk: restoring a live snapshot as a disk
+    one costs a cold boot, while restoring a disk one as live would hand
+    firecracker a memory file that does not exist.
+    """
+    p = snapshot_file(vm_id, snapshot_id, "meta.json", required=False)
+    if not p:
+        return "disk"
+    try:
+        rec = json.loads(p.read_text())
+    except (OSError, ValueError):
+        return "disk"
+    return "live" if rec.get("kind") == "live" else "disk"
 
 
 def file_digest(path: Path | str) -> str:
@@ -719,22 +835,78 @@ def file_digest(path: Path | str) -> str:
         return cp.stdout.decode().split()[0]
 
 
-def snapshot_create(vm_id: str, comment: str) -> dict:
+def copy_rootfs(src: str, dst: Path) -> None:
+    """Copy a rootfs image, reflinking when the filesystem allows it.
+
+    cp goes through sudo because the live rootfs can be root-owned; the plain
+    copy is the fallback for a filesystem with no reflink support, where cp
+    --reflink=auto still exits non-zero on some coreutils versions.
+    """
+    sudo(["cp", "--reflink=auto", src, str(dst)], check=False)
+    if not dst.exists():
+        shutil.copyfile(src, dst)
+
+
+def snapshot_create(vm_id: str, comment: str, live: bool = False) -> dict:
     meta = load_meta(vm_id)
     if not meta:
         raise HTTPError(404, "vm not found")
+    # Anything that can refuse the request is checked before the store dir is
+    # created, so a rejected snapshot leaves nothing behind to be swept up.
+    sock = meta.get("sock") or ""
+    if live and not sock:
+        raise HTTPError(409, "vm has no firecracker socket; live snapshot needs a running vm")
     snap_id = f"snap-{int(time.time())}-{uuid.uuid4().hex[:6]}"
     snap_dir = SNAPSHOTS_DIR / snap_id
     snap_dir.mkdir(parents=True)
-    # Quiesce guest FS then copy.
-    ssh_exec(meta["guest_ip"], "sync; sync", timeout=10.0)
     snap_rootfs = snap_dir / "rootfs.ext4"
-    sudo(["cp", "--reflink=auto", meta["rootfs"], str(snap_rootfs)], check=False)
-    if not snap_rootfs.exists():
-        shutil.copyfile(meta["rootfs"], snap_rootfs)
+    extra_bytes = 0
+    if live:
+        # Both halves of the snapshot are taken inside ONE pause window. The
+        # memory image holds the guest's view of its own disk (page cache,
+        # dirty pages, in-flight writes), so a rootfs copied after the resume
+        # would already have drifted from the memory that is about to be
+        # restored on top of it, and the guest would wake up believing things
+        # about a filesystem that no longer says them.
+        #
+        # No `sync` on this path: the page cache IS in the memory image, so
+        # flushing it buys nothing, and an ssh round trip is real time added to
+        # a window during which the guest is stopped.
+        fc_vm_state(sock, "Paused")
+        try:
+            copy_rootfs(meta["rootfs"], snap_rootfs)
+            code, resp = fc_api(
+                sock, "PUT", "/snapshot/create",
+                {
+                    "snapshot_type": "Full",
+                    "snapshot_path": str(snap_dir / "vmstate"),
+                    "mem_file_path": str(snap_dir / "mem"),
+                },
+                timeout=SNAPSHOT_API_TIMEOUT,
+            )
+            if code >= 300:
+                raise RuntimeError(f"firecracker API /snapshot/create -> {code}: {resp!r}")
+        finally:
+            # Resume unconditionally. The realistic failure here is a full
+            # disk (the mem file is mem_size_mib every single time), and the
+            # cost of not doing this is a guest frozen forever over a snapshot
+            # nobody got: a bad snapshot is recoverable, a stopped VM that no
+            # call path will ever resume is not.
+            fc_vm_state(sock, "Resumed")
+        extra_bytes = (
+            os.path.getsize(snap_dir / "vmstate") + os.path.getsize(snap_dir / "mem")
+        )
+    else:
+        # Quiesce guest FS then copy.
+        ssh_exec(meta["guest_ip"], "sync; sync", timeout=10.0)
+        copy_rootfs(meta["rootfs"], snap_rootfs)
     # Hashing is inline and blocking, so the snapshot is not reported ready
     # until its digest is known. A digest that arrives later is a digest that
     # some caller has already raced past.
+    #
+    # It covers the rootfs and only the rootfs, on both kinds. The artifact
+    # transfer path moves one file, so a live snapshot handed to another host
+    # arrives as its disk half; the digest describes exactly what travels.
     digest = file_digest(snap_rootfs)
     # origin_vm_id records provenance only. It is deliberately NOT a lifetime
     # link: the origin vm may be destroyed while this artifact stays usable.
@@ -744,6 +916,16 @@ def snapshot_create(vm_id: str, comment: str) -> dict:
         "created_at": now_iso(),
         "origin_vm_id": vm_id,
         "digest": digest,
+        # kind is written down, never inferred from which files are present. A
+        # dir left half-finished by a create that ran out of disk has a rootfs
+        # and no memory image, which is indistinguishable by inspection from a
+        # deliberate disk snapshot, and restoring it as one would silently cold
+        # boot a guest the caller believed it had frozen.
+        "kind": "live" if live else "disk",
+        # Live snapshots are a different order of size from disk ones (a whole
+        # memory image per create), so what the snapshot occupies is reported
+        # rather than left for a caller to stat.
+        "size_bytes": os.path.getsize(snap_rootfs) + extra_bytes,
     }
     (snap_dir / "meta.json").write_text(json.dumps(record))
     meta.setdefault("snapshots", []).append(record)
@@ -767,6 +949,7 @@ def snapshot_restore(vm_id: str, snapshot_id: str) -> None:
     # Restore stays scoped to this vm's own snapshots plus the store; it cannot
     # be steered at "../../<other-vm>/snapshots/<id>".
     snap_rootfs = snapshot_rootfs(vm_id, snapshot_id)
+    kind = snapshot_kind(vm_id, snapshot_id)
     # Stop firecracker, swap rootfs, recreate the TAP (the dead fc process
     # may still be holding it briefly), restart with same config.
     stop_firecracker(meta)
@@ -787,9 +970,48 @@ def snapshot_restore(vm_id: str, snapshot_id: str) -> None:
     # is the source of NUL/stale-byte corruption on restore. A brand-new
     # inode has no such pages to leak.
     tmp_rootfs = f"{meta['rootfs']}.restore-tmp"
-    sudo(["cp", str(snap_rootfs), tmp_rootfs])
+    # --reflink=auto for the same reason copy_rootfs has it: on a filesystem
+    # that supports it this is a metadata operation instead of a full-size
+    # write, which is most of what makes a restore feel instant. auto, not
+    # always, so a filesystem without reflink still copies rather than failing.
+    sudo(["cp", "--reflink=auto", str(snap_rootfs), tmp_rootfs])
     sudo(["mv", tmp_rootfs, meta["rootfs"]])
     sudo(["chmod", "666", meta["rootfs"]], check=False)
+    if kind == "live":
+        vmstate = snapshot_file(vm_id, snapshot_id, "vmstate")
+        mem = snapshot_file(vm_id, snapshot_id, "mem")
+        # spawn only. /snapshot/load is the one call firecracker will accept
+        # exclusively on a process that has never been configured, so the
+        # boot_firecracker half must NOT run here -- /boot-source or
+        # InstanceStart first and the load is rejected outright.
+        #
+        # Nothing has to be told about the network either. This is a restore in
+        # place, so setup_tap above derived the same tap name, IPs and MAC from
+        # the same meta["index"] the frozen guest was using, and the device the
+        # memory image expects to find is the device that now exists.
+        spawn_firecracker(meta)
+        code, resp = fc_api(
+            meta["sock"], "PUT", "/snapshot/load",
+            {
+                "snapshot_path": str(vmstate),
+                "mem_backend": {"backend_type": "File", "backend_path": str(mem)},
+                "resume_vm": True,
+            },
+            timeout=SNAPSHOT_API_TIMEOUT,
+        )
+        if code >= 300:
+            raise RuntimeError(f"firecracker API /snapshot/load -> {code}: {resp!r}")
+        save_meta(meta)
+        # Seconds, not the cold-boot budget: a resumed guest already has a
+        # booted userspace and sshd, so it answers immediately or it is broken,
+        # and waiting 30s on it only delays finding that out. The ssh control
+        # master was unlinked above because every connection the memory image
+        # remembers is dead on the wire.
+        if wait_for_ssh(meta["guest_ip"], timeout=5.0):
+            resync_guest_clock(meta["guest_ip"])
+        else:
+            print(f"[fc-agent] live restore {snapshot_id}: no ssh from {meta['guest_ip']} after resume", flush=True)
+        return
     start_firecracker(meta)
     save_meta(meta)
     wait_for_ssh(meta["guest_ip"], timeout=30.0)
@@ -1849,7 +2071,15 @@ class Handler(BaseHTTPRequestHandler):
                         return self._json(200, {"ok": True, "endpoints": endpoints})
                     if action == "snapshot" and method == "POST":
                         body = self._read_json()
-                        rec = snapshot_create(vm_id, body.get("comment", ""))
+                        # live rides on the existing verb as an optional flag
+                        # rather than getting a verb of its own: it is the same
+                        # operation on the same store producing the same kind
+                        # of id, and a caller that does not know about it (or
+                        # a host that cannot do it) keeps getting a disk
+                        # snapshot, which is the fallback by design.
+                        rec = snapshot_create(
+                            vm_id, body.get("comment", ""), live=bool(body.get("live", False))
+                        )
                         # the digest goes back on the response because this is
                         # the only moment it is available to the caller: it is
                         # computed while the artifact is written and nothing
@@ -1862,6 +2092,8 @@ class Handler(BaseHTTPRequestHandler):
                             {
                                 "snapshot_id": rec["snapshot_id"],
                                 "digest": rec.get("digest", ""),
+                                "kind": rec.get("kind", "disk"),
+                                "size_bytes": rec.get("size_bytes", 0),
                             },
                         )
                     if action == "snapshots" and method == "GET":
