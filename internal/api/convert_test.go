@@ -275,3 +275,27 @@ func TestValidateHealthcheck(t *testing.T) {
 		})
 	}
 }
+
+// TestToAPISnapshot_kindDefaultsToDisk pins the empty-to-disk resolution.
+// Empty is not a third kind: it is a row written before the column existed, or
+// a provider with only one kind to report. Letting "" onto the wire would push
+// the special case into every client, and the SDKs document kind as always
+// being one of the two values.
+func TestToAPISnapshot_kindDefaultsToDisk(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		in   orchestrator.SnapshotKind
+		want string
+	}{
+		{"empty reads as disk", "", "disk"},
+		{"disk passes through", orchestrator.SnapshotKindDisk, "disk"},
+		{"live passes through", orchestrator.SnapshotKindLive, "live"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := toAPISnapshot(orchestrator.SnapshotRecord{SnapshotID: "s1", Kind: tc.in})
+			if got.Kind != tc.want {
+				t.Errorf("kind = %q, want %q", got.Kind, tc.want)
+			}
+		})
+	}
+}

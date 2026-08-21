@@ -667,6 +667,7 @@ func (h *Handler) destroyEnvironment(w http.ResponseWriter, r *http.Request) {
 //	@Failure	404		{object}	Error
 //	@Failure	409		{object}	Error
 //	@Failure	500		{object}	Error
+//	@Failure	501		{object}	Error
 //	@Security	BearerAuth
 //	@Router		/v1/environments/{vmId}/snapshots [post]
 func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
@@ -702,6 +703,12 @@ func (h *Handler) createSnapshot(w http.ResponseWriter, r *http.Request) {
 		Metadata:       req.Metadata,
 		Exports:        exports,
 		LayerKey:       req.LayerKey,
+		// Passed straight through. The orchestrator decides whether the
+		// backend can honour it, and reports what it actually wrote back as
+		// the record's Kind; nothing here echoes the request into the
+		// response, because a caller reading its own flag back is exactly the
+		// mistake the recorded kind exists to prevent.
+		Live: req.Live,
 		// Security boundary: a layer is filed under the scope the caller
 		// authenticated as, never one it can name. It is read back the same way
 		// by resolveSnapshot, which is what makes a write and a later lookup

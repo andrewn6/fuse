@@ -223,6 +223,17 @@ type CreateSnapshotRequest struct {
 	// A layer is still an ordinary build-mode snapshot; the key is the only
 	// thing that distinguishes it.
 	LayerKey string `json:"layer_key,omitempty"`
+
+	// Live asks for the guest's memory and vCPU state to be captured
+	// alongside the rootfs, so restoring resumes the guest instead of
+	// cold-booting it. False (the default, and the value of an omitted body)
+	// is a disk-only snapshot.
+	//
+	// It is a request, not a guarantee. A backend with no live-snapshot
+	// support rejects it with ErrSnapshotUnsupported (501), and an agent too
+	// old to know about the flag answers with a disk snapshot; the Kind on
+	// the response says which happened.
+	Live bool `json:"live,omitempty"`
 }
 
 // ForkEnvironmentRequest is the optional body for
@@ -265,7 +276,13 @@ type Snapshot struct {
 	// transfer of these exact bytes. It is not an identity two artifacts can
 	// share: rebuilding the same recipe produces different bytes, so nothing
 	// looks a snapshot up by digest. Empty when the host agent does not hash.
-	Digest         string           `json:"digest,omitempty"`
+	Digest string `json:"digest,omitempty"`
+	// Kind is "disk" or "live" and reports what the artifact actually
+	// contains, never what the caller asked for: a live request served by an
+	// agent that could only take a disk snapshot reads back as "disk". It is
+	// always populated, including on records written before live snapshots
+	// existed, which read back as "disk".
+	Kind           string           `json:"kind"`
 	SizeBytes      int64            `json:"size_bytes,omitempty"`
 	CreatedAt      time.Time        `json:"created_at"`
 	UpdatedAt      time.Time        `json:"updated_at,omitempty"`
