@@ -2,10 +2,10 @@
 
 status: draft, not yet executed
 applies to: the firecracker host agent (`host-agent/firecracker/fc-agent.py`)
-target host: phantom (`debian@51.79.19.90`), and any future firecracker host
+            on any host whose state is on a filesystem without reflink
 
 **this document is for human execution after review.** nothing in here has been
-run against phantom. every step marked `DESTRUCTIVE` takes a customer VM, a
+run against a real host. every step marked `DESTRUCTIVE` takes a customer VM, a
 snapshot artifact, or a partition table with it. read the whole thing, run the
 pre-flight, and confirm the assumptions in the appendix before typing anything.
 
@@ -20,7 +20,7 @@ not built by blume (`docs/blume.config.ts` sets `content.root = "content"`).
 `snapshot_create` copies the VM rootfs with `cp --reflink=auto`
 (`host-agent/firecracker/fc-agent.py:796`, via `copy_rootfs`). `auto` means "use
 copy-on-write if the filesystem supports it, otherwise do a full byte copy, and
-do not complain either way". phantom's state is on ext4, which has no reflink,
+do not complain either way". the host's state is on ext4, which has no reflink,
 so today every snapshot is a multi-gigabyte read plus write.
 
 that was tolerable while snapshots were disk-only. the live snapshot path on
@@ -116,9 +116,9 @@ systemctl cat fc-agent.service
 ```
 
 everything below writes `$FC_DIR` for that path. **assumption to verify:** this
-runbook was written expecting
-`/home/debian/fuse/host-agent/firecracker`. if `systemctl cat` disagrees, use
-what it says.
+runbook was written expecting a git checkout with the agent under
+`<checkout>/host-agent/firecracker`. whatever `systemctl cat` reports is
+authoritative; substitute it everywhere `$FC_DIR` appears below.
 
 ### 2.2 confirm the filesystem and free space
 
@@ -165,8 +165,8 @@ from an operator workstation with the CLI pointed at the orchestrator:
 
 ```sh
 fuse hosts list
-fuse hosts get <phantom-host-id>
-fuse environment list --host-id <phantom-host-id> --all-pages
+fuse hosts get <host-id>
+fuse environment list --host-id <host-id> --all-pages
 ```
 
 note the `active_host` trap: `fuse environment list` scopes to the active host
@@ -176,7 +176,7 @@ stale. pass `--host-id` explicitly.
 cross-check against the agent itself, which is the ground truth:
 
 ```sh
-# on phantom. the token is in $FC_DIR/.env, mode 600. do not echo it.
+# on the target host. the token is in $FC_DIR/.env, mode 600. do not echo it.
 set +o history
 source "$FC_DIR/.env"
 curl -fsS -H "Authorization: Bearer $FC_AGENT_TOKEN" http://127.0.0.1:8090/v1/vm | python3 -m json.tool
@@ -192,7 +192,7 @@ live guest gives you a torn image, and moving the mount point out from under it
 gives you a VM whose disk has silently become an orphaned inode. there is no
 online variant of this.
 
-so, for each environment on phantom:
+so, for each environment on the target host:
 
 ```sh
 # DESTRUCTIVE (customer-visible). drain runs the in-guest drain command; it does
@@ -204,7 +204,7 @@ fuse environment destroy <env-id> --yes
 then confirm both sides are empty:
 
 ```sh
-fuse environment list --host-id <phantom-host-id> --all-pages   # expect none
+fuse environment list --host-id <host-id> --all-pages   # expect none
 ls "$FC_DIR/agent-state/vms"                                    # expect empty
 pgrep -a firecracker                                            # expect nothing
 ```
@@ -212,7 +212,7 @@ pgrep -a firecracker                                            # expect nothing
 cordon the host first so the scheduler does not place a new VM mid-migration:
 
 ```sh
-fuse hosts cordon <phantom-host-id>
+fuse hosts cordon <host-id>
 ```
 
 if a VM genuinely cannot be destroyed (someone's long-lived box), the migration
@@ -269,7 +269,7 @@ sudo update-initramfs -u
 ```
 
 **A3, shrinking the ext4 root to make room. do not do this.** ext4 cannot shrink
-while mounted, and this filesystem is `/`. it means booting phantom into the
+while mounted, and this filesystem is `/`. it means booting the target host into the
 provider's rescue image, shrinking the filesystem, shrinking the md array and
 its member partitions, and hoping the box boots. hours of downtime and a real
 chance of not coming back, to buy a latency property. if A1 and A2 are both
@@ -347,7 +347,7 @@ leaves the root plenty. write down the number you chose and why.
 child. export them once so nothing gets retyped:
 
 ```sh
-FC_DIR=/home/debian/fuse/host-agent/firecracker   # VERIFY against `systemctl cat fc-agent`
+FC_DIR=<from systemctl cat fc-agent.service>   # resolve in 2.1, do not guess
 STATE="$FC_DIR/agent-state"
 ```
 
@@ -472,13 +472,13 @@ sudo blkid -s UUID -o value "$DEV"    # option B: blkid on the loop device, or u
 `/etc/fstab`, option A:
 
 ```
-UUID=<uuid>  /home/debian/fuse/host-agent/firecracker/agent-state  xfs  noatime  0 0
+UUID=<uuid>  $FC_DIR/agent-state  xfs  noatime  0 0
 ```
 
 `/etc/fstab`, option B:
 
 ```
-/var/lib/fuse/fc-state.img  /home/debian/fuse/host-agent/firecracker/agent-state  xfs  loop,noatime  0 0
+/var/lib/fuse/fc-state.img  $FC_DIR/agent-state  xfs  loop,noatime  0 0
 ```
 
 **no `nofail`.** `nofail` is what turns a failed mount into an agent that boots
@@ -494,7 +494,7 @@ sudo tee /etc/systemd/system/fc-agent.service.d/require-state-mount.conf >/dev/n
 [Unit]
 # the agent creates VMS_DIR/SNAPSHOTS_DIR on startup if they are missing, so a
 # failed mount would otherwise look like a healthy agent with no state at all.
-RequiresMountsFor=/home/debian/fuse/host-agent/firecracker/agent-state
+RequiresMountsFor=$FC_DIR/agent-state
 EOF
 sudo systemctl daemon-reload
 sudo findmnt --verify --verbose
@@ -575,7 +575,7 @@ is the number that matters.
 ### 5.3 end to end
 
 ```sh
-fuse hosts uncordon <phantom-host-id>
+fuse hosts uncordon <host-id>
 fuse environment create ...            # per the usual smoke test
 fuse snapshot create <vm-id> --comment "post-xfs smoke"
 ```
@@ -672,13 +672,13 @@ be clear about the scope before anyone reads the ticket title and expects more.
 
 ## appendix: assumptions a human must verify before running any of this
 
-nothing here was checked against phantom. these are the specific places where
+nothing here was checked against the target host. these are the specific places where
 this runbook guessed:
 
-1. **`FC_DIR = /home/debian/fuse/host-agent/firecracker`.** inferred from the
-   deployment being a `/home/debian/fuse` checkout plus the documented
-   clone-then-`cd host-agent/firecracker` layout. verify: `systemctl cat
-   fc-agent.service`.
+1. **`FC_DIR` is `<checkout>/host-agent/firecracker`.** inferred from the
+   deployment being a git checkout plus the documented
+   clone-then-`cd host-agent/firecracker` layout. this runbook never hardcodes
+   it; resolve it first. verify: `systemctl cat fc-agent.service`.
 2. **the agent runs as a systemd unit named `fc-agent.service`, installed by
    `fc-agent.sh install-service`, `User=root`, port 8090.** if it is running
    from the foreground `nohup` path instead, the drop-in in 4.5 does nothing and
@@ -698,7 +698,7 @@ this runbook guessed:
 8. **the current snapshot store contents and size**, and whether every snapshot
    record carries a `digest` (older or hand-made ones may not, and the check in
    4.4 skips those rather than failing them). verify: section 2.4.
-9. **that phantom has zero long-lived VMs nobody is willing to destroy.** if
+9. **that the target host has zero long-lived VMs nobody is willing to destroy.** if
    that is false, section 2.5 does not apply as written and this needs
    rethinking before the window is booked.
 10. **the weekly `fc-update.timer` is installed.** 4.3 stops it. if it is not
