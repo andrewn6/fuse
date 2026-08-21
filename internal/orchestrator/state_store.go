@@ -138,6 +138,21 @@ type SnapshotRecord struct {
 	// caches), so it can never serve as a cache key and nothing dedups on it.
 	Digest string
 
+	// Kind records whether this snapshot carries guest memory as well as the
+	// rootfs. It is written from what the provider reports it actually wrote,
+	// never from what the caller asked for, so a live request served by an
+	// agent that could only take a disk snapshot is filed as disk.
+	//
+	// Empty means disk. Every row predating live snapshots reads back that way
+	// (the column defaults to 'disk'), and so does any provider that has no
+	// second kind to distinguish, which is all of them but firecracker.
+	//
+	// Nothing consults this on restore: the host agent keeps its own copy in
+	// the snapshot's metadata and branches on that, so this is here for
+	// reporting, quota reasoning, and telling an operator why one artifact is
+	// five times the size of its neighbour.
+	Kind SnapshotKind
+
 	State          SnapshotState
 	SizeBytes      int64
 	RetentionUntil *time.Time

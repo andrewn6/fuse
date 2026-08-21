@@ -258,6 +258,51 @@ type SnapshotDigester interface {
 	CheckpointWithDigest(ctx context.Context, comment string) (Checkpoint, error)
 }
 
+// SnapshotKind distinguishes the two things a checkpoint can be. A disk
+// snapshot is the rootfs and nothing else, so restoring it cold-boots the
+// guest; a live snapshot additionally carries vCPU state and the whole guest
+// memory, so restoring it resumes the guest exactly where it stopped.
+//
+// It is recorded rather than inferred. The two are indistinguishable once
+// created unless something wrote down which one was asked for, and guessing
+// wrong is not a cosmetic error: restoring a live artifact as a disk one
+// silently cold-boots a guest the caller believed it had frozen.
+type SnapshotKind string
+
+const (
+	// SnapshotKindDisk is the default and the fallback. Everything taken
+	// before live snapshots existed is this, and anything that cannot be
+	// classified reads back as this.
+	SnapshotKindDisk SnapshotKind = "disk"
+
+	// SnapshotKindLive is rootfs plus vCPU state plus the full memory image.
+	SnapshotKindLive SnapshotKind = "live"
+)
+
+// LiveSnapshotCapable is an optional companion to SnapshotCapable for backends
+// that can checkpoint guest memory as well as disk, in one pause window.
+//
+// It is a separate narrow interface rather than a wider SnapshotCapable for
+// the same reason SnapshotDigester is: most backends cannot do this at all.
+// Widening SnapshotCapable would be actively harmful here, not merely noisy.
+// The qemu provider deliberately implements NEITHER interface (see
+// internal/qemu/qemu.go and the guardrail tests in qemu_test.go), because a
+// vfio-passed-through GPU cannot be checkpointed at all, and the orchestrator
+// relies on that missing-method fact: the `env.(SnapshotCapable)` assertion
+// failing is what stops a GPU environment from being snapshotted. Adding a
+// method to SnapshotCapable that only firecracker can satisfy would force
+// every backend to either implement it or drop out of the interface entirely,
+// which is exactly the guardrail being leaned on.
+//
+// There is deliberately no RestoreLive. The host agent records the kind in the
+// snapshot's own metadata and branches on it internally, so the existing
+// Restore already restores a live snapshot correctly. A second restore verb
+// would let a caller name a kind that disagrees with what was actually
+// written, which is the one thing the recorded kind exists to prevent.
+type LiveSnapshotCapable interface {
+	CheckpointLive(ctx context.Context, comment string) (Checkpoint, error)
+}
+
 // CapacityProber is implemented by providers that can report the real
 // hardware capacity of the host they front (CPU count, total RAM, free
 // disk, GPU inventory) instead of trusting operator-declared numbers. The
@@ -387,6 +432,12 @@ type Checkpoint struct {
 	// builds of the same recipe produce different rootfs bytes, so it is never
 	// an identity two artifacts can share and never a cache key.
 	Digest string
+
+	// Kind is what this checkpoint actually contains: rootfs only, or rootfs
+	// plus guest memory. Backends that only ever take disk snapshots leave it
+	// empty, which callers read as SnapshotKindDisk; empty is not an error,
+	// it is an older agent (or a backend with nothing to distinguish).
+	Kind SnapshotKind
 }
 
 // BootResult is returned after provisioning or restoring an environment.

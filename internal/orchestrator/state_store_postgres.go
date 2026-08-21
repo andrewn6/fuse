@@ -317,12 +317,20 @@ func (s *PostgresStateStore) UpsertSnapshot(ctx context.Context, snapshot Snapsh
 	if err != nil {
 		return fmt.Errorf("marshal snapshot exports %s: %w", snapshot.SnapshotID, err)
 	}
+	// The column defaults to 'disk', but naming it in the INSERT bypasses that
+	// default, so an unset Kind has to be normalized here or every row written
+	// through this path lands as '' instead: a value the migration
+	// deliberately never creates and no reader expects.
+	kind := snapshot.Kind
+	if kind == "" {
+		kind = SnapshotKindDisk
+	}
 	_, err = s.db.ExecContext(ctx, `
 		INSERT INTO orchestrator_snapshots (
 			snapshot_id, vm_id, task_id, host_id, tenant_id, parent_snapshot_id, mode, state, size_bytes,
 			retention_until, metadata_json, exports_json, last_error, created_at, updated_at,
-			layer_key, arch, digest
-		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
+			layer_key, arch, digest, kind
+		) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
 		ON CONFLICT (snapshot_id) DO UPDATE SET
 			vm_id=EXCLUDED.vm_id,
 			task_id=EXCLUDED.task_id,
@@ -340,7 +348,8 @@ func (s *PostgresStateStore) UpsertSnapshot(ctx context.Context, snapshot Snapsh
 			updated_at=EXCLUDED.updated_at,
 			layer_key=EXCLUDED.layer_key,
 			arch=EXCLUDED.arch,
-			digest=EXCLUDED.digest
+			digest=EXCLUDED.digest,
+			kind=EXCLUDED.kind
 	`,
 		snapshot.SnapshotID,
 		snapshot.VMID,
@@ -360,6 +369,7 @@ func (s *PostgresStateStore) UpsertSnapshot(ctx context.Context, snapshot Snapsh
 		snapshot.LayerKey,
 		snapshot.Arch,
 		snapshot.Digest,
+		string(kind),
 	)
 	if err != nil {
 		return fmt.Errorf("upsert snapshot %s: %w", snapshot.SnapshotID, err)
@@ -371,7 +381,7 @@ func (s *PostgresStateStore) GetSnapshot(ctx context.Context, snapshotID string)
 	row := s.db.QueryRowContext(ctx, `
 		SELECT snapshot_id, vm_id, task_id, host_id, tenant_id, parent_snapshot_id, mode, state, size_bytes,
 		       retention_until, metadata_json, exports_json, last_error, created_at, updated_at,
-		       layer_key, arch, digest
+		       layer_key, arch, digest, kind
 		FROM orchestrator_snapshots
 		WHERE snapshot_id=$1
 	`, snapshotID)
@@ -390,7 +400,7 @@ func (s *PostgresStateStore) ListSnapshots(ctx context.Context) ([]SnapshotRecor
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT snapshot_id, vm_id, task_id, host_id, tenant_id, parent_snapshot_id, mode, state, size_bytes,
 		       retention_until, metadata_json, exports_json, last_error, created_at, updated_at,
-		       layer_key, arch, digest
+		       layer_key, arch, digest, kind
 		FROM orchestrator_snapshots
 	`)
 	if err != nil {
@@ -423,7 +433,7 @@ func (s *PostgresStateStore) ListSnapshotsByVM(ctx context.Context, vmID string)
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT snapshot_id, vm_id, task_id, host_id, tenant_id, parent_snapshot_id, mode, state, size_bytes,
 		       retention_until, metadata_json, exports_json, last_error, created_at, updated_at,
-		       layer_key, arch, digest
+		       layer_key, arch, digest, kind
 		FROM orchestrator_snapshots
 		WHERE vm_id=$1
 	`, vmID)
@@ -464,7 +474,7 @@ func (s *PostgresStateStore) ListSnapshotsByDigest(ctx context.Context, tenantID
 	rows, err := s.db.QueryContext(ctx, `
 		SELECT snapshot_id, vm_id, task_id, host_id, tenant_id, parent_snapshot_id, mode, state, size_bytes,
 		       retention_until, metadata_json, exports_json, last_error, created_at, updated_at,
-		       layer_key, arch, digest
+		       layer_key, arch, digest, kind
 		FROM orchestrator_snapshots
 		WHERE tenant_id=$1
 		  AND digest=$2
@@ -515,7 +525,7 @@ func (s *PostgresStateStore) FindSnapshotByLayerKey(ctx context.Context, tenantI
 	row := s.db.QueryRowContext(ctx, `
 		SELECT snapshot_id, vm_id, task_id, host_id, tenant_id, parent_snapshot_id, mode, state, size_bytes,
 		       retention_until, metadata_json, exports_json, last_error, created_at, updated_at,
-		       layer_key, arch, digest
+		       layer_key, arch, digest, kind
 		FROM orchestrator_snapshots
 		WHERE tenant_id=$1
 		  AND layer_key=$2
@@ -560,6 +570,7 @@ func scanSnapshotRow(scan func(dest ...any) error) (SnapshotRecord, error) {
 		record       SnapshotRecord
 		mode         string
 		state        string
+		kind         string
 		retentionRaw sql.NullTime
 		exportsJSON  []byte
 	)
@@ -582,11 +593,19 @@ func scanSnapshotRow(scan func(dest ...any) error) (SnapshotRecord, error) {
 		&record.LayerKey,
 		&record.Arch,
 		&record.Digest,
+		&kind,
 	); err != nil {
 		return SnapshotRecord{}, err
 	}
 	record.Mode = SnapshotMode(mode)
 	record.State = SnapshotState(state)
+	// '' cannot come from the column (NOT NULL DEFAULT 'disk'), but it can
+	// come from a row written before that default existed on some other
+	// deployment path, and disk is the safe reading either way.
+	record.Kind = SnapshotKind(kind)
+	if record.Kind == "" {
+		record.Kind = SnapshotKindDisk
+	}
 	if retentionRaw.Valid {
 		t := retentionRaw.Time
 		record.RetentionUntil = &t

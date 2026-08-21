@@ -56,6 +56,21 @@ type SnapshotOptions struct {
 	// artifact can only be named, and a name is not something a later build
 	// can derive from the Fusefile it is holding.
 	LayerKey string
+
+	// Live asks for guest memory to be captured alongside the rootfs, so the
+	// restore resumes the guest instead of cold-booting it.
+	//
+	// It stays opt-in rather than becoming the default, because the cost is
+	// real and paid on every create: the full memory image is written to disk
+	// with no sparseness to hide behind, and the guest is paused for as long
+	// as that write takes. A caller that does not ask for it, or a provider
+	// that cannot do it, keeps getting exactly the disk snapshot it always
+	// got.
+	//
+	// The kind is not carried into the restore path. The host agent records
+	// it per snapshot and branches on it there, so RestoreSnapshot needs to
+	// know nothing about this field; see LiveSnapshotCapable.
+	Live bool
 }
 
 // SnapshotFilter narrows ListSnapshotsFiltered results on exact-match
@@ -136,6 +151,16 @@ func (fm *FleetManager) CreateSnapshot(ctx context.Context, vmID string, opts Sn
 	}
 	fm.mu.RUnlock()
 
+	// OPEN QUESTION, deliberately not answered here: a paused vm is arguably
+	// the ideal snapshot source, especially for a live snapshot, since the
+	// guest is already stopped and the agent would not have to pause it. This
+	// guard rejects it anyway, and the reason is that there is no paused state
+	// to allow: VMState has no paused member, because the only pause the fleet
+	// ever performs is the one inside a live snapshot, which the agent opens
+	// and closes within a single call and which the orchestrator never
+	// observes. Answering "should a paused vm be snapshottable" therefore
+	// means first deciding whether pause is a fleet-visible state at all.
+	// Behaviour is unchanged here; the question is recorded, not settled.
 	if state != VMStateRunning {
 		return SnapshotRecord{}, fmt.Errorf("%w: vm %s in state %s: snapshots require running", ErrVMNotRunning, vmID, state)
 	}
@@ -164,6 +189,18 @@ func (fm *FleetManager) CreateSnapshot(ctx context.Context, vmID string, opts Sn
 	if opts.LayerKey != "" {
 		tenantID = opts.TenantID
 	}
+	// Quota is enforced on the honest size, live snapshots included. A live
+	// snapshot's SizeBytes carries the whole memory image, so one of them
+	// consumes roughly mem_size_mib MORE per create than a disk snapshot of
+	// the same vm: a 4 GiB guest turns a ~1 GiB artifact into a ~5 GiB one.
+	// That is not special-cased out, because the bytes are really on the host
+	// and a quota that under-reports them is a quota that lets a tenant fill a
+	// disk it was accounted as not filling.
+	//
+	// The consequence is for operators, not for this code: every existing
+	// per-tenant byte quota was calibrated against rootfs-only snapshots, so a
+	// tenant that starts taking live snapshots will hit an unchanged limit far
+	// sooner than before. Those limits need re-tuning alongside enabling this.
 	if err := fm.enforceSnapshotQuota(ctx, tenantID); err != nil {
 		return SnapshotRecord{}, err
 	}
@@ -188,11 +225,47 @@ func (fm *FleetManager) CreateSnapshot(ctx context.Context, vmID string, opts Sn
 		}
 		return SnapshotRecord{}, fmt.Errorf("%w: provider does not support snapshots for vm %s", ErrSnapshotUnsupported, vmID)
 	}
-	snapshotID, digest, err := checkpointWithDigest(ctx, sc, opts.Comment)
-	if err != nil {
-		return SnapshotRecord{}, fmt.Errorf("checkpoint %s: %w", vmID, err)
+	// The live path is a second, narrower capability rather than a flag on
+	// Checkpoint, and it is asserted AFTER the SnapshotCapable block above so
+	// a gpu env still fails with the gpu explanation: a gpu env implements
+	// neither interface, and "your gpu cannot be checkpointed at all" is the
+	// useful answer to `--live` on one, not "live snapshots are unsupported".
+	var created Checkpoint
+	if opts.Live {
+		lc, ok := env.(LiveSnapshotCapable)
+		if !ok {
+			return SnapshotRecord{}, fmt.Errorf("%w: provider does not support live snapshots for vm %s: retry without live to take a disk snapshot", ErrSnapshotUnsupported, vmID)
+		}
+		created, err = lc.CheckpointLive(ctx, opts.Comment)
+		if err != nil {
+			return SnapshotRecord{}, fmt.Errorf("live checkpoint %s: %w", vmID, err)
+		}
+	} else {
+		id, digest, cErr := checkpointWithDigest(ctx, sc, opts.Comment)
+		if cErr != nil {
+			return SnapshotRecord{}, fmt.Errorf("checkpoint %s: %w", vmID, cErr)
+		}
+		created = Checkpoint{ID: id, Digest: digest, Kind: SnapshotKindDisk}
+	}
+	snapshotID, digest := created.ID, created.Digest
+	// The kind is whatever the provider says it wrote, not what was asked
+	// for: an agent too old to know about live snapshots answers a live
+	// request with a disk snapshot, and recording the request instead of the
+	// result would file a cold-booting artifact as a resumable one.
+	kind := created.Kind
+	if kind == "" {
+		kind = SnapshotKindDisk
 	}
 	checkpoint, _ := lookupCheckpoint(ctx, env, snapshotID)
+	sizeBytes := checkpoint.SizeBytes
+	if sizeBytes == 0 {
+		// The listing stays the primary source so nothing about existing disk
+		// snapshot accounting moves. The create response only fills the gap it
+		// leaves: an agent that lists snapshots without sizes would otherwise
+		// record a live artifact, memory image and all, as zero bytes and hand
+		// the quota a number it knows to be wrong.
+		sizeBytes = created.SizeBytes
+	}
 
 	createdAt := now
 	if !checkpoint.CreatedAt.IsZero() {
@@ -209,8 +282,9 @@ func (fm *FleetManager) CreateSnapshot(ctx context.Context, vmID string, opts Sn
 		LayerKey:         opts.LayerKey,
 		Arch:             arch,
 		Digest:           digest,
+		Kind:             kind,
 		State:            SnapshotStateCreating,
-		SizeBytes:        checkpoint.SizeBytes,
+		SizeBytes:        sizeBytes,
 		RetentionUntil:   retentionUntil,
 		Metadata:         metadataJSON,
 		Exports:          cloneSnapshotExports(opts.Exports),
@@ -233,7 +307,8 @@ func (fm *FleetManager) CreateSnapshot(ctx context.Context, vmID string, opts Sn
 		"snapshot_id":        snapshotID,
 		"mode":               string(mode),
 		"parent_snapshot_id": parentSnapshotID,
-		"size_bytes":         checkpoint.SizeBytes,
+		"size_bytes":         sizeBytes,
+		"kind":               string(kind),
 	})
 
 	return record, nil
@@ -442,6 +517,12 @@ func (fm *FleetManager) RestoreSnapshot(ctx context.Context, vmID, snapshotID st
 	state := v.state
 	fm.mu.RUnlock()
 
+	// Same open question as CreateSnapshot's guard, from the other side:
+	// restoring a live snapshot ends with a resumed guest whatever the vm was
+	// doing beforehand, so "must be running" here is really "must be a live vm
+	// the agent can act on", not a statement about the guest being unpaused.
+	// Left as is deliberately, for the same reason: there is no fleet-visible
+	// paused state to admit.
 	if state != VMStateRunning {
 		return fmt.Errorf("%w: vm %s in state %s: restore requires running", ErrVMNotRunning, vmID, state)
 	}

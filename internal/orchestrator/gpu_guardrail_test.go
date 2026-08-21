@@ -116,3 +116,25 @@ func TestForkEnvironment_gpuEnvUnsupported(t *testing.T) {
 		t.Fatalf("err = %v, want a gpu-specific unsupported message", err)
 	}
 }
+
+// TestCreateSnapshot_gpuEnvLiveStillGPUError asserts the gpu explanation wins
+// over the live one. A gpu env implements neither snapshot interface, and
+// "your gpu cannot be checkpointed" is the answer that tells the caller
+// dropping --live will not help; the generic live-unsupported message would
+// send them to retry something that cannot work.
+func TestCreateSnapshot_gpuEnvLiveStillGPUError(t *testing.T) {
+	provider := newGPUTestProvider()
+	fm := NewFleetManager(FleetConfig{Provider: provider, Prefix: "fuse-"})
+	if err := fm.RegisterHost(context.Background(), gpuFleetHost("gpu-host", 1, "a100"), provider); err != nil {
+		t.Fatal(err)
+	}
+	vmID := provisionGPUTestVM(t, fm, "task-1")
+
+	_, err := fm.CreateSnapshot(context.Background(), vmID, SnapshotOptions{Live: true})
+	if err == nil {
+		t.Fatal("expected live snapshot of gpu env to fail")
+	}
+	if !strings.Contains(err.Error(), "gpu") {
+		t.Fatalf("err = %v, want a gpu-specific unsupported message", err)
+	}
+}
