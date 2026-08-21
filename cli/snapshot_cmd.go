@@ -33,13 +33,20 @@ func newSnapCreateCmd() *cobra.Command {
 		retention int64
 		exportRef string
 		metadata  []string
+		live      bool
 	)
 	cmd := &cobra.Command{
 		Use:   "create <vm-id>",
 		Short: "Create a snapshot of a running environment",
 		Long: "create snapshots the given environment (vm). the vm must be RUNNING and the\n" +
 			"provider must support snapshots. with a tty and no flags, comment/mode/retention\n" +
-			"are collected interactively.",
+			"are collected interactively.\n\n" +
+			"by default the snapshot is disk-only, so restoring it cold-boots the guest.\n" +
+			"--live also captures guest memory and vcpu state, so restoring resumes the\n" +
+			"guest where it stopped; it costs the vm's full configured ram on every\n" +
+			"snapshot, pauses the guest while it runs, and pins the artifact to the host\n" +
+			"that took it. the 'kind' on the result is what was actually written, so check\n" +
+			"it rather than assuming --live was honoured.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			vmID := args[0]
@@ -74,6 +81,7 @@ func newSnapCreateCmd() *cobra.Command {
 				RetentionSeconds: retention,
 				Metadata:         meta,
 				ExportRef:        exportRef,
+				Live:             live,
 			})
 			if err != nil {
 				return friendly(err)
@@ -91,6 +99,10 @@ func newSnapCreateCmd() *cobra.Command {
 	cmd.Flags().Int64Var(&retention, "retention", 0, "retention in seconds (0 = keep forever)")
 	cmd.Flags().StringVar(&exportRef, "export-ref", "", "export reference")
 	cmd.Flags().StringArrayVar(&metadata, "metadata", nil, "metadata as key=value (repeatable)")
+	// deliberately not part of the `changed` check above: like --metadata, it
+	// is not one of the fields the interactive form collects, so passing it
+	// alone on a tty should still prompt for comment/mode/retention.
+	cmd.Flags().BoolVar(&live, "live", false, "also capture guest memory and vcpu state (resumable restore; costs the vm's full ram per snapshot and pauses the guest)")
 	return cmd
 }
 
@@ -197,6 +209,15 @@ func newSnapGetCmd() *cobra.Command {
 	}
 }
 
+// snapKind resolves an empty kind to "disk". Empty is not a third kind, it is
+// a server that predates the field, and every such snapshot is disk-only.
+func snapKind(kind string) string {
+	if kind == "" {
+		return "disk"
+	}
+	return kind
+}
+
 func renderSnapDetail(s *fuse.Snapshot) {
 	retention := "keep forever"
 	if s.RetentionUntil != nil {
@@ -209,6 +230,9 @@ func renderSnapDetail(s *fuse.Snapshot) {
 		{"tenant id", dash(s.TenantID)},
 		{"parent", dash(s.ParentSnapshotID)},
 		{"mode", dash(s.Mode)},
+		// what was actually written, not what --live asked for. an older
+		// server omits it entirely, which reads as disk.
+		{"kind", snapKind(s.Kind)},
 		{"state", stateStyle(s.State)},
 		{"size", humanBytes(s.SizeBytes)},
 		{"retention", retention},
