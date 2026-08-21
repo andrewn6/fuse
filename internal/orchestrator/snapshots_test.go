@@ -494,7 +494,7 @@ type liveSnapshotTestEnv struct {
 }
 
 func (e *liveSnapshotTestEnv) CheckpointLive(ctx context.Context, comment string) (Checkpoint, error) {
-	id, err := e.snapshotTestEnv.Checkpoint(ctx, comment)
+	id, err := e.Checkpoint(ctx, comment)
 	if err != nil {
 		return Checkpoint{}, err
 	}
