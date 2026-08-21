@@ -417,6 +417,37 @@ def ssh_exec(guest_ip: str, remote_cmd: str, stdin: bytes | None = None, timeout
     return cp.returncode, cp.stdout, cp.stderr
 
 
+def resync_guest_clock(guest_ip: str) -> None:
+    """Push the host's wall clock into a guest resumed from a memory snapshot.
+
+    A resumed guest's clock is whatever it was when the snapshot was taken, so
+    it wakes up stale by however long the snapshot sat. Nothing in the guest
+    notices on its own: the kernel is not rebooting, so there is no point at
+    which it re-reads the RTC. Everything that reasons about time then reasons
+    from a wrong now, and the failures land far from here -- a TLS handshake
+    rejecting a certificate as not-yet-valid, a token that looks unexpired
+    long after it is not.
+
+    The host clock is the source rather than chrony inside the guest, because
+    that would make correctness depend on which daemons a particular baked
+    rootfs happens to carry, and the images are not uniform. `date -s` needs
+    nothing but coreutils.
+
+    Best effort: a guest with a wrong clock is degraded, but a restore that
+    already put the guest back is not worth failing over it. The warning is
+    the deliverable when this cannot be done.
+
+    The sub-second drift between reading the host clock and the guest applying
+    it is not corrected. Certificate windows and token lifetimes are the things
+    that care here and they have minutes of slack; anything needing better than
+    that wants a real time daemon, not this.
+    """
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    rc, _, err = ssh_exec(guest_ip, f"date -u -s {shlex.quote(now)}", timeout=10.0)
+    if rc != 0:
+        print(f"[fc-agent] clock resync failed for {guest_ip}: rc={rc} {err!r}", flush=True)
+
+
 def wait_for_ssh(guest_ip: str, timeout: float = 30.0) -> bool:
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -972,7 +1003,9 @@ def snapshot_restore(vm_id: str, snapshot_id: str) -> None:
         # and waiting 30s on it only delays finding that out. The ssh control
         # master was unlinked above because every connection the memory image
         # remembers is dead on the wire.
-        if not wait_for_ssh(meta["guest_ip"], timeout=5.0):
+        if wait_for_ssh(meta["guest_ip"], timeout=5.0):
+            resync_guest_clock(meta["guest_ip"])
+        else:
             print(f"[fc-agent] live restore {snapshot_id}: no ssh from {meta['guest_ip']} after resume", flush=True)
         return
     start_firecracker(meta)
