@@ -970,7 +970,11 @@ def snapshot_restore(vm_id: str, snapshot_id: str) -> None:
     # is the source of NUL/stale-byte corruption on restore. A brand-new
     # inode has no such pages to leak.
     tmp_rootfs = f"{meta['rootfs']}.restore-tmp"
-    sudo(["cp", str(snap_rootfs), tmp_rootfs])
+    # --reflink=auto for the same reason copy_rootfs has it: on a filesystem
+    # that supports it this is a metadata operation instead of a full-size
+    # write, which is most of what makes a restore feel instant. auto, not
+    # always, so a filesystem without reflink still copies rather than failing.
+    sudo(["cp", "--reflink=auto", str(snap_rootfs), tmp_rootfs])
     sudo(["mv", tmp_rootfs, meta["rootfs"]])
     sudo(["chmod", "666", meta["rootfs"]], check=False)
     if kind == "live":
