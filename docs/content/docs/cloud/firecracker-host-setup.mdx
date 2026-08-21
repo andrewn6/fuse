@@ -113,9 +113,9 @@ there is no unauthenticated path on this agent:
 | `POST` | `/v1/vm/{id}/exec` | `{cmd:[...], timeout_ms}`, returns `{exit_code, stdout, stderr}` (base64). |
 | `POST` | `/v1/vm/{id}/start-agent` | Preferred. Optionally fetches the agent binary via `download_url`, writes a systemd drop-in, starts it. |
 | `POST` | `/v1/vm/{id}/start-surfd` | Frozen legacy wire, same as `start-agent` with `fused` defaults. Fuse falls back to this on a 404 from `start-agent`. |
-| `POST` | `/v1/vm/{id}/snapshot` | `{comment, include_ram}`, disk-only (`include_ram` currently ignored). |
+| `POST` | `/v1/vm/{id}/snapshot` | `{comment, live}`. `live` defaults to false (rootfs copy only); true pauses the VM and writes guest memory and vCPU state alongside it. Returns `{snapshot_id, digest, kind, size_bytes}`, where `digest` covers the rootfs only. |
 | `GET` | `/v1/vm/{id}/snapshots` | `{snapshots:[...]}` |
-| `POST` | `/v1/vm/{id}/restore` | `{snapshot_id, include_ram}`, stops fc, swaps rootfs, reboots the VM (`include_ram` currently ignored here too, restore is disk-only). |
+| `POST` | `/v1/vm/{id}/restore` | `{snapshot_id}`. Stops fc and swaps the rootfs, then branches on the snapshot's recorded `kind`: `disk` reboots the VM, `live` loads the memory image into a fresh fc process, resumes, and pushes the host clock into the guest. There is no flag, the recorded kind decides. |
 | `POST` | `/v1/vm/{id}/fork` | Seeds a brand-new VM from this VM's snapshot. Returns the new VM's `{vm_id,url}`. |
 | `GET` | `/v1/vm/{id}/attach` | Hijacks the connection for an interactive pty session, `fuse-attach/1` framing. |
 | `GET` | `/v1/capacity` | Host CPU count, total RAM, and free disk. Probed once at host registration, not polled. |

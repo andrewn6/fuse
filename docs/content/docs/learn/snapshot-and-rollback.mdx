@@ -57,9 +57,11 @@ Note the ID it prints, the first one is `cp-1`. List them any time:
 fuse snapshot list
 ```
 
-A snapshot captures the environment's **disk only**. Memory is not included, so
-restoring is a reboot from that disk rather than a resume of a running process.
-See [Snapshots](/docs/concepts/snapshots) for the full model.
+That is a **disk** snapshot, which is what you get when you don't ask for
+anything else. It captures the environment's disk and nothing else, so restoring
+it is a reboot from that disk rather than a resume of a running process.
+[Step 4](#4-optional-capture-memory-too) covers the other kind. See
+[Snapshots](/docs/concepts/snapshots) for the full model.
 
 ## 3. Roll back
 
@@ -82,7 +84,56 @@ create a new one. `fuse environment list` still shows exactly one environment
 afterward. If you want a copy instead of a rollback, that is a fork, which is
 [Lesson 3](/docs/learn/fork-to-debug).
 
-## 4. Clean up
+## 4. Optional: capture memory too
+
+Everything above is disk. If what you want back is the *process* state, a warmed
+cache, a loaded model, a compile halfway through, add `--live`:
+
+```bash
+fuse snapshot create fuse-lesson2 --live --comment "warmed up"
+```
+
+:::note[This step needs a real host]
+Every other step in this lesson works against the stub provider. This one does
+not: there is no guest memory to capture until a real Firecracker host is behind
+the environment. Run this step against a Firecracker host, or read it and move
+on.
+:::
+
+You get a snapshot record back exactly as before, and it goes in the same list.
+The difference is on the record itself: its `kind` is `live` rather than `disk`.
+Two things are worth knowing about the one you just took.
+
+The **size is much larger**. A live snapshot stores the guest's entire memory
+next to the disk copy, so it costs the environment's configured memory on top of
+the rootfs, every time you take one. That is dense, incompressible data, and your
+tenant's byte quota was sized for rootfs-only snapshots. You will notice.
+
+The **environment pauses while it is taken**. The disk copy and the memory image
+have to be captured in the same window, with the guest stopped, or the disk the
+guest wakes up to would no longer match the memory it wakes up with. How long
+that pause lasts depends on the host's filesystem, see
+[Snapshots](/docs/concepts/snapshots#limitations-of-live-snapshots).
+
+Restoring is the same command you already ran:
+
+```bash
+fuse snapshot restore <id> --yes
+```
+
+You do not tell restore which kind it is dealing with. The host agent reads the
+kind off the snapshot and either resumes the guest or cold-boots it. What you'll
+see is the difference in how long it takes and what survives: a live restore
+comes back with the processes still running and the memory intact, where the disk
+restore in step 3 rebooted.
+
+One thing you cannot do with a live snapshot is fork from it. Fork copies a
+snapshot's disk to seed a new environment, and that is all it looks at, so
+forking a live snapshot gives you a cold-booted copy with none of the memory. If
+you want a copy rather than a rewind, take a disk snapshot and read
+[Lesson 3](/docs/learn/fork-to-debug).
+
+## 5. Clean up
 
 ```bash
 fuse environment destroy fuse-lesson2 --yes
@@ -90,11 +141,17 @@ fuse environment destroy fuse-lesson2 --yes
 
 ## What to take away
 
-- Snapshots are **disk-only and manual**. Nothing snapshots on your behalf.
+- Snapshots are **manual**. Nothing snapshots on your behalf.
+- **Disk is the default.** It captures the disk only, and restoring it reboots.
+- **`--live` also captures memory** and vCPU state, so restoring resumes instead
+  of rebooting. It costs the guest's full memory in bytes per snapshot, pauses
+  the guest to take it, is pinned to the host that took it, and cannot be forked
+  from.
 - Restore is **destructive to the current disk** and in-place. The snapshot
   survives, the environment's current state does not.
-- Snapshots do not work on GPU environments at all, a passed-through device
-  can't be checkpointed. See [Providers](/docs/concepts/providers).
+- Snapshots do not work on GPU environments at all, live or disk, a
+  passed-through device can't be checkpointed. See
+  [Providers](/docs/concepts/providers).
 
 ## Read next
 

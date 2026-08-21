@@ -32,11 +32,44 @@ of them should be retried.
 | `--retention` | Retention in seconds. `0` keeps it forever. |
 | `--export-ref` | Export reference. |
 | `--metadata` | Metadata as `key=value`. Repeatable. |
+| `--live` | Also capture guest memory and vCPU state. Off by default. |
+
+## `--live`
+
+Without it, the snapshot is disk-only: the rootfs is copied and nothing else, and
+restoring it cold-boots the guest. The record's `kind` is `disk`.
+
+With it, the VM is paused and the guest's memory and vCPU state are written
+alongside the rootfs copy, inside a single pause window so the disk matches the
+memory. The record's `kind` is `live`, and restoring it resumes the guest instead
+of booting it. `fuse snapshot restore` takes no corresponding flag; it reads the
+kind off the snapshot.
+
+Four things to know before using it:
+
+- it costs the environment's full configured memory in bytes on **every** create,
+  and per-tenant byte quotas were calibrated for rootfs-only snapshots
+- the guest is paused for the duration of the capture
+- it cannot be forked from. `fuse environment fork` reads only the rootfs, so a
+  fork of a live snapshot cold-boots without the memory
+- it is pinned to the host that took it. A memory image depends on that host's
+  CPU model and Firecracker version, and does not travel
+
+`--live` against a backend with no live-snapshot support returns 501 /
+`unimplemented`, with a message telling you to retry without it. And the `kind`
+recorded on the snapshot is what the host agent reports it actually wrote, not
+what you asked for, so a host running an agent too old to know about live
+snapshots answers a live request with a `disk` snapshot. Check the kind rather
+than assuming. See [Snapshots](/docs/concepts/snapshots).
 
 ## Examples
 
 ```bash
 fuse snapshot create fuse-abc123 --comment "before risky migration" --mode manual
+```
+
+```bash
+fuse snapshot create fuse-abc123 --live --comment "warmed model loaded"
 ```
 
 ## Interactive mode

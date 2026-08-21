@@ -9,21 +9,78 @@ A **snapshot** captures a running microVM's state so you can restore it later,
 useful for fast cold starts, checkpointing long-running tasks, or branching from a
 known-good point via [fork](/docs/concepts/environments#forking).
 
-## What's captured
+Each snapshot is a persisted record that can carry a `comment`, a `mode`
+(`manual` or `auto`), `retention_seconds`, arbitrary `metadata`, and an optional
+`export_ref` for pushing the artifact somewhere external.
 
-Snapshots are disk-only today. The host-agent wire format has an `include_ram`
-field, but it is currently ignored; memory state is not captured. Each snapshot is
-a persisted record that can carry a `comment`, a `mode` (`manual` or `auto`),
-`retention_seconds`, arbitrary `metadata`, and an optional `export_ref` for pushing
-the artifact somewhere external.
+## Two kinds
+
+Every snapshot record carries a `kind`, and there are two of them.
+
+**`disk`** is the default. The agent quiesces the guest filesystem and copies the
+rootfs, and nothing else. There is no memory image, so restoring one boots the
+guest from that disk. The disk is quiesced but not frozen, so what you get is
+crash-consistent at best: anything the guest had in flight but had not committed
+is not in the copy.
+
+**`live`** is opt-in. The agent pauses the VM, copies the rootfs, and has
+Firecracker write the vCPU state and the entire guest memory alongside it, all
+inside a **single pause window**, then resumes. Restoring one resumes the guest
+where it stopped rather than booting it.
+
+The pause window is one window on purpose. The memory image contains the guest's
+own view of its disk (page cache, dirty pages, writes in flight), so a rootfs
+copied after the resume would already have drifted from the memory about to be
+restored on top of it, and the guest would wake up believing things about a
+filesystem that no longer says them. Taking both halves while the guest is
+stopped is what makes the disk match the memory exactly.
+
+## Choosing between them
+
+|  | `disk` (default) | `live` (`--live`) |
+| --- | --- | --- |
+| **What is captured** | Rootfs only | Rootfs plus guest memory plus vCPU state |
+| **Consistency** | Crash-consistent at best | Exact: disk matches memory |
+| **Restore behaviour** | Cold boot from the disk | Resume where the guest stopped |
+| **Cost on disk** | Size of the rootfs | Size of the rootfs plus `mem_size_mib`, every time |
+| **Impact while creating** | Guest keeps running | Guest is paused for the length of the window |
+| **Usable by fork** | Yes | Only its disk half, see below |
+| **Portable to another host** | Yes | No, host-pinned |
+
+Reach for `live` when the thing you want back is process state: a warmed JIT, a
+loaded model, a debugger sitting on a breakpoint, a long compile halfway through.
+Reach for `disk` for everything else, which is most things. A rollback point
+before a risky migration does not need the memory, and paying `mem_size_mib` per
+snapshot for state you were going to reboot through anyway is a bad trade.
+
+Live is opt-in rather than the default for the reasons in
+[D7](https://github.com/folsomintel/fuse/blob/main/docs/decisions/D7-live-snapshot-policy.md):
+it costs a full memory image on every create and pauses a running customer VM to
+get one.
 
 ## Creating one
 
 ```bash
+# disk snapshot, the default
 fuse snapshot create <vm-id> --comment "before risky migration" --mode manual
+
+# live snapshot: memory and vCPU state as well
+fuse snapshot create <vm-id> --live --comment "warmed cache"
 ```
 
-The VM must be `running` at snapshot time.
+The VM must be `running` at snapshot time. Asking for `--live` on a backend that
+has no live-snapshot support fails with `501` / `unimplemented` and a message
+telling you to retry without it, rather than silently handing back a disk
+snapshot.
+
+**The `kind` on the record is what was actually written, not what you asked
+for.** The host agent reports which kind it produced and that is what gets
+stored, so a host running an agent too old to know about live snapshots answers
+a live request with a disk snapshot and the record says `disk`. If your workflow
+depends on the memory being there, read `kind` off the returned record rather
+than assuming your request was honoured. Recording the request instead of the
+result would file a cold-booting artifact as a resumable one, which is the one
+mistake the field exists to prevent.
 
 ## Restoring
 
@@ -31,10 +88,32 @@ The VM must be `running` at snapshot time.
 fuse snapshot restore <id>
 ```
 
-Restore is **in-place only**: it restores the snapshot onto its original VM, which
-must still be running. There is no cross-host restore, clone, or standalone restore
-into a new VM; use [fork](/docs/concepts/environments#forking) if you want a
-new environment from a snapshot instead.
+**Callers do not choose how to restore.** The host agent reads the `kind`
+recorded on the snapshot and branches on it: a `live` snapshot is loaded into a
+fresh Firecracker process and resumed, a `disk` snapshot cold-boots. The kind is
+read from what was written at create time rather than inferred from which files
+are present on disk, because a create that ran out of space leaves a rootfs and
+no memory image, which is indistinguishable by inspection from a deliberate disk
+snapshot. Guessing there would silently cold-boot a guest the caller believed it
+had frozen.
+
+Restore is **in-place only** for both kinds: it restores the snapshot onto its
+original VM, which must still be running. There is no cross-host restore, clone,
+or standalone restore into a new VM.
+
+### The guest clock after a live restore
+
+A resumed guest's clock is frozen at the moment the snapshot was taken, and
+nothing in the guest notices on its own: the kernel is not rebooting, so there is
+no point at which it re-reads the RTC. Everything that reasons about time then
+reasons from a wrong now.
+
+So after a live restore the agent pushes the host's UTC wall clock into the
+guest. Without it the failures land a long way from the cause: a TLS handshake
+rejecting a certificate as not-yet-valid, a token that looks unexpired long after
+it is not. The push is best effort, and sub-second drift between reading the host
+clock and the guest applying it is not corrected. Anything that needs better than
+that wants a real time daemon in the image, not this.
 
 ## Deleting
 
@@ -45,11 +124,51 @@ fuse snapshot delete <id>
 Deletion is leaf-only and also removes the underlying provider artifact; there's no
 soft-delete.
 
+## Limitations of live snapshots
+
+These are real and worth reading before you build on `live`.
+
+**You cannot fork from a live snapshot.** Fork seeds a brand-new VM from a
+snapshot's rootfs, and that is all it looks at. Point it at a live snapshot and
+you get the disk half: a new environment that cold-boots, with none of the memory
+you captured. The same is true of pulling a snapshot artifact to another host,
+the transfer path moves one file, the rootfs. This is why the recorded `digest`
+covers the rootfs and only the rootfs on both kinds, it describes exactly what
+travels.
+
+**Live snapshots are pinned to the host that took them.** A memory image is tied
+to the CPU model it was captured on and to the Firecracker version that wrote it.
+It is not a portable artifact the way a rootfs copy is, and nothing will make it
+one. If you need the state somewhere else, you need a disk snapshot.
+
+**A live snapshot costs `mem_size_mib` extra, every single time.** Firecracker
+writes the full memory image, there is no sparseness or incremental encoding to
+hide behind, and the bytes are dense and compress badly. Per-tenant byte quotas
+were calibrated when snapshots were rootfs-only, so a workflow that takes live
+snapshots of an 8 GiB environment will hit its byte quota far sooner than the
+snapshot count suggests. Budget for it, or keep live snapshots short-lived with
+`--retention`.
+
+**The pause window depends on the filesystem.** On a filesystem with reflink
+support (XFS with `reflink=1`) the rootfs copy inside the window is an O(1)
+metadata operation, so the pause is just the memory write, which is the
+irreducible part. On ext4 there is no reflink, so the same copy is a full
+multi-gigabyte read plus write, and the guest is frozen for all of it. That is a
+multi-second hard freeze of a running VM per snapshot. Moving host state to XFS
+is covered by the
+[xfs reflink migration runbook](https://github.com/folsomintel/fuse/blob/main/docs/runbooks/xfs-reflink-migration.md).
+
 ## The QEMU/GPU exception
 
 Environments running on the QEMU backend **cannot be snapshotted or forked at
-all**: a VFIO-passed-through GPU device can't be checkpointed the way a
-Firecracker microVM's disk can. This covers both whole-device passthrough and
-fractional MIG instances, a slice is still passthrough hardware. Snapshot and
-fork requests against a GPU environment fail cleanly rather than silently doing
-nothing. See [Providers](/docs/concepts/providers).
+all**, live or disk: a VFIO-passed-through GPU device can't be checkpointed the
+way a Firecracker microVM can. The guest holds a real PCI device whose state
+lives on the host, outside the VM's memory image, so a snapshot of it is
+incomplete by construction, and a memory image does not change that. This covers
+both whole-device passthrough and fractional MIG instances, a slice is still
+passthrough hardware.
+
+The QEMU environment deliberately does not implement the orchestrator's snapshot
+interfaces, so this is not a runtime check that could be flipped by a flag.
+Snapshot and fork requests against a GPU environment fail cleanly rather than
+silently doing nothing. See [Providers](/docs/concepts/providers).

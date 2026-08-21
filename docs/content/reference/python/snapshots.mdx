@@ -27,6 +27,48 @@ client.snapshots.restore(snap.id)
   [the environments service](/reference/python/environments) for
   that instead.
 
+## Live snapshots
+
+`SnapshotRequest.live` opts into capturing the guest's memory and vCPU state
+alongside the disk. It defaults to `False`, a disk-only snapshot, which is the
+default everywhere and the fallback:
+
+```python
+snap = client.snapshots.create(
+    env.id, fuse.SnapshotRequest(comment="warmed model loaded", live=True)
+)
+# snap.kind is "live" here, "disk" on every other snapshot
+```
+
+`Snapshot.kind` is `"live"` or `"disk"` and is set by the host agent, not by the
+caller reading its own request back. `restore` has no `live` counterpart: it
+reads the kind off the snapshot and either resumes the guest or cold-boots it.
+
+The trade-offs are the same ones documented under
+[Snapshots](/docs/concepts/snapshots#limitations-of-live-snapshots), and they are
+sharp enough to repeat:
+
+- `Snapshot.size_bytes` on a live snapshot includes a full copy of the
+  environment's configured memory, on every create. Tenant byte quotas were
+  calibrated for rootfs-only snapshots, so a `create` loop with `live=True` will
+  hit the byte quota much sooner than the snapshot count implies.
+- the guest is paused for the duration of the capture.
+- `fork` reads only a snapshot's rootfs, so forking a live snapshot produces a
+  cold-booted environment with none of the memory. There is no error for this,
+  you just do not get what you captured.
+- a live snapshot is pinned to the host that took it. The memory image depends on
+  that host's CPU model and Firecracker version.
+
+`live=True` against a backend with no live-snapshot support raises
+`fuse.ApiError` with `status == 501` and `code == "unimplemented"`, not a
+conflict, so `fuse.is_conflict(err)` reports `False` for it. The message says to
+retry without live for a disk snapshot.
+
+`Snapshot.kind` is worth checking rather than assuming: a host running an agent
+too old to know about live snapshots answers `live=True` with a disk snapshot,
+and the record then says `"disk"`. Recording the request rather than the result
+would file a cold-booting artifact as a resumable one.
+
 Creating or restoring a snapshot against a VM in any state other than
 `running` raises `fuse.ApiError` with `status == 409` and `code == "conflict"`,
 whose message names the offending state. The two paths word it differently:
@@ -39,7 +81,7 @@ restore includes `vm vm-abc in state destroyed: restore requires running`. Use
 | Method | Purpose |
 | --- | --- |
 | `list(vm_id=..., task_id=..., tenant_id=..., state=...)` | List snapshots, all filters optional. |
-| `get(snapshot_id)` | Fetch one snapshot's full detail, including `state` (`creating`\|`ready`\|`restoring`\|`deleting`\|`error`) and `exports`. |
+| `get(snapshot_id)` | Fetch one snapshot's full detail, including `state` (`creating`\|`ready`\|`restoring`\|`deleting`\|`error`), `kind` (`disk`\|`live`), and `exports`. |
 | `delete(snapshot_id)` | Leaf-only delete; also removes the underlying provider artifact. No soft-delete. |
 
 These mirror the [HTTP API](/reference/api) one to one.
