@@ -473,3 +473,99 @@ func TestRemote_auth_header(t *testing.T) {
 	p := New(Config{BaseURL: srv.URL, Token: "my-token"})
 	p.Create(context.Background(), orchestrator.Spec{Name: "vm-1"})
 }
+
+// TestRemote_checkpointLive asserts CheckpointLive sets live on the wire and
+// reads the kind and size back from the agent's response rather than assuming
+// them from the request. The response is the only place either value exists.
+func TestRemote_checkpointLive(t *testing.T) {
+	var got snapshotRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/vm/vm-1/snapshot" {
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode snapshot request: %v", err)
+		}
+		json.NewEncoder(w).Encode(snapshotResponse{
+			SnapshotID: "snap-1",
+			Digest:     "abc",
+			Kind:       "live",
+			SizeBytes:  4096,
+		})
+	}))
+	defer srv.Close()
+
+	env := &remoteEnv{id: "vm-1", client: New(Config{BaseURL: srv.URL})}
+	cp, err := env.CheckpointLive(context.Background(), "c")
+	if err != nil {
+		t.Fatalf("checkpoint live: %v", err)
+	}
+	if !got.Live {
+		t.Fatal("expected live=true on the wire")
+	}
+	if cp.ID != "snap-1" || cp.Digest != "abc" || cp.SizeBytes != 4096 {
+		t.Fatalf("checkpoint = %+v, want id/digest/size from the response", cp)
+	}
+	if cp.Kind != orchestrator.SnapshotKindLive {
+		t.Fatalf("kind = %q, want live", cp.Kind)
+	}
+}
+
+// TestRemote_checkpointDiskKind asserts the ordinary checkpoint path does not
+// set live, and that a response with no kind at all (an agent predating live
+// snapshots) reads back as disk rather than empty.
+func TestRemote_checkpointDiskKind(t *testing.T) {
+	var got snapshotRequest
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Errorf("decode snapshot request: %v", err)
+		}
+		json.NewEncoder(w).Encode(snapshotResponse{SnapshotID: "snap-1"})
+	}))
+	defer srv.Close()
+
+	env := &remoteEnv{id: "vm-1", client: New(Config{BaseURL: srv.URL})}
+	cp, err := env.CheckpointWithDigest(context.Background(), "c")
+	if err != nil {
+		t.Fatalf("checkpoint: %v", err)
+	}
+	if got.Live {
+		t.Fatal("disk checkpoint must not set live")
+	}
+	if cp.Kind != orchestrator.SnapshotKindDisk {
+		t.Fatalf("kind = %q, want disk", cp.Kind)
+	}
+}
+
+// TestStub_checkpointLive asserts the stub reports the live kind and a size
+// that includes guest memory, so callers that branch on either are exercised
+// against it the way they would be against a real agent.
+func TestStub_checkpointLive(t *testing.T) {
+	p := New(Config{UseStub: true})
+	ctx := context.Background()
+	env, _ := p.Create(ctx, orchestrator.Spec{Name: "vm-1", RamMB: 8})
+
+	lc, ok := env.(orchestrator.LiveSnapshotCapable)
+	if !ok {
+		t.Fatal("stub env does not implement LiveSnapshotCapable")
+	}
+	cp, err := lc.CheckpointLive(ctx, "live snap")
+	if err != nil {
+		t.Fatalf("checkpoint live: %v", err)
+	}
+	if cp.Kind != orchestrator.SnapshotKindLive {
+		t.Fatalf("kind = %q, want live", cp.Kind)
+	}
+	if cp.SizeBytes != 8*1024*1024 {
+		t.Fatalf("size = %d, want the memory image to be counted", cp.SizeBytes)
+	}
+	// the checkpoint must be visible to the ordinary listing, with its kind
+	// intact: restore goes through the same list lookup for both kinds.
+	cps, err := env.(orchestrator.SnapshotCapable).ListCheckpoints(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(cps) != 1 || cps[0].Kind != orchestrator.SnapshotKindLive {
+		t.Fatalf("list = %+v, want one live checkpoint", cps)
+	}
+}
