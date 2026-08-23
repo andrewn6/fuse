@@ -51,11 +51,13 @@ api() { # api <method> <path> [json-body]
 jqr() { python3 -c 'import json,sys; print(json.load(sys.stdin).get(sys.argv[1], ""))' "$1"; }
 
 # guest_sh runs a shell line in the guest and echoes stdout. The agent's exec
-# takes an argv array, so the shell is explicit rather than implied.
+# takes an argv array, so the shell is explicit rather than implied. It returns
+# stdout base64-encoded, so decode it here -- comparing the encoded form against
+# a plaintext marker silently fails every assertion in this file.
 guest_sh() {
   api POST "/v1/vm/$VM/exec" \
     "$(python3 -c 'import json,sys; print(json.dumps({"cmd":["sh","-c",sys.argv[1]],"timeout_ms":30000}))' "$1")" \
-    | python3 -c 'import json,sys; d=json.load(sys.stdin); sys.stdout.write(d.get("stdout",""))'
+    | python3 -c 'import base64,json,sys; d=json.load(sys.stdin); sys.stdout.write(base64.b64decode(d.get("stdout","")).decode(errors="replace"))'
 }
 
 cleanup() {
