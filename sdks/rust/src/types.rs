@@ -772,6 +772,12 @@ pub struct SnapshotRequest {
     /// while briefly pausing the guest. Not every backend can do it: a GPU
     /// environment never can, and a provider without live support answers
     /// 501. Read [`Snapshot::kind`] back to see what was actually written.
+    ///
+    /// A live snapshot cannot seed a new environment. Fork and
+    /// [`CreateRequest::seed_snapshot_id`] read only a snapshot's rootfs, and
+    /// a live snapshot's rootfs is captured without quiescing the guest
+    /// filesystem, so it is consistent only alongside the memory image. Both
+    /// reject a live snapshot with a 409 conflict.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub live: Option<bool>,
     /// Labels this snapshot as the artifact of one cacheable setup step,

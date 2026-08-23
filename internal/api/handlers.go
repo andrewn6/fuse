@@ -350,6 +350,17 @@ func (h *Handler) createEnvironment(w http.ResponseWriter, r *http.Request) {
 				fmt.Sprintf("snapshot %s is in state %s, want ready", record.SnapshotID, record.State), nil)
 			return
 		}
+		// Seeding boots the artifact's rootfs on its own. A live snapshot's
+		// rootfs was copied without quiescing the guest filesystem, so it only
+		// mounts cleanly with the memory image beside it, which seed does not
+		// carry. Fail here rather than at boot. This is checked before the host
+		// pin because the kind is a permanent property of the artifact, where a
+		// missing host is placement state that can still change.
+		if record.Kind == orchestrator.SnapshotKindLive {
+			writeError(w, http.StatusConflict, CodeConflict,
+				fmt.Sprintf("snapshot %s is a live snapshot, whose rootfs is only consistent with its memory image; seed from a disk snapshot instead", record.SnapshotID), nil)
+			return
+		}
 		if record.HostID == "" {
 			writeError(w, http.StatusConflict, CodeConflict,
 				fmt.Sprintf("snapshot %s has no recorded host, so it cannot seed an environment", record.SnapshotID), nil)

@@ -51,6 +51,17 @@ var (
 	// still has descendant snapshots in the lineage graph.
 	ErrSnapshotHasChildren = errors.New("snapshot has children")
 
+	// ErrSnapshotNotSeedable is returned when a snapshot's kind rules it out
+	// as the rootfs for a new environment, which today means a live one.
+	//
+	// A live snapshot is captured without quiescing the guest filesystem: the
+	// page cache lives in the memory image, so the host agent deliberately
+	// skips the `sync` that the disk path does. That makes its rootfs.ext4
+	// consistent only when restored together with its memory image. Fork and
+	// seed read the rootfs alone, so they get a filesystem missing everything
+	// still in page cache, and the guest agent fails to start on top of it.
+	ErrSnapshotNotSeedable = errors.New("snapshot not seedable")
+
 	// ErrVMNotRunning is returned by operations that require a VM to be
 	// in the Running state (e.g. Drain). The current state is included
 	// in the wrapping fmt.Errorf context so callers and operators can

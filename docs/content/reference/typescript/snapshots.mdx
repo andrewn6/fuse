@@ -61,9 +61,11 @@ sharp enough to repeat:
   calibrated for rootfs-only snapshots, so a `create` loop with `live: true` will
   hit the byte quota much sooner than the snapshot count implies.
 - the guest is paused for the duration of the capture.
-- `fork` reads only a snapshot's rootfs, so forking a live snapshot produces a
-  cold-booted environment with none of the memory. Nothing throws, you just do
-  not get what you captured.
+- a live snapshot cannot seed a new environment. `fork` and
+  `CreateRequest.seed_snapshot_id` read only a snapshot's rootfs, and a live
+  snapshot's rootfs is captured without quiescing the guest filesystem, so it
+  mounts cleanly only alongside its memory image. Both reject one with `409`
+  `conflict`. Take a disk snapshot when you want a copy rather than a rewind.
 - a live snapshot is pinned to the host that took it. The memory image depends on
   that host's CPU model and Firecracker version.
 

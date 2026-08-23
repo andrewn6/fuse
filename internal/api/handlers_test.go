@@ -1948,3 +1948,69 @@ func TestRegisterHost_ArchNormalizedAndRoundTripped(t *testing.T) {
 		t.Errorf("arch = %q, want %q", info.Capacity.Arch, "arm64")
 	}
 }
+
+// TestCreateEnvironment_rejectsLiveSeedSnapshot pins the seed half of the
+// guard. A live snapshot's rootfs is copied without quiescing the guest
+// filesystem, because the page cache is captured in the memory image instead,
+// so booting that rootfs on its own gets a filesystem missing everything still
+// cached. Against a real host that surfaced as a 500 out of the agent after a
+// vm had already been provisioned; it has to be a 409 before anything boots.
+func TestCreateEnvironment_rejectsLiveSeedSnapshot(t *testing.T) {
+	h, _ := newLiveTestHandler(t, false)
+	r := mustRouter(t, h)
+
+	_ = doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+		TaskID:         "task-1",
+		ManifestInline: encodeManifest(t),
+	})
+	rr := doJSON(t, r, http.MethodPost, "/v1/environments/fuse-task-1/snapshots", CreateSnapshotRequest{
+		Live: true,
+	})
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("snapshot status = %d, want 201. body: %s", rr.Code, rr.Body.String())
+	}
+	var snap Snapshot
+	_ = json.NewDecoder(rr.Body).Decode(&snap)
+	if snap.Kind != "live" {
+		t.Fatalf("kind = %q, want live; the fixture did not take a live snapshot", snap.Kind)
+	}
+
+	rr = doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+		TaskID:         "task-2",
+		SeedSnapshotID: snap.ID,
+	})
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("seed-from-live status = %d, want 409. body: %s", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "live snapshot") {
+		t.Errorf("body does not explain the live snapshot rejection: %s", rr.Body.String())
+	}
+}
+
+// TestCreateEnvironment_diskSeedNotRejectedAsLive is the other half: the kind
+// check must reject live only, not every seed. The fixture's snapshots carry
+// no host id, so a disk seed still fails placement here; what matters is that
+// it is not turned away for being live.
+func TestCreateEnvironment_diskSeedNotRejectedAsLive(t *testing.T) {
+	h, _ := newLiveTestHandler(t, false)
+	r := mustRouter(t, h)
+
+	_ = doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+		TaskID:         "task-1",
+		ManifestInline: encodeManifest(t),
+	})
+	rr := doJSON(t, r, http.MethodPost, "/v1/environments/fuse-task-1/snapshots", CreateSnapshotRequest{})
+	var snap Snapshot
+	_ = json.NewDecoder(rr.Body).Decode(&snap)
+	if snap.Kind == "live" {
+		t.Fatalf("kind = live, want disk")
+	}
+
+	rr = doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+		TaskID:         "task-2",
+		SeedSnapshotID: snap.ID,
+	})
+	if strings.Contains(rr.Body.String(), "live snapshot") {
+		t.Fatalf("disk seed rejected as live: %s", rr.Body.String())
+	}
+}

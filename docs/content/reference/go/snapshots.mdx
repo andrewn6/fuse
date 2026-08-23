@@ -63,9 +63,11 @@ sharp enough to repeat:
   calibrated for rootfs-only snapshots, so a `Create` loop with `Live: true` will
   hit `409` `conflict` on quota much sooner than the snapshot count implies.
 - the guest is paused for the duration of the capture.
-- `Environments.Fork` reads only a snapshot's rootfs, so forking a live snapshot
-  produces a cold-booted environment with none of the memory. There is no error
-  for this, you just do not get what you captured.
+- a live snapshot cannot seed a new environment. `Environments.Fork` and
+  `CreateRequest.SeedSnapshotID` read only a snapshot's rootfs, and a live
+  snapshot's rootfs is captured without quiescing the guest filesystem, so it
+  mounts cleanly only alongside its memory image. Both reject one with `409`
+  `conflict`. Take a disk snapshot when you want a copy rather than a rewind.
 - a live snapshot is pinned to the host that took it. The memory image depends on
   that host's CPU model and Firecracker version.
 

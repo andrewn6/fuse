@@ -128,9 +128,12 @@ comes back with the processes still running and the memory intact, where the dis
 restore in step 3 rebooted.
 
 One thing you cannot do with a live snapshot is fork from it. Fork copies a
-snapshot's disk to seed a new environment, and that is all it looks at, so
-forking a live snapshot gives you a cold-booted copy with none of the memory. If
-you want a copy rather than a rewind, take a disk snapshot and read
+snapshot's disk to seed a new environment, and that is all it looks at. A live
+snapshot's disk was copied without quiescing the guest filesystem, because the
+page cache is captured in the memory image instead, so that disk only mounts
+cleanly with the memory image beside it. Fork rejects a live snapshot with a
+`409` rather than handing you a copy that cannot boot. If you want a copy rather
+than a rewind, take a disk snapshot and read
 [Lesson 3](/docs/learn/fork-to-debug).
 
 ## 5. Clean up
