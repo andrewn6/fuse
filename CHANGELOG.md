@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.29.0](https://github.com/folsomintel/fuse/compare/v0.28.0...v0.29.0) (2026-08-23)
+
+
+### Features
+
+* **fc-agent:** live memory snapshots and in-place resume ([#216](https://github.com/folsomintel/fuse/issues/216)) ([f79b8cb](https://github.com/folsomintel/fuse/commit/f79b8cb075d8bc0822789a774dcc306719b552c0))
+* **snapshots:** surface live snapshots through the api, cli and sdks ([#217](https://github.com/folsomintel/fuse/issues/217)) ([499800e](https://github.com/folsomintel/fuse/commit/499800e81ce20569af53edce586f24e3bb0100a8))
+
 ## [0.28.0](https://github.com/folsomintel/fuse/compare/v0.27.0...v0.28.0) (2026-08-19)
 
 
