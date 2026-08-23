@@ -219,6 +219,91 @@ func (p *fakeProvider) List(_ context.Context, _ string) ([]orchestrator.Environ
 
 func (*fakeProvider) Close() error { return nil }
 
+// liveFakeEnv is a fakeEnv that also implements
+// orchestrator.LiveSnapshotCapable, standing in for a firecracker host whose
+// agent can capture guest memory. It has to be a distinct type rather than a
+// flag on fakeEnv because the orchestrator decides by type assertion, so a
+// bare fakeEnv is exactly the "disk snapshots only" backend the 501 path
+// needs.
+type liveFakeEnv struct {
+	*fakeEnv
+}
+
+func (e *liveFakeEnv) CheckpointLive(_ context.Context, comment string) (orchestrator.Checkpoint, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	cp := orchestrator.Checkpoint{
+		ID:        fmt.Sprintf("cp-%d", len(e.checkpoints)+1),
+		Comment:   comment,
+		SizeBytes: int64(4096*len(e.checkpoints) + 4096),
+		Kind:      orchestrator.SnapshotKindLive,
+	}
+	e.checkpoints = append(e.checkpoints, cp)
+	return cp, nil
+}
+
+// staleLiveFakeEnv reports a disk snapshot for a live request, modelling a
+// host agent too old to know about the flag. It exists so the "kind is what
+// was written, not what was asked for" contract is exercisable.
+type staleLiveFakeEnv struct {
+	*fakeEnv
+}
+
+func (e *staleLiveFakeEnv) CheckpointLive(_ context.Context, comment string) (orchestrator.Checkpoint, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	cp := orchestrator.Checkpoint{
+		ID:        fmt.Sprintf("cp-%d", len(e.checkpoints)+1),
+		Comment:   comment,
+		SizeBytes: 128,
+		Kind:      orchestrator.SnapshotKindDisk,
+	}
+	e.checkpoints = append(e.checkpoints, cp)
+	return cp, nil
+}
+
+// liveFakeProvider hands out envs that satisfy LiveSnapshotCapable. stale
+// swaps in the agent that answers a live request with a disk snapshot.
+type liveFakeProvider struct {
+	*fakeProvider
+	stale bool
+}
+
+func (p *liveFakeProvider) Create(ctx context.Context, spec orchestrator.Spec) (orchestrator.Environment, error) {
+	base, err := p.fakeProvider.Create(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	return p.wrap(base.(*fakeEnv)), nil
+}
+
+func (p *liveFakeProvider) Get(ctx context.Context, name string) (orchestrator.Environment, error) {
+	base, err := p.fakeProvider.Get(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	return p.wrap(base.(*fakeEnv)), nil
+}
+
+func (p *liveFakeProvider) wrap(e *fakeEnv) orchestrator.Environment {
+	if p.stale {
+		return &staleLiveFakeEnv{fakeEnv: e}
+	}
+	return &liveFakeEnv{fakeEnv: e}
+}
+
+// newLiveTestHandler is newTestHandler with a provider whose envs can take
+// live snapshots. stale=true makes them report disk for a live request.
+func newLiveTestHandler(t *testing.T, stale bool) (*Handler, *orchestrator.FleetManager) {
+	t.Helper()
+	p := &liveFakeProvider{fakeProvider: newFakeProvider(), stale: stale}
+	fm := orchestrator.NewFleetManager(orchestrator.FleetConfig{
+		Provider: p,
+		Prefix:   "fuse-",
+	})
+	return &Handler{Fleet: fm}, fm
+}
+
 // capacityProbeProvider wraps fakeProvider and implements
 // orchestrator.CapacityProber so registerHost tests can exercise the
 // probe-when-unset / warn-when-declared-exceeds-probed / cannot-probe paths
@@ -631,6 +716,129 @@ func TestSnapshotLifecycle_createListRestore(t *testing.T) {
 	rr = doJSON(t, r, http.MethodPost, "/v1/snapshots/cp-1?action=restore", nil)
 	if rr.Code != http.StatusNoContent {
 		t.Fatalf("restore status = %d. body: %s", rr.Code, rr.Body.String())
+	}
+}
+
+// TestSnapshot_kindOnEveryReadPath pins `kind` to every place a snapshot can
+// be read, not just the create response. The SDKs tell callers to check kind
+// rather than assume their request was honoured, which is only advice they can
+// take if get and list carry it too.
+func TestSnapshot_kindOnEveryReadPath(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	r := mustRouter(t, h)
+
+	_ = doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+		TaskID:         "task-1",
+		ManifestInline: encodeManifest(t),
+	})
+
+	rr := doJSON(t, r, http.MethodPost, "/v1/environments/fuse-task-1/snapshots", CreateSnapshotRequest{})
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create status = %d. body: %s", rr.Code, rr.Body.String())
+	}
+	var created Snapshot
+	_ = json.NewDecoder(rr.Body).Decode(&created)
+	if created.Kind != "disk" {
+		t.Errorf("create kind = %q, want disk", created.Kind)
+	}
+
+	rr = doJSON(t, r, http.MethodGet, "/v1/snapshots/cp-1", nil)
+	var got Snapshot
+	_ = json.NewDecoder(rr.Body).Decode(&got)
+	if got.Kind != "disk" {
+		t.Errorf("get kind = %q, want disk", got.Kind)
+	}
+
+	rr = doJSON(t, r, http.MethodGet, "/v1/snapshots?vm_id=fuse-task-1", nil)
+	var list SnapshotList
+	_ = json.NewDecoder(rr.Body).Decode(&list)
+	if len(list.Snapshots) != 1 {
+		t.Fatalf("len = %d, want 1", len(list.Snapshots))
+	}
+	if list.Snapshots[0].Kind != "disk" {
+		t.Errorf("list kind = %q, want disk", list.Snapshots[0].Kind)
+	}
+}
+
+// TestSnapshot_kindIsAlwaysSerialized guards the wire shape rather than the
+// decoded struct: `kind` has no omitempty precisely so a client can read it
+// unconditionally, and an accidental omitempty would look fine to every test
+// that decodes into Snapshot.
+func TestSnapshot_kindIsAlwaysSerialized(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	r := mustRouter(t, h)
+
+	_ = doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+		TaskID:         "task-1",
+		ManifestInline: encodeManifest(t),
+	})
+
+	rr := doJSON(t, r, http.MethodPost, "/v1/environments/fuse-task-1/snapshots", CreateSnapshotRequest{})
+	var raw map[string]any
+	if err := json.Unmarshal(rr.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("decode raw body: %v", err)
+	}
+	if raw["kind"] != "disk" {
+		t.Errorf("raw kind = %v, want \"disk\". body: %s", raw["kind"], rr.Body.String())
+	}
+}
+
+// TestSnapshot_liveRequestRecordsLiveKind covers the happy path: a provider
+// that implements LiveSnapshotCapable takes the live checkpoint and the
+// record says so.
+func TestSnapshot_liveRequestRecordsLiveKind(t *testing.T) {
+	h, _ := newLiveTestHandler(t, false)
+	r := mustRouter(t, h)
+
+	_ = doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+		TaskID:         "task-1",
+		ManifestInline: encodeManifest(t),
+	})
+
+	rr := doJSON(t, r, http.MethodPost, "/v1/environments/fuse-task-1/snapshots", CreateSnapshotRequest{
+		Live:    true,
+		Comment: "warmed cache",
+	})
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201. body: %s", rr.Code, rr.Body.String())
+	}
+	var snap Snapshot
+	_ = json.NewDecoder(rr.Body).Decode(&snap)
+	if snap.Kind != "live" {
+		t.Errorf("kind = %q, want live", snap.Kind)
+	}
+
+	// and it survives the round trip through the store, not just the create
+	// response the handler happens to hold in memory.
+	rr = doJSON(t, r, http.MethodGet, "/v1/snapshots/"+snap.ID, nil)
+	var got Snapshot
+	_ = json.NewDecoder(rr.Body).Decode(&got)
+	if got.Kind != "live" {
+		t.Errorf("get kind = %q, want live", got.Kind)
+	}
+}
+
+// TestSnapshot_liveRequestServedAsDiskReportsDisk is the contract the SDK docs
+// lean on: a host agent too old to honour live answers with a disk snapshot,
+// and the record must say disk. Echoing the request back would file a
+// cold-booting artifact as a resumable one.
+func TestSnapshot_liveRequestServedAsDiskReportsDisk(t *testing.T) {
+	h, _ := newLiveTestHandler(t, true)
+	r := mustRouter(t, h)
+
+	_ = doJSON(t, r, http.MethodPost, "/v1/environments", CreateEnvironmentRequest{
+		TaskID:         "task-1",
+		ManifestInline: encodeManifest(t),
+	})
+
+	rr := doJSON(t, r, http.MethodPost, "/v1/environments/fuse-task-1/snapshots", CreateSnapshotRequest{Live: true})
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("create status = %d, want 201. body: %s", rr.Code, rr.Body.String())
+	}
+	var snap Snapshot
+	_ = json.NewDecoder(rr.Body).Decode(&snap)
+	if snap.Kind != "disk" {
+		t.Errorf("kind = %q, want disk: the record must report what was written, not what was asked for", snap.Kind)
 	}
 }
 

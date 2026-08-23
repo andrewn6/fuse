@@ -11,7 +11,7 @@ fuse snapshot get <id>
 ```
 
 No flags beyond the globals. Prints the snapshot's full detail: VM ID, task ID,
-tenant ID, parent snapshot (if forked from one), mode, state, size, retention,
+tenant ID, parent snapshot (if forked from one), mode, kind, state, size, retention,
 timestamps, comment, export reference, and, if the snapshot has an export in
 progress, the export's destination and status.
 
@@ -23,6 +23,7 @@ task id      my-task
 tenant id    -
 parent       -
 mode         manual
+kind         disk
 state        ready
 size         1.2 GB
 retention    keep forever

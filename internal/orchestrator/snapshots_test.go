@@ -479,3 +479,133 @@ func TestRestoreSnapshot_marksMissingProviderSnapshotError(t *testing.T) {
 		t.Fatalf("state = %s, want error", record.State)
 	}
 }
+
+// liveTestMemBytes stands in for the guest memory image a real live snapshot
+// writes. It is what makes a live artifact a different order of size from a
+// disk one, which is the property the quota path has to see.
+const liveTestMemBytes int64 = 64 << 20
+
+// liveSnapshotTestEnv is snapshotTestEnv plus the live capability. It is a
+// separate type rather than a flag on snapshotTestEnv because the whole
+// mechanism under test is a type assertion: an env that implements the method
+// and refuses at runtime would not exercise the branch that matters.
+type liveSnapshotTestEnv struct {
+	*snapshotTestEnv
+}
+
+func (e *liveSnapshotTestEnv) CheckpointLive(ctx context.Context, comment string) (Checkpoint, error) {
+	id, err := e.Checkpoint(ctx, comment)
+	if err != nil {
+		return Checkpoint{}, err
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	for i := range e.checkpoints {
+		if e.checkpoints[i].ID != id {
+			continue
+		}
+		e.checkpoints[i].Kind = SnapshotKindLive
+		e.checkpoints[i].SizeBytes += liveTestMemBytes
+		return e.checkpoints[i], nil
+	}
+	return Checkpoint{}, fmt.Errorf("checkpoint %s vanished", id)
+}
+
+type liveSnapshotTestProvider struct {
+	*snapshotTestProvider
+	envs map[string]*liveSnapshotTestEnv
+}
+
+func newLiveSnapshotTestProvider() *liveSnapshotTestProvider {
+	return &liveSnapshotTestProvider{
+		snapshotTestProvider: newSnapshotTestProvider(),
+		envs:                 make(map[string]*liveSnapshotTestEnv),
+	}
+}
+
+func (p *liveSnapshotTestProvider) Create(ctx context.Context, spec Spec) (Environment, error) {
+	env, err := p.snapshotTestProvider.Create(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	wrapped := &liveSnapshotTestEnv{snapshotTestEnv: env.(*snapshotTestEnv)}
+	p.envs[spec.Name] = wrapped
+	return wrapped, nil
+}
+
+func (p *liveSnapshotTestProvider) Get(ctx context.Context, name string) (Environment, error) {
+	if env, ok := p.envs[name]; ok {
+		return env, nil
+	}
+	return p.snapshotTestProvider.Get(ctx, name)
+}
+
+// TestCreateSnapshot_liveRecordsKindAndSize asserts a live snapshot is filed
+// as live and accounted at its real (memory-inclusive) size. The size is not
+// incidental: quota is enforced on it deliberately, so under-reporting it
+// would let a tenant fill a disk it was accounted as not filling.
+func TestCreateSnapshot_liveRecordsKindAndSize(t *testing.T) {
+	provider := newLiveSnapshotTestProvider()
+	fm := NewFleetManager(FleetConfig{Provider: provider, Prefix: "fuse-"})
+	vmID := provisionSnapshotTestVM(t, fm, "task-1")
+
+	rec, err := fm.CreateSnapshot(context.Background(), vmID, SnapshotOptions{Comment: "live", Live: true})
+	if err != nil {
+		t.Fatalf("create live snapshot: %v", err)
+	}
+	if rec.Kind != SnapshotKindLive {
+		t.Fatalf("kind = %q, want live", rec.Kind)
+	}
+	if rec.SizeBytes < liveTestMemBytes {
+		t.Fatalf("size_bytes = %d, want the memory image counted", rec.SizeBytes)
+	}
+
+	// the same provider, asked for an ordinary snapshot, must still file disk:
+	// the kind follows the request through to what was actually written, it is
+	// not a property of the backend.
+	disk, err := fm.CreateSnapshot(context.Background(), vmID, SnapshotOptions{Comment: "disk"})
+	if err != nil {
+		t.Fatalf("create disk snapshot: %v", err)
+	}
+	if disk.Kind != SnapshotKindDisk {
+		t.Fatalf("kind = %q, want disk", disk.Kind)
+	}
+}
+
+// TestCreateSnapshot_liveUnsupportedProvider asserts a provider that can
+// snapshot but cannot capture memory refuses the live request explicitly,
+// rather than silently handing back a disk snapshot the caller would treat as
+// resumable.
+func TestCreateSnapshot_liveUnsupportedProvider(t *testing.T) {
+	provider := newSnapshotTestProvider()
+	fm := NewFleetManager(FleetConfig{Provider: provider, Prefix: "fuse-"})
+	vmID := provisionSnapshotTestVM(t, fm, "task-1")
+
+	_, err := fm.CreateSnapshot(context.Background(), vmID, SnapshotOptions{Live: true})
+	if !errors.Is(err, ErrSnapshotUnsupported) {
+		t.Fatalf("err = %v, want ErrSnapshotUnsupported", err)
+	}
+	// the ordinary path on the same provider still works, which is what makes
+	// the error a per-request refusal rather than a broken provider.
+	if _, err := fm.CreateSnapshot(context.Background(), vmID, SnapshotOptions{}); err != nil {
+		t.Fatalf("create disk snapshot: %v", err)
+	}
+}
+
+// TestRestoreSnapshot_liveNeedsNoExtraCapability asserts restore of a live
+// snapshot goes through the same Restore as a disk one. The host agent records
+// the kind and branches on it internally, so there is deliberately no
+// RestoreLive for a caller to get wrong.
+func TestRestoreSnapshot_liveNeedsNoExtraCapability(t *testing.T) {
+	provider := newLiveSnapshotTestProvider()
+	fm := NewFleetManager(FleetConfig{Provider: provider, Prefix: "fuse-"})
+	vmID := provisionSnapshotTestVM(t, fm, "task-1")
+
+	rec, err := fm.CreateSnapshot(context.Background(), vmID, SnapshotOptions{Live: true})
+	if err != nil {
+		t.Fatalf("create live snapshot: %v", err)
+	}
+	if err := fm.RestoreSnapshot(context.Background(), vmID, rec.SnapshotID); err != nil {
+		t.Fatalf("restore live snapshot: %v", err)
+	}
+}

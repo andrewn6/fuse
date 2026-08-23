@@ -252,6 +252,10 @@ var (
 	_ orchestrator.Attacher         = (*remoteEnv)(nil)
 	_ orchestrator.TokenSetter      = (*remoteEnv)(nil)
 	_ orchestrator.EndpointReporter = (*remoteEnv)(nil)
+	// firecracker is the only backend that can checkpoint guest memory; the
+	// orchestrator finds that out by asserting on this interface, so the
+	// assertion is pinned here rather than left to a caller to discover.
+	_ orchestrator.LiveSnapshotCapable = (*remoteEnv)(nil)
 )
 
 // Endpoints returns the ingress endpoints published by the last StartAgent
@@ -422,16 +426,56 @@ func (e *remoteEnv) Checkpoint(ctx context.Context, comment string) (string, err
 // hashes the artifact inline as it writes it, so this response is the only
 // place the digest is ever available; nothing recomputes it later.
 func (e *remoteEnv) CheckpointWithDigest(ctx context.Context, comment string) (orchestrator.Checkpoint, error) {
-	req := snapshotRequest{Comment: comment, IncludeRAM: false}
+	return e.snapshot(ctx, comment, false)
+}
+
+// CheckpointLive implements orchestrator.LiveSnapshotCapable: rootfs plus vCPU
+// state plus the whole guest memory, taken inside one pause window on the
+// agent side so the memory image and the disk it describes cannot drift apart.
+//
+// Only the flag differs from the disk path; it is the same verb against the
+// same store and it yields the same kind of id. That is deliberate on the
+// agent's side too, and it means an agent too old to know about `live` does
+// not fail, it takes a disk snapshot and says so in the response kind. The
+// caller sees what it actually got rather than a success that quietly means
+// something else.
+func (e *remoteEnv) CheckpointLive(ctx context.Context, comment string) (orchestrator.Checkpoint, error) {
+	return e.snapshot(ctx, comment, true)
+}
+
+// snapshot is the one wire call behind both checkpoint paths.
+func (e *remoteEnv) snapshot(ctx context.Context, comment string, live bool) (orchestrator.Checkpoint, error) {
+	req := snapshotRequest{Comment: comment, Live: live}
 	var resp snapshotResponse
 	if err := e.client.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/vm/%s/snapshot", e.id), req, &resp); err != nil {
 		return orchestrator.Checkpoint{}, fmt.Errorf("snapshot: %w", err)
 	}
-	return orchestrator.Checkpoint{ID: resp.SnapshotID, Comment: comment, Digest: resp.Digest}, nil
+	// The kind comes back from the agent rather than being assumed from what
+	// was asked for: the agent is the only thing that knows what it managed to
+	// write, and an agent build predating live snapshots answers with no kind
+	// at all, which normalizes to disk.
+	return orchestrator.Checkpoint{
+		ID:        resp.SnapshotID,
+		Comment:   comment,
+		Digest:    resp.Digest,
+		SizeBytes: resp.SizeBytes,
+		Kind:      snapshotKind(resp.Kind),
+	}, nil
+}
+
+// snapshotKind normalizes the agent's wire value. Anything unrecognised or
+// absent is disk, which is the safe direction: treating a disk snapshot as
+// live would have a restore ask firecracker for a memory file that does not
+// exist, while the reverse only costs a cold boot.
+func snapshotKind(s string) orchestrator.SnapshotKind {
+	if s == string(orchestrator.SnapshotKindLive) {
+		return orchestrator.SnapshotKindLive
+	}
+	return orchestrator.SnapshotKindDisk
 }
 
 func (e *remoteEnv) Restore(ctx context.Context, checkpointID string) error {
-	req := restoreRequest{SnapshotID: checkpointID, IncludeRAM: false}
+	req := restoreRequest{SnapshotID: checkpointID}
 	return e.client.doJSON(ctx, http.MethodPost, fmt.Sprintf("/v1/vm/%s/restore", e.id), req, nil)
 }
 
@@ -451,6 +495,7 @@ func (e *remoteEnv) ListCheckpoints(ctx context.Context) ([]orchestrator.Checkpo
 			Comment:   s.Comment,
 			SizeBytes: s.SizeBytes,
 			CreatedAt: s.CreatedAt,
+			Kind:      snapshotKind(s.Kind),
 		})
 	}
 	return out, nil
@@ -582,8 +627,13 @@ type startAgentResponse struct {
 }
 
 type snapshotRequest struct {
-	Comment    string `json:"comment,omitempty"`
-	IncludeRAM bool   `json:"include_ram"`
+	Comment string `json:"comment,omitempty"`
+
+	// Live asks the agent for a memory snapshot alongside the rootfs. It is
+	// omitempty because it is opt-in on both ends: an omitted flag is a disk
+	// snapshot, which is what every caller predating this got and what an
+	// agent that does not read the field will do anyway.
+	Live bool `json:"live,omitempty"`
 }
 
 type snapshotResponse struct {
@@ -595,11 +645,24 @@ type snapshotResponse struct {
 	// running an older agent still gets working snapshots, just no integrity
 	// value to verify a later transfer against.
 	Digest string `json:"digest,omitempty"`
+
+	// Kind is what the agent actually wrote, "disk" or "live". Absent from an
+	// agent predating live snapshots, which decodes as "" and normalizes to
+	// disk (see snapshotKind).
+	Kind string `json:"kind,omitempty"`
+
+	// SizeBytes is what the snapshot occupies on the host, reported at create
+	// time because a live snapshot is a different order of size from a disk
+	// one (a full memory image every time) and nothing upstream can stat it.
+	SizeBytes int64 `json:"size_bytes,omitempty"`
 }
 
+// restoreRequest carries only the id. Whether a restore resumes from memory or
+// cold boots is not the caller's to choose: the agent recorded the kind when it
+// wrote the snapshot and branches on that, so a caller cannot ask for a memory
+// restore of an artifact that has no memory in it.
 type restoreRequest struct {
 	SnapshotID string `json:"snapshot_id"`
-	IncludeRAM bool   `json:"include_ram"`
 }
 
 type listSnapshotsResponse struct {
@@ -608,6 +671,7 @@ type listSnapshotsResponse struct {
 		Comment    string    `json:"comment,omitempty"`
 		SizeBytes  int64     `json:"size_bytes,omitempty"`
 		CreatedAt  time.Time `json:"created_at,omitempty"`
+		Kind       string    `json:"kind,omitempty"`
 	} `json:"snapshots"`
 }
 
@@ -670,10 +734,11 @@ func (p *stubProvider) Create(_ context.Context, spec orchestrator.Spec) (orches
 		return nil, fmt.Errorf("env %s already exists", spec.Name)
 	}
 	env := &stubEnv{
-		name:  spec.Name,
-		url:   fmt.Sprintf("fc://%s", spec.Name),
-		image: spec.Image,
-		seed:  spec.SeedSnapshotID,
+		name:     spec.Name,
+		url:      fmt.Sprintf("fc://%s", spec.Name),
+		image:    spec.Image,
+		seed:     spec.SeedSnapshotID,
+		memoryMB: spec.RamMB,
 	}
 	p.envs[spec.Name] = env
 	return env, nil
@@ -767,6 +832,11 @@ type stubEnv struct {
 	url   string
 	image string // spec.Image at Create time, kept for test inspection only
 	seed  string // spec.SeedSnapshotID at Create time, same purpose as image
+	// memoryMB is spec.RamMB at Create time, kept only so a live checkpoint
+	// can report a size that behaves like the real one: memory dominates it,
+	// and code that sizes or quotas live snapshots should not be exercised
+	// against a stub where the two kinds are indistinguishable.
+	memoryMB int
 
 	mu          sync.Mutex
 	files       map[string][]byte
@@ -776,9 +846,10 @@ type stubEnv struct {
 }
 
 var (
-	_ orchestrator.Environment      = (*stubEnv)(nil)
-	_ orchestrator.TokenSetter      = (*stubEnv)(nil)
-	_ orchestrator.EndpointReporter = (*stubEnv)(nil)
+	_ orchestrator.Environment         = (*stubEnv)(nil)
+	_ orchestrator.TokenSetter         = (*stubEnv)(nil)
+	_ orchestrator.EndpointReporter    = (*stubEnv)(nil)
+	_ orchestrator.LiveSnapshotCapable = (*stubEnv)(nil)
 )
 
 // Endpoints returns endpoints synthesized by the last StartAgent call,
@@ -856,6 +927,19 @@ func (e *stubEnv) StartAgent(_ context.Context, spec orchestrator.AgentSpec) err
 }
 
 func (e *stubEnv) Checkpoint(_ context.Context, comment string) (string, error) {
+	cp := e.appendCheckpoint(comment, orchestrator.SnapshotKindDisk)
+	return cp.ID, nil
+}
+
+// CheckpointLive implements orchestrator.LiveSnapshotCapable. The stub has no
+// guest memory to write, but it reports the kind and a memory-inclusive size
+// so anything that branches on either is exercised the same way it would be
+// against a real agent.
+func (e *stubEnv) CheckpointLive(_ context.Context, comment string) (orchestrator.Checkpoint, error) {
+	return e.appendCheckpoint(comment, orchestrator.SnapshotKindLive), nil
+}
+
+func (e *stubEnv) appendCheckpoint(comment string, kind orchestrator.SnapshotKind) orchestrator.Checkpoint {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	id := fmt.Sprintf("cp-%d", len(e.checkpoints)+1)
@@ -863,13 +947,21 @@ func (e *stubEnv) Checkpoint(_ context.Context, comment string) (string, error) 
 	for _, file := range e.files {
 		sizeBytes += int64(len(file))
 	}
-	e.checkpoints = append(e.checkpoints, orchestrator.Checkpoint{
+	if kind == orchestrator.SnapshotKindLive {
+		// the whole memory image lands on disk every time, with no sparseness
+		// to hide behind, which is the property that makes live snapshots
+		// expensive and is worth reproducing here.
+		sizeBytes += int64(e.memoryMB) * 1024 * 1024
+	}
+	cp := orchestrator.Checkpoint{
 		ID:        id,
 		Comment:   comment,
 		SizeBytes: sizeBytes,
 		CreatedAt: time.Now(),
-	})
-	return id, nil
+		Kind:      kind,
+	}
+	e.checkpoints = append(e.checkpoints, cp)
+	return cp
 }
 
 func (e *stubEnv) Restore(_ context.Context, checkpointID string) error {

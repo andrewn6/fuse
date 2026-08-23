@@ -105,8 +105,11 @@ runs on that host: forking onto a host with nothing left succeeds and overcommit
 so keep an eye on the source host's headroom rather than relying on admission
 control to stop you.
 
-Snapshots are disk-only, so a fork cold-boots the snapshot's disk rather than
-resuming the source's memory: expect a normal boot, not a sub-second resume.
+A fork cold-boots the snapshot's disk rather than resuming the source's memory:
+expect a normal boot, not a sub-second resume. That is true of
+[live snapshots](/docs/concepts/snapshots#two-kinds) too, fork reads a snapshot's
+rootfs and nothing else, so forking one gives you its disk half without the
+memory it captured.
 
 See [Snapshots](/docs/concepts/snapshots): forking is unavailable wherever
 snapshotting is (i.e. QEMU/GPU environments).

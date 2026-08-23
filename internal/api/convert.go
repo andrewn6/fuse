@@ -243,6 +243,20 @@ func toAPIMIGInstances(insts []orchestrator.MIGInstance) []MIGInstance {
 	return out
 }
 
+// snapshotKind renders a record's kind for the wire, resolving the empty
+// value to "disk".
+//
+// Empty is not a third state: it is a row written before the column existed,
+// or a provider with only one kind to report. Resolving it here rather than
+// letting it through as "" means every read path answers a caller that
+// branches on kind, instead of handing it a value it has to special-case.
+func snapshotKind(k orchestrator.SnapshotKind) string {
+	if k == "" {
+		return string(orchestrator.SnapshotKindDisk)
+	}
+	return string(k)
+}
+
 // toAPISnapshot converts a persisted SnapshotRecord into the wire shape.
 // Any unknown metadata fields are dropped — the wire schema only
 // exposes a subset today.
@@ -257,6 +271,7 @@ func toAPISnapshot(s orchestrator.SnapshotRecord) Snapshot {
 		LayerKey:         s.LayerKey,
 		Arch:             s.Arch,
 		Digest:           s.Digest,
+		Kind:             snapshotKind(s.Kind),
 		State:            string(s.State),
 		CreatedAt:        s.CreatedAt,
 		UpdatedAt:        s.UpdatedAt,

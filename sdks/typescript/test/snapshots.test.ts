@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { pathOf, queryOf, serve, type TestServer } from "./server.js";
+import { pathOf, queryOf, readBody, serve, type TestServer } from "./server.js";
 
 let current: TestServer | undefined;
 afterEach(async () => {
@@ -24,6 +24,50 @@ describe("snapshots", () => {
     expect(path).toBe("/v1/environments/vm-1/snapshots");
     expect(snap.id).toBe("snap-1");
     expect(snap.vm_id).toBe("vm-1");
+  });
+
+  it("create sends live and decodes the returned kind", async () => {
+    let body: string | undefined;
+    current = await serve(async (req, res) => {
+      body = await readBody(req);
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        `{"id":"snap-1","vm_id":"vm-1","kind":"live","created_at":"2024-01-01T00:00:00Z"}`,
+      );
+    });
+
+    const snap = await current.client.snapshots.create("vm-1", { live: true });
+
+    expect(JSON.parse(body!).live).toBe(true);
+    expect(snap.kind).toBe("live");
+  });
+
+  it("create reports the kind the server wrote, not the one requested", async () => {
+    // an agent too old to honour live answers with a disk snapshot; the sdk
+    // must surface that rather than let a caller read its own request back.
+    current = await serve((_req, res) => {
+      res.setHeader("Content-Type", "application/json");
+      res.end(
+        `{"id":"snap-1","vm_id":"vm-1","kind":"disk","created_at":"2024-01-01T00:00:00Z"}`,
+      );
+    });
+
+    const snap = await current.client.snapshots.create("vm-1", { live: true });
+
+    expect(snap.kind).toBe("disk");
+  });
+
+  it("create omits live when unset", async () => {
+    let body: string | undefined;
+    current = await serve(async (req, res) => {
+      body = await readBody(req);
+      res.setHeader("Content-Type", "application/json");
+      res.end(`{"id":"snap-1","vm_id":"vm-1","created_at":"2024-01-01T00:00:00Z"}`);
+    });
+
+    await current.client.snapshots.create("vm-1", { comment: "c" });
+
+    expect(Object.keys(JSON.parse(body!))).not.toContain("live");
   });
 
   it("list sends vm_id and unwraps the envelope", async () => {
@@ -85,7 +129,7 @@ describe("snapshots", () => {
     current = await serve((_req, res) => {
       res.setHeader("Content-Type", "application/json");
       res.end(
-        `{"id":"snap-1","vm_id":"vm-1","mode":"build","layer_key":"abc123","arch":"amd64","digest":"deadbeef","created_at":"2024-01-01T00:00:00Z"}`,
+        `{"id":"snap-1","vm_id":"vm-1","mode":"build","layer_key":"abc123","arch":"amd64","digest":"deadbeef","kind":"live","created_at":"2024-01-01T00:00:00Z"}`,
       );
     });
 
@@ -94,6 +138,9 @@ describe("snapshots", () => {
     expect(snap.layer_key).toBe("abc123");
     expect(snap.arch).toBe("amd64");
     expect(snap.digest).toBe("deadbeef");
+    // kind has to decode on get too, not only on create: the docs tell callers
+    // to check it, which they can only do wherever they read the snapshot.
+    expect(snap.kind).toBe("live");
   });
 
   it("restore posts action=restore and resolves on 204", async () => {

@@ -76,9 +76,12 @@ fuse environment destroy fuse-lesson3 --yes
 
 ## Three things that surprise people
 
-**A fork cold-boots.** Snapshots are disk-only, so the copy boots from the
-snapshot's disk rather than resuming the source's memory. Expect a normal boot,
-not a sub-second resume, and don't expect in-memory state to carry over.
+**A fork cold-boots.** Fork reads a snapshot's disk and nothing else, so the
+copy boots from that disk rather than resuming the source's memory. Expect a
+normal boot, not a sub-second resume, and don't expect in-memory state to carry
+over. This holds even if you forked from a
+[live snapshot](/docs/concepts/snapshots#two-kinds): fork sees its disk half
+only.
 
 **Setup and run do not re-execute.** The fork starts from the captured disk, so
 the `setup` and `run` commands from the Fusefile are not run again on the copy.

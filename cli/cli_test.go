@@ -555,3 +555,62 @@ func TestUpSendsFilesAndStartupTimeout(t *testing.T) {
 		t.Errorf("request body missing the resolved file content (%s): %s", want, gotBody)
 	}
 }
+
+// TestSnapCreateLiveFlag checks --live reaches the wire and that the kind the
+// server reports back is what gets rendered, not the flag that was passed.
+func TestSnapCreateLiveFlag(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"id":"snap-1","vm_id":"fuse-task-1","kind":"live","state":"ready","created_at":"2024-01-01T00:00:00Z"}`)
+	}))
+	defer srv.Close()
+
+	cfg := writeConfig(t, srv.URL)
+	out, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{"--config", cfg, "snapshot", "create", "fuse-task-1", "--live", "--comment", "warmed"})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if !strings.Contains(gotBody, `"live":true`) {
+		t.Errorf("request body missing live flag: %s", gotBody)
+	}
+	if !strings.Contains(out, "live") {
+		t.Errorf("detail output missing kind:\n%s", out)
+	}
+}
+
+// TestSnapCreateOmitsLiveWhenUnset pins the default: an ordinary create must
+// not start sending live at all, and the rendered kind falls back to disk when
+// the server is old enough not to send one.
+func TestSnapCreateOmitsLiveWhenUnset(t *testing.T) {
+	var gotBody string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		gotBody = string(b)
+		w.WriteHeader(http.StatusCreated)
+		fmt.Fprint(w, `{"id":"snap-1","vm_id":"fuse-task-1","state":"ready","created_at":"2024-01-01T00:00:00Z"}`)
+	}))
+	defer srv.Close()
+
+	cfg := writeConfig(t, srv.URL)
+	out, err := capture(t, func() error {
+		root := newRootCmd()
+		root.SetArgs([]string{"--config", cfg, "snapshot", "create", "fuse-task-1", "--comment", "plain"})
+		return root.Execute()
+	})
+	if err != nil {
+		t.Fatalf("execute: %v", err)
+	}
+	if strings.Contains(gotBody, `"live"`) {
+		t.Errorf("live sent when unset: %s", gotBody)
+	}
+	if !strings.Contains(out, "disk") {
+		t.Errorf("detail output should default kind to disk:\n%s", out)
+	}
+}

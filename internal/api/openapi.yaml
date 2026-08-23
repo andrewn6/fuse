@@ -901,6 +901,21 @@ paths:
         state `ready`, with `parent_snapshot_id` pointing at the VM's
         previous ready snapshot. `mode` defaults to `manual`.
 
+        `live: false` (the default, and the value of an omitted body)
+        copies the rootfs and nothing else, so restoring cold-boots the
+        guest. `live: true` additionally captures the guest's memory and
+        vCPU state inside a single pause window, so restoring resumes the
+        guest where it stopped. It costs the environment's full configured
+        memory in bytes on every create, pauses the guest for the length
+        of the capture, and produces an artifact pinned to the host that
+        took it.
+
+        The response's `kind` is what was actually written, not what was
+        requested. A host running an agent too old to know about live
+        snapshots answers `live: true` with a disk snapshot and the record
+        says `disk`, so a caller that depends on the memory being present
+        must read `kind` rather than assume the request was honoured.
+
         Preconditions are reported as 4xx, not 5xx:
 
         - 404 `not_found` — unknown VM.
@@ -908,9 +923,21 @@ paths:
           per-tenant snapshot quota (count or bytes) is exhausted, or the
           VM holds a GPU passthrough device. A vfio device cannot be
           checkpointed, so GPU environments can never be snapshotted;
-          this is permanent and must not be retried.
+          this is permanent and must not be retried. A GPU VM asking for
+          `live: true` gets this same 409 and the same GPU-specific
+          message, not the 501 below: the device is what cannot be
+          checkpointed, so dropping `live` will not help.
         - 501 `unimplemented` — the provider has no snapshot support
-          (e.g. the in-memory stub).
+          (e.g. the in-memory stub), or `live: true` was requested against
+          a provider that supports disk snapshots but not live ones. The
+          latter is not a conflict: nothing about the VM's state is wrong
+          and retrying it unchanged can never succeed, but the same call
+          without `live` will, and the message says so. Only Firecracker
+          hosts running an agent new enough to capture memory implement it.
+
+        Byte quotas were calibrated against rootfs-only snapshots, so a
+        workload that switches to `live: true` reaches the 409 quota case
+        far sooner than its snapshot count suggests.
       requestBody:
         required: false
         content:
@@ -929,7 +956,11 @@ paths:
         "404":
           $ref: "#/components/responses/NotFound"
         "409":
-          description: Snapshot quota exceeded for the tenant (count or bytes).
+          description: |
+            The VM is not running, the per-tenant snapshot quota (count
+            or bytes) is exhausted, or the VM holds a GPU passthrough
+            device. The GPU case is reported here for `live: true` as
+            well as for a plain disk snapshot.
           content:
             application/json:
               schema:
@@ -937,7 +968,15 @@ paths:
         "500":
           $ref: "#/components/responses/InternalError"
         "501":
-          $ref: "#/components/responses/Unimplemented"
+          description: |
+            The provider has no snapshot support at all, or `live: true`
+            was asked of a provider that can take disk snapshots but not
+            live ones. In the second case the message says to retry
+            without `live` for a disk snapshot.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
 
   /v1/snapshots:
     get:
@@ -949,6 +988,9 @@ paths:
         exact matches, combined with AND. There is no host-scoped
         filter; listing is fleet-wide regardless of which host the
         source VM ran on.
+
+        Every listed record carries its `kind` (`disk` or `live`).
+        There is no `kind` filter; separate the two client-side.
       parameters:
         - name: vm_id
           in: query
@@ -2170,6 +2212,27 @@ components:
             id. Set by `fuse build`; every other caller omits it. A
             layer is still an ordinary build-mode snapshot; the key is
             the only thing that distinguishes it.
+        live:
+          type: boolean
+          default: false
+          description: |
+            Capture the guest's memory and vCPU state alongside the
+            rootfs, so restoring resumes the guest instead of
+            cold-booting it. Omitted or false takes a disk-only
+            snapshot, which is the default everywhere.
+
+            A live snapshot costs the environment's full configured
+            memory in bytes on top of the rootfs, on every create, and
+            pauses the guest for the length of the capture. The
+            resulting artifact is pinned to the host that took it: a
+            memory image depends on that host's CPU model and
+            Firecracker version. Fork reads only a snapshot's rootfs,
+            so forking a live snapshot silently yields a cold-booting
+            environment.
+
+            Asking for it on a provider without live-snapshot support
+            is a 501, not a 409. Check the response's `kind` rather
+            than assuming this flag was honoured.
         export_ref:
           type: string
         export_status:
@@ -2253,6 +2316,25 @@ components:
             can share: rebuilding the same recipe produces different
             bytes, so nothing is looked up by digest. Absent when the
             host agent does not hash.
+        kind:
+          type: string
+          enum: [disk, live]
+          default: disk
+          description: |
+            What this artifact actually contains. "disk" is the rootfs
+            and nothing else, so restoring it cold-boots the guest;
+            "live" additionally carries the vCPU state and the whole
+            guest memory, so restoring it resumes the guest where it
+            stopped.
+
+            This is what the host agent reports it wrote, never what
+            the caller requested: a `live: true` create served by an
+            agent that could only take a disk snapshot reads back as
+            "disk". Branch on this rather than on your own request.
+
+            Always present, on every read path. Records written before
+            live snapshots existed read back as "disk".
+          example: disk
         size_bytes:
           type: integer
           format: int64

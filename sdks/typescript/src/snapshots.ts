@@ -45,7 +45,16 @@ export interface SnapshotPage {
 export class SnapshotsService {
   constructor(private readonly t: Transport) {}
 
-  /** Create a snapshot of a running environment. */
+  /** Create a snapshot of a running environment.
+   *
+   * An empty body takes a disk snapshot, the rootfs and nothing else; pass
+   * `{ live: true }` to capture the guest's memory and vCPU state as well.
+   *
+   * The returned `snapshot.kind` reports what was actually written, which can
+   * be `"disk"` even for a `live: true` request that reached a host too old to
+   * honour it. A caller that depends on the memory being there should check
+   * it. `live: true` against a backend with no live-snapshot support throws a
+   * 501 `unimplemented`, not a conflict. */
   async create(
     vmId: string,
     body: SnapshotRequest = {},

@@ -1,0 +1,21 @@
+-- What a snapshot actually contains: 'disk' is the rootfs and nothing else, so
+-- restoring it cold-boots the guest, while 'live' additionally carries vCPU
+-- state and the full guest memory image, so restoring it resumes the guest
+-- where it stopped. The two are indistinguishable after the fact unless the
+-- answer is written down, and guessing wrong is not cosmetic: reading a live
+-- artifact as a disk one silently cold-boots a guest the caller believed it
+-- had frozen.
+--
+-- The default is 'disk' rather than '' so no backfill is needed and no read
+-- path has to translate an empty string: every snapshot taken before this
+-- column existed was rootfs-only, which is exactly what 'disk' says. A host
+-- agent too old to report a kind lands here for the same reason.
+--
+-- Deliberately not a CHECK constraint or an enum. The value is whatever the
+-- host agent reported it wrote, and an orchestrator that meets a newer agent
+-- naming a third kind should record the unknown value and let the read path
+-- normalize it, not refuse the row and lose the snapshot's metadata entirely.
+--
+-- No index: nothing looks a snapshot up by kind. It is reported alongside a
+-- row that some other predicate already found.
+ALTER TABLE orchestrator_snapshots ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'disk';

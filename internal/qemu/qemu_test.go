@@ -28,6 +28,14 @@ func TestQEMUEnv_notSnapshotCapable(t *testing.T) {
 	if _, ok := any(env).(orchestrator.SnapshotCapable); ok {
 		t.Fatalf("qemu env must NOT implement orchestrator.SnapshotCapable")
 	}
+	// Same guardrail, one interface further out: a live snapshot is a strictly
+	// larger ask than a disk one, so an env that cannot be checkpointed at all
+	// must not answer LiveSnapshotCapable either. If it did, CreateSnapshot's
+	// live branch would reach a gpu env that the SnapshotCapable assertion is
+	// there to keep out.
+	if _, ok := any(env).(orchestrator.LiveSnapshotCapable); ok {
+		t.Fatalf("qemu env must NOT implement orchestrator.LiveSnapshotCapable")
+	}
 }
 
 // TestQEMURemoteEnv_notSnapshotCapable asserts the remote (HTTP-backed) env is
@@ -36,6 +44,9 @@ func TestQEMURemoteEnv_notSnapshotCapable(t *testing.T) {
 	var env orchestrator.Environment = &remoteEnv{id: "fuse-t1", url: "qemu://fuse-t1"}
 	if _, ok := env.(orchestrator.SnapshotCapable); ok {
 		t.Fatalf("remoteEnv must NOT implement orchestrator.SnapshotCapable")
+	}
+	if _, ok := env.(orchestrator.LiveSnapshotCapable); ok {
+		t.Fatalf("remoteEnv must NOT implement orchestrator.LiveSnapshotCapable")
 	}
 }
 

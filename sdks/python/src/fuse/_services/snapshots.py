@@ -18,6 +18,16 @@ class SnapshotsService:
     def create(
         self, vm_id: str, request: Optional[SnapshotRequest] = None
     ) -> Snapshot:
+        # checkpoints a running environment. with no request (or with live
+        # unset) this takes a disk snapshot, the rootfs and nothing else; pass
+        # SnapshotRequest(live=True) to capture the guest's memory and vcpu
+        # state as well.
+        #
+        # the returned Snapshot.kind reports what was actually written, which
+        # can be "disk" even for a live request that reached a host too old to
+        # honour it. a caller that depends on the memory being there should
+        # check it. live against a backend with no live-snapshot support raises
+        # ApiError with status 501, not a conflict.
         if not vm_id:
             raise ValueError("vm id is required")
         path = f"/v1/environments/{quote(vm_id, safe='')}/snapshots"

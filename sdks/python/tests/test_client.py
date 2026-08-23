@@ -292,6 +292,65 @@ def test_snapshots_create() -> None:
 
 
 @respx.mock
+def test_snapshots_create_sends_live_and_decodes_kind() -> None:
+    route = respx.post(f"{BASE_URL}/v1/environments/vm-1/snapshots").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "snap-1",
+                "vm_id": "vm-1",
+                "kind": "live",
+                "created_at": "2024-01-01T00:00:00Z",
+            },
+        )
+    )
+    with new_client() as client:
+        snap = client.snapshots.create("vm-1", fuse.SnapshotRequest(live=True))
+
+    body = json.loads(route.calls.last.request.content)
+    assert body["live"] is True
+    assert snap.kind == "live"
+
+
+@respx.mock
+def test_snapshots_create_live_served_as_disk_reports_disk() -> None:
+    # an agent too old to honour live answers with a disk snapshot; the sdk must
+    # surface that rather than let a caller read its own request back.
+    respx.post(f"{BASE_URL}/v1/environments/vm-1/snapshots").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "snap-1",
+                "vm_id": "vm-1",
+                "kind": "disk",
+                "created_at": "2024-01-01T00:00:00Z",
+            },
+        )
+    )
+    with new_client() as client:
+        snap = client.snapshots.create("vm-1", fuse.SnapshotRequest(live=True))
+
+    assert snap.kind == "disk"
+
+
+@respx.mock
+def test_snapshots_create_omits_live_when_unset() -> None:
+    route = respx.post(f"{BASE_URL}/v1/environments/vm-1/snapshots").mock(
+        return_value=httpx.Response(
+            200,
+            json={"id": "snap-1", "vm_id": "vm-1", "created_at": "2024-01-01T00:00:00Z"},
+        )
+    )
+    with new_client() as client:
+        snap = client.snapshots.create("vm-1", fuse.SnapshotRequest(comment="c"))
+
+    assert "live" not in json.loads(route.calls.last.request.content)
+    # a server that predates the field sends no kind at all; that reads as ""
+    # and callers treat it as disk.
+    assert snap.kind == ""
+
+
+@respx.mock
 def test_snapshots_list() -> None:
     route = respx.get(f"{BASE_URL}/v1/snapshots").mock(
         return_value=httpx.Response(
@@ -354,6 +413,7 @@ def test_snapshots_get_decodes_artifact_fields() -> None:
                 "layer_key": "abc123",
                 "arch": "amd64",
                 "digest": "deadbeef",
+                "kind": "live",
                 "created_at": "2024-01-01T00:00:00Z",
             },
         )
@@ -364,6 +424,9 @@ def test_snapshots_get_decodes_artifact_fields() -> None:
     assert snap.layer_key == "abc123"
     assert snap.arch == "amd64"
     assert snap.digest == "deadbeef"
+    # kind has to decode on get too, not only on create: the docs tell callers
+    # to check it, which they can only do wherever they read the snapshot.
+    assert snap.kind == "live"
 
 
 @respx.mock

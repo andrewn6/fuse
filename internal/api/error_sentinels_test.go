@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -192,6 +193,72 @@ func TestCreateSnapshot_providerUnsupportedReturns501(t *testing.T) {
 	}
 	if e := decodeError(t, rr.Body); e.Error.Code != CodeUnimplemented {
 		t.Errorf("error code = %q, want %q", e.Error.Code, CodeUnimplemented)
+	}
+}
+
+// TestCreateSnapshot_liveOnDiskOnlyProviderReturns501 covers the second,
+// narrower capability assertion. A provider that can checkpoint but not
+// capture memory is a capability gap, not a conflict: nothing about the VM's
+// state is wrong, and the same call without live succeeds. The docs and all
+// three SDKs promise 501/unimplemented here, and specifically promise that a
+// conflict check does not match it.
+func TestCreateSnapshot_liveOnDiskOnlyProviderReturns501(t *testing.T) {
+	h, _, _ := newTestHandler(t)
+	r := mustRouter(t, h)
+
+	env := createEnv(t, r, CreateEnvironmentRequest{
+		TaskID:         "task-1",
+		ManifestInline: encodeManifest(t),
+	})
+
+	// the same env takes a plain disk snapshot happily, which is what makes
+	// this a live-specific rejection rather than a provider with no snapshot
+	// support at all.
+	if rr := doJSON(t, r, http.MethodPost, "/v1/environments/"+env.ID+"/snapshots", CreateSnapshotRequest{}); rr.Code != http.StatusCreated {
+		t.Fatalf("disk snapshot status = %d, want 201. body: %s", rr.Code, rr.Body.String())
+	}
+
+	rr := doJSON(t, r, http.MethodPost, "/v1/environments/"+env.ID+"/snapshots", CreateSnapshotRequest{Live: true})
+	if rr.Code != http.StatusNotImplemented {
+		t.Fatalf("status = %d, want 501. body: %s", rr.Code, rr.Body.String())
+	}
+	e := decodeError(t, rr.Body)
+	if e.Error.Code != CodeUnimplemented {
+		t.Errorf("error code = %q, want %q", e.Error.Code, CodeUnimplemented)
+	}
+	// the message has to name the way out, otherwise 501 reads as "never
+	// snapshot this vm" rather than "drop the flag".
+	if !strings.Contains(e.Error.Message, "retry without live") {
+		t.Errorf("message = %q, want it to suggest retrying without live", e.Error.Message)
+	}
+}
+
+// TestCreateSnapshot_gpuEnvWithLiveStillReturns409 pins the ordering of the
+// two capability checks. A GPU env implements neither snapshot interface, so
+// a naive implementation would report the live gap; the useful answer is that
+// a vfio device cannot be checkpointed at all, which no flag change fixes.
+// The api layer must not flatten the two into one status.
+func TestCreateSnapshot_gpuEnvWithLiveStillReturns409(t *testing.T) {
+	h, fm, p := newPlainHandler(t)
+	r := mustRouter(t, h)
+	registerGPUHost(t, fm, p)
+
+	env := createEnv(t, r, CreateEnvironmentRequest{
+		TaskID:         "task-gpu",
+		Spec:           ResourceSpec{GPUs: 1, GPUKind: "a100"},
+		ManifestInline: encodeManifest(t),
+	})
+
+	rr := doJSON(t, r, http.MethodPost, "/v1/environments/"+env.ID+"/snapshots", CreateSnapshotRequest{Live: true})
+	if rr.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (gpu reason wins over the live gap). body: %s", rr.Code, rr.Body.String())
+	}
+	e := decodeError(t, rr.Body)
+	if e.Error.Code != CodeConflict {
+		t.Errorf("error code = %q, want %q", e.Error.Code, CodeConflict)
+	}
+	if !strings.Contains(e.Error.Message, "gpu") {
+		t.Errorf("message = %q, want the gpu-specific explanation", e.Error.Message)
 	}
 }
 
