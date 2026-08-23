@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.29.1](https://github.com/folsomintel/fuse/compare/v0.29.0...v0.29.1) (2026-08-23)
+
+
+### Bug Fixes
+
+* **orchestrator:** reject fork and seed from a live snapshot instead of failing at boot ([#221](https://github.com/folsomintel/fuse/issues/221)) ([5502c77](https://github.com/folsomintel/fuse/commit/5502c7724ce919c031cba31a378aadefb0fa6ad2))
+* **test:** base64-decode exec stdout in the live snapshot e2e ([#220](https://github.com/folsomintel/fuse/issues/220)) ([01881d7](https://github.com/folsomintel/fuse/commit/01881d7824e83bdda4fdbba3d167e0d4f8fdd2a4))
+
 ## [0.29.0](https://github.com/folsomintel/fuse/compare/v0.28.0...v0.29.0) (2026-08-23)
 
 
