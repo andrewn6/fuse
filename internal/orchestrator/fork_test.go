@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -196,5 +197,94 @@ func TestForkEnvironment_providerNotForkable(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "does not support fork") {
 		t.Fatalf("err = %v, want provider does not support fork", err)
+	}
+}
+
+// liveForkTestProvider is forkTestProvider whose envs also carry the live
+// capability, so a fork test can produce a genuine live snapshot record
+// instead of hand-editing a kind into the store.
+type liveForkTestProvider struct {
+	*forkTestProvider
+	live map[string]*liveSnapshotTestEnv
+}
+
+func newLiveForkTestProvider() *liveForkTestProvider {
+	return &liveForkTestProvider{
+		forkTestProvider: newForkTestProvider(),
+		live:             make(map[string]*liveSnapshotTestEnv),
+	}
+}
+
+func (p *liveForkTestProvider) Create(ctx context.Context, spec Spec) (Environment, error) {
+	env, err := p.forkTestProvider.Create(ctx, spec)
+	if err != nil {
+		return nil, err
+	}
+	wrapped := &liveSnapshotTestEnv{snapshotTestEnv: env.(*snapshotTestEnv)}
+	p.live[spec.Name] = wrapped
+	return wrapped, nil
+}
+
+func (p *liveForkTestProvider) Get(ctx context.Context, name string) (Environment, error) {
+	if env, ok := p.live[name]; ok {
+		return env, nil
+	}
+	return p.forkTestProvider.Get(ctx, name)
+}
+
+// TestForkEnvironment_rejectsLiveSeed asserts fork refuses a live snapshot up
+// front. A live snapshot's rootfs is copied without quiescing the guest
+// filesystem, so booting it alone gets a filesystem missing everything still
+// in page cache; against a real host that surfaced as a 500 from deep inside
+// the agent ("agent start failed: activating") after a vm had already been
+// provisioned and had to be rolled back.
+func TestForkEnvironment_rejectsLiveSeed(t *testing.T) {
+	provider := newLiveForkTestProvider()
+	fm := NewFleetManager(FleetConfig{
+		Provider: provider,
+		Prefix:   "fuse-",
+	})
+	srcID := provisionSnapshotTestVM(t, fm, "task-1")
+
+	seed, err := fm.CreateSnapshot(context.Background(), srcID, SnapshotOptions{Comment: "live seed", Live: true})
+	if err != nil {
+		t.Fatalf("create live seed snapshot: %v", err)
+	}
+	if seed.Kind != SnapshotKindLive {
+		t.Fatalf("seed kind = %q, want live; the test provider did not take a live snapshot", seed.Kind)
+	}
+
+	_, err = fm.ForkEnvironment(context.Background(), srcID, ForkOptions{ReuseSnapshotID: seed.SnapshotID})
+	if !errors.Is(err, ErrSnapshotNotSeedable) {
+		t.Fatalf("err = %v, want ErrSnapshotNotSeedable", err)
+	}
+
+	// the rejection must happen before anything is provisioned, or the caller
+	// pays for a vm that gets torn down again.
+	if got := len(fm.ListFleet()); got != 1 {
+		t.Fatalf("vm count = %d, want 1; a rejected fork must not leave an environment behind", got)
+	}
+}
+
+// TestForkEnvironment_diskSeedStillWorks pins the other half of the guard: the
+// kind check must reject live only, not every reused snapshot.
+func TestForkEnvironment_diskSeedStillWorks(t *testing.T) {
+	provider := newLiveForkTestProvider()
+	fm := NewFleetManager(FleetConfig{
+		Provider: provider,
+		Prefix:   "fuse-",
+	})
+	srcID := provisionSnapshotTestVM(t, fm, "task-1")
+
+	seed, err := fm.CreateSnapshot(context.Background(), srcID, SnapshotOptions{Comment: "disk seed"})
+	if err != nil {
+		t.Fatalf("create disk seed snapshot: %v", err)
+	}
+	if seed.Kind == SnapshotKindLive {
+		t.Fatalf("seed kind = live, want disk")
+	}
+
+	if _, err := fm.ForkEnvironment(context.Background(), srcID, ForkOptions{ReuseSnapshotID: seed.SnapshotID}); err != nil {
+		t.Fatalf("fork from a disk snapshot: %v", err)
 	}
 }

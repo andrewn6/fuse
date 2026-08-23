@@ -313,9 +313,11 @@ class SnapshotRequest(_Model):
     #
     # it costs the environment's full configured memory in bytes on every
     # create, pauses the guest for the length of the capture, and produces an
-    # artifact pinned to the host that took it. fork reads only a snapshot's
-    # rootfs, so forking a live snapshot yields a cold-booting environment with
-    # none of the memory, and nothing raises when it does.
+    # artifact pinned to the host that took it. it also cannot seed a new
+    # environment: fork and CreateRequest.seed_snapshot_id read only a
+    # snapshot's rootfs, and a live snapshot's rootfs is captured without
+    # quiescing the guest filesystem, so it is consistent only alongside the
+    # memory image. both reject a live snapshot with a 409 conflict.
     #
     # against a backend with no live-snapshot support this is a 501
     # unimplemented, not a conflict, so is_conflict reports false for it.

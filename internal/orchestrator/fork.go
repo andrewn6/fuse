@@ -193,6 +193,13 @@ func (fm *FleetManager) ForkEnvironment(ctx context.Context, srcVMID string, opt
 		if existing.State != SnapshotStateReady {
 			return "", fmt.Errorf("%w: snapshot %s is %s", ErrSnapshotInvalidState, opts.ReuseSnapshotID, existing.State)
 		}
+		// a fork boots the seed's rootfs on its own, and a live snapshot's
+		// rootfs is only consistent alongside the memory image it was captured
+		// with. reject it here rather than letting the fork provision a vm and
+		// die on "agent start failed" once the guest cannot mount what it got.
+		if existing.Kind == SnapshotKindLive {
+			return "", fmt.Errorf("%w: snapshot %s is a live snapshot, whose rootfs is only consistent with its memory image; fork from a disk snapshot instead", ErrSnapshotNotSeedable, opts.ReuseSnapshotID)
+		}
 		// a ready record is not proof of an artifact on the host. fork itself
 		// writes lineage records (below) that are ready but back no checkpoint,
 		// and a snapshot can also be deleted out from under its record. confirm
