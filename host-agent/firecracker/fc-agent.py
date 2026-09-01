@@ -88,6 +88,13 @@ ARTIFACT_TMP_DIR = Path(
     os.environ.get("FC_AGENT_ARTIFACT_TMP_DIR", str(SNAPSHOTS_DIR.parent / "artifact-pull-tmp"))
 )
 FC_BIN = os.environ.get("FC_BIN", "/usr/local/bin/firecracker")
+# Guest kernel log verbosity. Every boot message goes out an emulated 115200
+# baud UART, so printing them costs real wall clock on a path we are trying to
+# measure in milliseconds. Quiet is the default; set FC_VERBOSE_BOOT=1 to get
+# the full boot log back in the per-VM fc.log when debugging a guest that will
+# not come up. The console itself stays attached either way so a kernel panic
+# is still visible.
+VERBOSE_BOOT = os.environ.get("FC_VERBOSE_BOOT", "").strip() not in ("", "0")
 # Port the in-guest agent listens on; per-VM host ports DNAT to this.
 FUSED_PORT = int(os.environ.get("FUSED_PORT", "9550"))
 HOST_PORT_BASE = int(os.environ.get("FUSE_HOST_PORT_BASE", "19550"))
@@ -492,7 +499,8 @@ def start_firecracker(meta: dict) -> None:
     # Configure boot, drive, net, machine-config, start.
     boot_args = (
         "console=ttyS0 reboot=k panic=1 pci=off "
-        f"ip={meta['guest_ip']}::{meta['host_ip']}:255.255.255.252::eth0:off"
+        + ("" if VERBOSE_BOOT else "quiet loglevel=0 ")
+        + f"ip={meta['guest_ip']}::{meta['host_ip']}:255.255.255.252::eth0:off"
     )
     steps = [
         ("/boot-source", {"kernel_image_path": str(KERNEL), "boot_args": boot_args}),
