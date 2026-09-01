@@ -453,14 +453,62 @@ def resync_guest_clock(guest_ip: str) -> None:
         print(f"[fc-agent] clock resync failed for {guest_ip}: rc={rc} {err!r}", flush=True)
 
 
+# Readiness probe cadence. The tcp probe is one connect with no subprocess, so
+# polling it tightly is affordable; the ssh confirmation forks a client and does
+# a full handshake, so a failed one backs off harder before retrying.
+TCP_PROBE_INTERVAL = float(os.environ.get("FC_TCP_PROBE_INTERVAL", "0.02"))
+TCP_PROBE_TIMEOUT = float(os.environ.get("FC_TCP_PROBE_TIMEOUT", "0.5"))
+SSH_RETRY_INTERVAL = float(os.environ.get("FC_SSH_RETRY_INTERVAL", "0.2"))
+
+
+def tcp_open(guest_ip: str, port: int = 22, timeout: float = 0.5) -> bool:
+    """Whether something is accepting connections on guest_ip:port.
+
+    This is a liveness gate, not a readiness check: sshd binds and listens
+    before it can actually serve an auth exchange, so a True here means "worth
+    trying ssh now", not "ssh will succeed". Cheap enough (one connect, no
+    subprocess, no handshake) to poll far more tightly than ssh_exec, which
+    forks a whole ssh client per attempt.
+    """
+    try:
+        with socket.create_connection((guest_ip, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
 def wait_for_ssh(guest_ip: str, timeout: float = 30.0) -> bool:
+    """Block until the guest will accept an ssh command, or the deadline passes.
+
+    Two phases: cheap tcp probes to find the moment sshd starts listening, then
+    a real ssh to confirm it can serve. The old single-phase version forked an
+    ssh client every 300ms, so it paid a handshake per attempt and reported
+    readiness up to 300ms after the fact.
+    """
     deadline = time.time() + timeout
-    while time.time() < deadline:
-        rc, _, _ = ssh_exec(guest_ip, "true", timeout=4.0)
+    while True:
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return False
+        # Phase 1. sshd is not listening for most of a cold boot, so nearly
+        # every iteration ends here. The probe timeout is clamped to what is
+        # left of the budget so a connect that hangs cannot overshoot it.
+        if not tcp_open(guest_ip, timeout=min(TCP_PROBE_TIMEOUT, remaining)):
+            time.sleep(TCP_PROBE_INTERVAL)
+            continue
+        # Phase 2. Something is listening, which is not the same as being able
+        # to serve: sshd accepts the connection before auth is ready, and a vm
+        # that inherited a recycled guest ip can briefly show the previous
+        # occupant's listener. Confirm with a real command, and on failure drop
+        # back to probing rather than giving up -- the listener may still be
+        # coming up, or may be about to disappear.
+        remaining = deadline - time.time()
+        if remaining <= 0:
+            return False
+        rc, _, _ = ssh_exec(guest_ip, "true", timeout=min(4.0, remaining))
         if rc == 0:
             return True
-        time.sleep(0.3)
-    return False
+        time.sleep(SSH_RETRY_INTERVAL)
 
 
 # -- VM lifecycle -------------------------------------------------------------
