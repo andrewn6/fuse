@@ -95,6 +95,11 @@ ARTIFACT_TMP_DIR = Path(
 FC_BIN = os.environ.get("FC_BIN", "/usr/local/bin/firecracker")
 # Port the in-guest agent listens on; per-VM host ports DNAT to this.
 FUSED_PORT = int(os.environ.get("FUSED_PORT", "9550"))
+# Guest ports that must never be published: the agent's own management API
+# (FUSED_PORT) and the guest SSH port (22). The fusefile parser enforces this
+# first (internal/fusefile/parse.go), but we re-check here as defense-in-depth
+# so a direct API caller cannot DNAT the control plane to the open internet.
+RESERVED_GUEST_PORTS = frozenset({FUSED_PORT, 22})
 HOST_PORT_BASE = int(os.environ.get("FUSE_HOST_PORT_BASE", "19550"))
 # Public host resolution. The agent hands the orchestrator a bare "host:port"
 # authority for each VM, so a malformed host silently produces environments
@@ -1513,10 +1518,22 @@ def do_start_agent(vm_id: str, manifest_path: str, secrets_path: str,
     # no ports to publish (including the FROZEN /start-surfd path, which
     # never passes expose) see no change at all. Persisted onto meta so
     # destroy_vm can remove the same rules on teardown.
+    #
+    # Defense-in-depth: the fusefile parser (internal/fusefile/parse.go) rejects
+    # the agent's own management port and SSH before they ever reach here, but
+    # we re-check on the host so a buggy or direct API caller can never DNAT
+    # the control plane to the open internet.
     endpoints: list[dict] = []
     if expose:
         for entry in expose:
             guest_port = int(entry["port"])
+            if guest_port in RESERVED_GUEST_PORTS:
+                raise HTTPError(
+                    500,
+                    f"refusing to expose reserved guest port {guest_port} "
+                    f"(agent management port {FUSED_PORT} or SSH 22); "
+                    f"this is blocked at fusefile parse time as well",
+                )
             host_port = _free_host_port()
             add_expose_forward(host_port, meta["guest_ip"], guest_port)
             endpoints.append({"as": entry.get("as", ""), "url": host_authority(PUBLIC_HOST, host_port), "port": guest_port, "host_port": host_port})
@@ -1625,7 +1642,7 @@ def set_winsize(fd: int, rows: int, cols: int) -> None:
 
 def parse_attach_spec(query: dict) -> dict:
     """Read the attach spec out of the request query. cmd repeats to preserve
-    argv boundaries, so a command containing spaces survives the round trip."""
+    argv boundaries, so a command containing `ces survives the round trip."""
 
     def _int(name: str) -> int:
         try:

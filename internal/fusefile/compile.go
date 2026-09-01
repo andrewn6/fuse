@@ -605,14 +605,17 @@ func compileLabels(in map[string]string) map[string]string {
 	return out
 }
 
-// compileExpose carries Fusefile.Expose through unchanged, one-for-one.
+// compileExpose carries Fusefile.Expose through unchanged, one-for-one. The
+// AllowReserved flag lives in the schema struct only for validation; it is
+// intentionally not carried into the wire shape — once the file is valid it
+// has no meaning to the orchestrator or host agent.
 func compileExpose(f *Fusefile) []ExposeSpec {
 	if len(f.Expose) == 0 {
 		return nil
 	}
 	out := make([]ExposeSpec, len(f.Expose))
 	for i, e := range f.Expose {
-		out[i] = ExposeSpec(e)
+		out[i] = ExposeSpec{Port: e.Port, As: e.As}
 	}
 	return out
 }

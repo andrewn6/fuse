@@ -260,12 +260,26 @@ func validate(f *Fusefile) error {
 	seenPorts := make(map[int]int, len(f.Expose))
 	seenNames := make(map[string]int, len(f.Expose))
 	for i, exp := range f.Expose {
-		if exp.Port < 1 || exp.Port > 65535 {
+		switch {
+		case exp.Port < 1 || exp.Port > 65535:
 			errs = append(errs, fmt.Errorf("expose[%d].port: must be between 1 and 65535", i))
-		} else if prev, dup := seenPorts[exp.Port]; dup {
-			errs = append(errs, fmt.Errorf("expose[%d].port: %d is already exposed by expose[%d]", i, exp.Port, prev))
-		} else {
-			seenPorts[exp.Port] = i
+		case isReservedGuestPort(exp.Port):
+			errs = append(errs, fmt.Errorf(
+				"expose[%d].port: %d is reserved for the guest agent's control surface"+
+					" (FUSED_PORT=9550) or SSH (22) and cannot be exposed;"+
+					" set allow_reserved: true for privileged ports that still need publishing",
+				i, exp.Port))
+		case exp.Port < privilegedPortCeiling && !exp.AllowReserved:
+			errs = append(errs, fmt.Errorf(
+				"expose[%d].port: %d is a privileged port (below %d);"+
+					" if this is intentional, set allow_reserved: true",
+				i, exp.Port, privilegedPortCeiling))
+		default:
+			if prev, dup := seenPorts[exp.Port]; dup {
+				errs = append(errs, fmt.Errorf("expose[%d].port: %d is already exposed by expose[%d]", i, exp.Port, prev))
+			} else {
+				seenPorts[exp.Port] = i
+			}
 		}
 
 		if exp.As == "" {
@@ -295,6 +309,41 @@ func validate(f *Fusefile) error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// reservedGuestPorts are the guest VM's own control-plane ports, drawn from the
+// host-agent firecracker/qemu agents' configuration:
+//
+//   - 9550: FUSED_PORT, the in-guest agent's management API (fc-agent.py:92,
+//     qemu-agent.py:99). DNAT-ing it to the public internet gives everyone
+//     with network access the agent's control plane: start/stop services,
+//     upload files, exec commands, read secrets.
+//   - 22: the guest SSH port. Exposing it bypasses whatever access model the
+//     environment is meant to enforce (the agent already mediates all guest
+//     access via its own authenticated API).
+//
+// These are hard-blocked and cannot be opted in to, even with
+// `allow_reserved: true`. If an environment genuinely needs a different
+// agent port (via the FUSED_PORT env var) the fusefile author is responsible
+// for not requesting it here — the parser cannot see the runtime value.
+var reservedGuestPorts = map[int]struct{}{
+	9550: {}, // FUSED_PORT — guest agent control API
+	22:   {}, // SSH — guest access
+}
+
+// privilegedPortCeiling is the boundary between ordinary and privileged guest
+// ports. Ports below this are IANA well-known/privileged ports (require root
+// inside the guest, and are more likely to collide with or shadow a system
+// service than to be an intentional application port). They are blocked by
+// default; `allow_reserved: true` opts in for ports in this range that are not
+// on the always-reserved list above.
+const privilegedPortCeiling = 1024
+
+// isReservedGuestPort reports whether port is a guest control-plane port that
+// must never be published, regardless of allow_reserved.
+func isReservedGuestPort(port int) bool {
+	_, reserved := reservedGuestPorts[port]
+	return reserved
 }
 
 // validateHealthProbe checks the structural rules of the environment-level

@@ -97,6 +97,11 @@ MIG_LIFECYCLE_MANAGED = os.environ.get("MIG_LIFECYCLE_MANAGED", "") not in ("", 
 MIG_SETUP_SCRIPT = Path(os.environ.get("MIG_SETUP_SCRIPT", str(Path(__file__).with_name("qemu-mig-setup.sh"))))
 # Port the in-guest agent listens on; per-VM host ports DNAT to this.
 FUSED_PORT = int(os.environ.get("FUSED_PORT", "9550"))
+# Guest ports that must never be published: the agent's own management API
+# (FUSED_PORT) and the guest SSH port (22). The fusefile parser enforces this
+# first (internal/fusefile/parse.go), but we re-check here as defense-in-depth
+# so a direct API caller cannot DNAT the control plane to the open internet.
+RESERVED_GUEST_PORTS = frozenset({FUSED_PORT, 22})
 HOST_PORT_BASE = int(os.environ.get("FUSE_HOST_PORT_BASE", "19650"))
 # Public host resolution. The agent hands the orchestrator a bare "host:port"
 # authority for each VM, so a malformed host silently produces environments
@@ -1231,10 +1236,21 @@ def do_start_agent(vm_id: str, manifest_path: str, secrets_path: str,
             detail = f"{detail} | stdout: {stdout}" if detail else stdout
         raise HTTPError(500, f"agent start failed: {detail or 'unknown error (rc={rc})'}")
 
+    # Defense-in-depth: the fusefile parser (internal/fusefile/parse.go) rejects
+    # the agent's own management port and SSH before they ever reach here, but
+    # we re-check on the host so a buggy or direct API caller can never DNAT
+    # the control plane to the open internet.
     endpoints: list[dict] = []
     if expose:
         for entry in expose:
             guest_port = int(entry["port"])
+            if guest_port in RESERVED_GUEST_PORTS:
+                raise HTTPError(
+                    500,
+                    f"refusing to expose reserved guest port {guest_port} "
+                    f"(agent management port {FUSED_PORT} or SSH 22); "
+                    f"this is blocked at fusefile parse time as well",
+                )
             host_port = _free_host_port()
             add_expose_forward(host_port, meta["guest_ip"], guest_port)
             endpoints.append({"as": entry.get("as", ""), "url": host_authority(PUBLIC_HOST, host_port), "port": guest_port, "host_port": host_port})

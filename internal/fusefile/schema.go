@@ -495,4 +495,12 @@ type EnvValue struct {
 type Expose struct {
 	Port int    `yaml:"port"`
 	As   string `yaml:"as,omitempty"`
+
+	// AllowReserved opts in to exposing a privileged guest port (below 1024)
+	// that is otherwise blocked by default. The guest agent's management port
+	// (9550, FUSED_PORT) and SSH (22) are always blocked — they cannot be
+	// opted in to, ever — because publishing the agent's control API or SSH
+	// hands the outside world the guest's control plane or bypasses the
+	// environment's access model.
+	AllowReserved bool `yaml:"allow_reserved,omitempty"`
 }
