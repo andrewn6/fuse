@@ -153,12 +153,19 @@ func TestParsePortBoundaries(t *testing.T) {
 	cases := []struct {
 		name        string
 		port        int
+		allowRes    bool
 		shouldError bool
 		wantContain string
 	}{
 		{
-			name:        "port 1 (minimum valid)",
+			name:        "port 1 (minimum valid, but privileged)",
 			port:        1,
+			shouldError: true,
+			wantContain: "privileged port",
+		},
+		{
+			name:        "port 1024 (minimum non-privileged)",
+			port:        1024,
 			shouldError: false,
 		},
 		{
@@ -184,11 +191,104 @@ func TestParsePortBoundaries(t *testing.T) {
 			shouldError: true,
 			wantContain: "expose[0].port: must be between 1 and 65535",
 		},
+		{
+			name:        "port 80 (privileged, no opt-in)",
+			port:        80,
+			shouldError: true,
+			wantContain: "privileged port",
+		},
+		{
+			name:        "port 80 (privileged, allow_reserved)",
+			port:        80,
+			allowRes:    true,
+			shouldError: false,
+		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			src := "version: 1\nimage: x\nexpose:\n  - port: " + fmt.Sprintf("%d", tc.port) + "\n"
+			src := "version: 1\nimage: x\nexpose:\n  - port: " + fmt.Sprintf("%d", tc.port)
+			if tc.allowRes {
+				src += "\n    allow_reserved: true"
+			}
+			src += "\n"
+			_, err := Parse([]byte(src))
+			if tc.shouldError && err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !tc.shouldError && err != nil {
+				t.Fatalf("expected success, got error: %v", err)
+			}
+			if tc.shouldError && tc.wantContain != "" && !strings.Contains(err.Error(), tc.wantContain) {
+				t.Errorf("error %q does not contain %q", err.Error(), tc.wantContain)
+			}
+		})
+	}
+}
+
+// TestParseExposeReservedPorts verifies that the guest agent's control ports are
+// always blocked, even with allow_reserved: true, while privileged-but-not-
+// reserved ports can be opted in to.
+func TestParseExposeReservedPorts(t *testing.T) {
+	cases := []struct {
+		name        string
+		port        int
+		allowRes    bool
+		shouldError bool
+		wantContain string
+	}{
+		{
+			name:        "FUSED_PORT 9550 (agent management) is always blocked",
+			port:        9550,
+			shouldError: true,
+			wantContain: "reserved for the guest agent's control surface",
+		},
+		{
+			name:        "FUSED_PORT 9550 with allow_reserved is still blocked",
+			port:        9550,
+			allowRes:    true,
+			shouldError: true,
+			wantContain: "reserved for the guest agent's control surface",
+		},
+		{
+			name:        "SSH 22 is always blocked",
+			port:        22,
+			shouldError: true,
+			wantContain: "reserved for the guest agent's control surface",
+		},
+		{
+			name:        "SSH 22 with allow_reserved is still blocked",
+			port:        22,
+			allowRes:    true,
+			shouldError: true,
+			wantContain: "reserved for the guest agent's control surface",
+		},
+		{
+			name:        "privileged port 21 without allow_reserved is blocked",
+			port:        21,
+			shouldError: true,
+			wantContain: "privileged port",
+		},
+		{
+			name:        "privileged port 21 with allow_reserved is allowed",
+			port:        21,
+			allowRes:    true,
+			shouldError: false,
+		},
+		{
+			name:        "non-privileged port 8080 is allowed",
+			port:        8080,
+			shouldError: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := "version: 1\nimage: x\nexpose:\n  - port: " + fmt.Sprintf("%d", tc.port)
+			if tc.allowRes {
+				src += "\n    allow_reserved: true"
+			}
+			src += "\n"
 			_, err := Parse([]byte(src))
 			if tc.shouldError && err == nil {
 				t.Fatalf("expected error, got nil")

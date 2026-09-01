@@ -399,11 +399,16 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 65535,
-          "description": "The guest port to publish."
+          "description": "The guest port to publish. Reserved guest control-plane ports (the agent's management port 9550 and SSH 22) are always rejected. Privileged ports below 1024 are rejected by default; set allow_reserved to true to publish one."
         },
         "as": {
           "type": "string",
           "description": "An optional name for the published endpoint."
+        },
+        "allow_reserved": {
+          "type": "boolean",
+          "default": false,
+          "description": "Opt in to exposing a privileged guest port (below 1024) that is otherwise blocked by default. The guest agent's management port (9550, FUSED_PORT) and SSH (22) are always blocked and cannot be opted in to."
         }
       }
     }
