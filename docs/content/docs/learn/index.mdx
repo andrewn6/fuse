@@ -2,56 +2,95 @@
 title: Overview
 sidebar:
   icon: graduation-cap
-description: What Fuse is and how its pieces fit together
+description: Sandboxed microVMs for agent code, running on hardware you own
 ---
 
-Fuse is a control plane for agents: it deploys Firecracker microVMs onto your own
-hosts and drives their full lifecycle — provision, running, drain, destroy — through
-a REST API. It's the orchestration layer sandboxed compute needs: scheduling across
-hosts, snapshots, host management, and live event streams, built on Firecracker and
-entirely open source.
+Fuse gives agent code a real machine to run in: a Firecracker microVM, hardware-isolated
+from the host and from every other environment, created and destroyed through one API.
+Unlike hosted sandbox services, Fuse runs on hardware you own, so guest code and the data
+it touches never leave your infrastructure. You describe what you want in a Fusefile, and
+Fuse schedules it onto a host, boots it, tracks it through its lifecycle, and tears it down.
 
-The hard part of Firecracker has always been getting it running: host setup, the
-in-guest agent, building a rootfs. Fuse collapses all of that into a single script —
-one command brings up a host with the agent installed and a rootfs baked and ready.
+## Try it
 
-## What you get
+No server to stand up first. `fuse local up` runs the real stack (orchestrator, host
+agent, and actual Firecracker microVMs) on your own machine.
 
-- **One-script Firecracker setup** — host, agent, and a baked rootfs, ready to boot.
-- **Scheduling across hosts** — register hosts, and Fuse places microVMs for you.
-- **Optional GPU environments** — whole GPUs or fractional MIG instances, routed
-  to QEMU/VFIO hosts.
-- **Full VM lifecycle** — provision, running, drain, destroy, tracked and reconciled.
-- **Snapshots** — capture a running microVM and restore from it.
-- **Live event streams** — tail a microVM's events over SSE.
-- **Durable state** — backed by Postgres, or in-memory for local runs.
-- **Per-VM secrets** — credentials generated per microVM, tokens encrypted at
-  rest, when `TOKEN_ENCRYPTION_KEY` is set. Without it the orchestrator skips
-  credential generation entirely (insecure mode).
-- **REST API and Prometheus metrics** — drive everything over HTTP, observe it out of the box.
+```bash
+brew install --cask folsomintel/fuse/fuse
+fuse local up
+```
 
-## How the pieces fit together
+Describe the environment you want in a `Fusefile`:
 
-- **The orchestrator** is the control plane: one HTTP API, a scheduler, and the
-  source of truth for every environment, host, and snapshot.
-- **A host** is a machine running a host agent (fc-agent for Firecracker, or
-  qemu-agent for GPU hosts). You register hosts with the orchestrator; it schedules
-  microVMs onto them.
-- **An environment** is one microVM and the task running inside it. You describe
-  what you want with a Fusefile or a raw resource spec, and the orchestrator picks a
-  host, boots the VM, and tracks it through its lifecycle.
-- **A snapshot** captures a running microVM so you can restore it later.
+```yaml
+version: 1
 
-Read [Concepts](/docs/concepts/fusefile) for the full mental model, or jump
-straight to the [Quickstart](/docs/learn/quickstart) to get a microVM running.
+resources:
+  cpus: 2
+  memory: 2GB
+
+run: echo "hello from $(hostname)" > hello.txt
+```
+
+Boot it, then reach inside:
+
+```bash
+fuse up
+fuse environment exec <id> -- cat /workspace/hello.txt
+```
+
+:::note[What `fuse local` needs]
+Linux: `/dev/kvm`, `python3`, and sudo. macOS: `vfkit` (`brew install vfkit`) on an
+M3 or later running macOS 15+, because Firecracker runs inside a Linux appliance VM
+under nested virtualization. See [Local development](/docs/guides/local-development).
+:::
+
+## The four pieces
+
+Everything in Fuse is one of four things. Learn these and the rest of the docs reads easily.
+
+| Piece | What it is | You drive it with |
+| --- | --- | --- |
+| **Orchestrator** | The control plane: one HTTP API, a scheduler, and the source of truth for every environment, host, and snapshot. | `fuse connect`, the SDKs, the REST API |
+| **Host** | A machine running a host agent (`fc-agent` for Firecracker, `qemu-agent` for GPUs). You register hosts; the orchestrator schedules onto them. | `fuse host register` |
+| **Environment** | One microVM and the task inside it, tracked through provision → running → drain → destroy. | A [Fusefile](/docs/concepts/fusefile) and `fuse up` |
+| **Snapshot** | A captured running microVM you can restore or fork from later. | `fuse snapshot create` |
+
+The CLI never runs a VM itself. It is a client: it talks to the orchestrator, and the
+orchestrator talks to your hosts.
+
+## Why Fuse
+
+- **Your hardware, your data.** Guest code never leaves machines you control.
+- **One-script host setup.** The hard part of Firecracker has always been getting it
+  running: host config, the in-guest agent, building a rootfs. One command brings up a
+  host with the agent installed and a rootfs baked and ready.
+- **Scheduling across a fleet.** Register hosts and Fuse places microVMs for you.
+- **GPUs, whole or fractional.** Full passthrough or MIG instances, routed to QEMU/VFIO hosts.
+- **Snapshot and fork.** Capture a running microVM, restore it, or branch a copy to debug
+  a failure without disturbing the original.
+- **Built to be driven.** REST API, Go/Python/TypeScript SDKs, SSE event streams, and
+  Prometheus metrics out of the box.
+- **Open source.** MIT licensed, no hosted dependency.
+
+## Pick your path
+
+**You have a laptop and want to see it work.** Start with the
+[Quickstart](/docs/learn/quickstart) and `fuse local up`. Nothing else to provision.
+
+**You have machines and want a real fleet.** Deploy the
+[orchestrator](/docs/cloud/orchestrator-deploy), then set up a
+[Firecracker host](/docs/cloud/firecracker-host-setup) or a
+[GPU host](/docs/cloud/gpu-host-setup), and point the CLI at it with `fuse quickstart`.
 
 ## Where to go next
 
 <CardGroup cols={2}>
-  <Card title="Quickstart" href="/docs/learn/quickstart" icon="rocket">Install the CLI, point it at your orchestrator, and bring up your first environment.</Card>
+  <Card title="Quickstart" href="/docs/learn/quickstart" icon="rocket">Install the CLI, connect it, and bring up your first environment. Start here.</Card>
   <Card title="Your first Fusefile" href="/docs/learn/first-fusefile" icon="file-plus">The smallest Fusefile that boots, explained line by line.</Card>
-  <Card title="Guides" href="/docs/guides/agent-sandboxes" icon="sparkles">Agent sandboxes, ephemeral CI runners, GPU batch jobs, and interactive debugging.</Card>
-  <Card title="Concepts" href="/docs/concepts/fusefile" icon="layers">The full mental model: Fusefile, providers, hosts, environments, snapshots, artifacts.</Card>
-  <Card title="Docs" href="/reference" icon="file-code">SDKs, CLI, and HTTP API reference for driving a Fuse orchestrator.</Card>
-  <Card title="Cloud" href="/docs/cloud" icon="cloud">Bring up a real Firecracker or GPU host and deploy the orchestrator.</Card>
+  <Card title="Concepts" href="/docs/concepts/fusefile" icon="layers">The full mental model behind the four pieces above.</Card>
+  <Card title="Guides" href="/docs/guides/agent-sandboxes" icon="sparkles">Agent sandboxes, CI runners, GPU jobs, desktops, and interactive debugging.</Card>
+  <Card title="Reference" href="/reference" icon="file-code">SDKs, CLI, and the HTTP API.</Card>
+  <Card title="Cloud" href="/docs/cloud" icon="cloud">Deploy the orchestrator and bring up real hosts.</Card>
 </CardGroup>
