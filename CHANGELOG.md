@@ -1,5 +1,13 @@
 # Changelog
 
+## [0.29.2](https://github.com/folsomintel/fuse/compare/v0.29.1...v0.29.2) (2026-09-02)
+
+
+### Performance Improvements
+
+* probe tcp before forking ssh in guest readiness wait ([#230](https://github.com/folsomintel/fuse/issues/230)) ([3c7816a](https://github.com/folsomintel/fuse/commit/3c7816a828ecc42ac55d8a56cd746557cfbbe6bd))
+* quiet guest kernel boot log to cut serial console time ([#229](https://github.com/folsomintel/fuse/issues/229)) ([bfaaba4](https://github.com/folsomintel/fuse/commit/bfaaba482f907ef0787ec3f2e47f9f2e17b49f4f))
+
 ## [0.29.1](https://github.com/folsomintel/fuse/compare/v0.29.0...v0.29.1) (2026-08-23)
 
 
