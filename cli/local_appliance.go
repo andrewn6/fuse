@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -66,14 +67,11 @@ func localUpDarwin(ctx context.Context, s *localState, cpus, memMB, diskGB int) 
 	}
 
 	infof("waiting for the appliance to boot...")
-	ip, err := waitApplianceIP(ctx, s, 120*time.Second)
+	ip, err := waitApplianceReady(ctx, s, 300*time.Second)
 	if err != nil {
-		return fmt.Errorf("appliance never got a DHCP lease: %w (console: %s)", err, s.applianceSerial)
+		return fmt.Errorf("appliance never came up: %w (console: %s)", err, s.applianceSerial)
 	}
 	infof("appliance is up at %s", ip)
-	if err := waitApplianceSSH(ctx, s, ip, 180*time.Second); err != nil {
-		return fmt.Errorf("appliance ssh never came up: %w (console: %s)", err, s.applianceSerial)
-	}
 
 	if err := injectDevOrchestratorAppliance(s, ip); err != nil {
 		return err
@@ -300,13 +298,30 @@ func applianceStatus(s *localState) (string, error) {
 	if !vfkitRunning(s) {
 		return "", nil
 	}
-	return findLeaseIP(applianceMAC)
+	ips, err := candidateLeaseIPs(applianceMAC)
+	if err != nil || len(ips) == 0 {
+		return "", err
+	}
+	return ips[0], nil
 }
 
-// waitApplianceIP polls the macOS dhcp lease table for the appliance's fixed
-// mac until it appears.
-func waitApplianceIP(ctx context.Context, s *localState, timeout time.Duration) (string, error) {
+// waitApplianceReady returns the appliance's ip once ssh actually answers on
+// it.
+//
+// Resolving the lease and waiting for ssh used to be two steps, and that is
+// what made a rebuilt appliance hang: the lease table still holds the previous
+// generation's "fuse-local" entry, the new one has not been issued yet, so the
+// first step returned a dead ip immediately and the second spent its whole
+// timeout on it. There is no ordering rule that fixes this, because at the
+// moment of the lookup the right answer is not in the file at all.
+//
+// So nothing is committed to until it answers. Every tick re-reads the lease
+// table, which is cheap, and probes the candidates best-first. A stale entry
+// costs one failed dial per second instead of the entire budget, and the live
+// lease is picked up as soon as macOS writes it.
+func waitApplianceReady(ctx context.Context, s *localState, timeout time.Duration) (string, error) {
 	deadline := time.Now().Add(timeout)
+	var lastErr error
 	for time.Now().Before(deadline) {
 		if !vfkitRunning(s) {
 			out, _ := os.ReadFile(filepath.Join(s.dir, "vfkit.log"))
@@ -316,8 +331,20 @@ func waitApplianceIP(ctx context.Context, s *localState, timeout time.Duration) 
 			}
 			return "", fmt.Errorf("vfkit exited:\n%s", tail)
 		}
-		if ip, err := findLeaseIP(applianceMAC); err == nil && ip != "" {
-			return ip, nil
+		ips, err := candidateLeaseIPs(applianceMAC)
+		if err != nil {
+			lastErr = err
+		}
+		for _, ip := range ips {
+			args := append(applianceSSHArgs(s, ip), "true")
+			if err := exec.CommandContext(ctx, "ssh", args...).Run(); err == nil {
+				return ip, nil
+			} else {
+				lastErr = err
+			}
+			if ctx.Err() != nil {
+				return "", ctx.Err()
+			}
 		}
 		select {
 		case <-ctx.Done():
@@ -325,7 +352,10 @@ func waitApplianceIP(ctx context.Context, s *localState, timeout time.Duration) 
 		case <-time.After(time.Second):
 		}
 	}
-	return "", fmt.Errorf("no lease for %s after %s", applianceMAC, timeout)
+	if lastErr == nil {
+		lastErr = fmt.Errorf("no lease for %s appeared", applianceMAC)
+	}
+	return "", fmt.Errorf("timed out after %s: %w", timeout, lastErr)
 }
 
 // findLeaseIP scans /var/db/dhcpd_leases for the appliance's entry. two
@@ -334,40 +364,112 @@ func waitApplianceIP(ctx context.Context, s *localState, timeout time.Duration) 
 // zeros), or an opaque DUID client-identifier ("ff,f1:f5:..."), which debian
 // sends and which cannot be predicted. the DUID case is matched by name
 // instead — the lease name is the hostname we set via cloud-init meta-data.
-// entries are newest-first, so the first match wins over stale ones.
-func findLeaseIP(mac string) (string, error) {
-	return findLeaseIPIn("/var/db/dhcpd_leases", mac, "fuse-local")
+//
+// a rebuilt appliance boots from a fresh disk, so it sends a fresh DUID and
+// macOS hands it a NEW ip while leaving the previous "fuse-local" lease in the
+// file. that means matches are not unique and the file order cannot be trusted
+// to put the live one first: it does not exist yet at the moment we look.
+// collect every candidate and let pickLease decide.
+type dhcpLease struct {
+	ip string
+	// mac reports whether this entry matched the pinned appliance MAC rather
+	// than the hostname. a MAC match identifies the appliance exactly; a name
+	// match can be any generation of it.
+	mac bool
+	// expiry is the lease= field, an absolute unix time in hex. zero when the
+	// entry carried no parseable lease.
+	expiry int64
 }
 
+// findLeaseIPIn returns the single best candidate. Callers that are about to
+// connect should prefer candidateLeaseIPs and probe, since the best candidate
+// is only a guess until something answers on it.
 func findLeaseIPIn(path, mac, name string) (string, error) {
-	data, err := os.ReadFile(path)
-	if err != nil {
+	ips, err := candidateLeaseIPsIn(path, mac, name)
+	if err != nil || len(ips) == 0 {
 		return "", err
 	}
+	return ips[0], nil
+}
+
+func scanLeases(path, mac, name string) ([]dhcpLease, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
 	want := normalizeMAC(mac)
-	var ip, entryName string
+	var found []dhcpLease
+	var cur dhcpLease
+	var named bool
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
-		if line == "{" {
-			ip, entryName = "", ""
-		}
-		if v, ok := strings.CutPrefix(line, "name="); ok {
-			entryName = v
-		}
-		if v, ok := strings.CutPrefix(line, "ip_address="); ok {
-			ip = v
-		}
-		if v, ok := strings.CutPrefix(line, "hw_address="); ok {
+		switch {
+		case line == "{":
+			cur, named = dhcpLease{}, false
+		case strings.HasPrefix(line, "name="):
+			named = strings.TrimPrefix(line, "name=") == name
+		case strings.HasPrefix(line, "ip_address="):
+			cur.ip = strings.TrimPrefix(line, "ip_address=")
+		case strings.HasPrefix(line, "lease="):
+			v := strings.TrimPrefix(strings.TrimPrefix(line, "lease="), "0x")
+			if n, err := strconv.ParseInt(v, 16, 64); err == nil {
+				cur.expiry = n
+			}
+		case strings.HasPrefix(line, "hw_address="):
 			// "1,52:54:0:f5:5e:1" — the leading 1 is the hardware type.
-			if _, addr, found := strings.Cut(v, ","); found && normalizeMAC(addr) == want && ip != "" {
-				return ip, nil
+			if _, addr, ok := strings.Cut(strings.TrimPrefix(line, "hw_address="), ","); ok && normalizeMAC(addr) == want {
+				cur.mac = true
+			}
+		case line == "}":
+			if cur.ip != "" && (cur.mac || named) {
+				found = append(found, cur)
 			}
 		}
-		if line == "}" && entryName == name && ip != "" {
-			return ip, nil
+	}
+	return found, nil
+}
+
+// orderLeases sorts candidates into the order worth probing.
+//
+// Two tiers. A MAC match is exact identity and outranks a hostname match,
+// which can name any generation of the appliance. Within a tier the newest
+// lease= wins, because that is the only field saying which entry macOS issued
+// most recently. Ties keep file order, which is what makes entries carrying no
+// lease= at all behave the way they always have.
+//
+// Expired leases stay in the list. The clock belongs to the host rather than
+// the guest, and since every candidate is probed before use, a wrong guess is
+// now one failed dial instead of a failed boot.
+func orderLeases(found []dhcpLease) []dhcpLease {
+	out := append([]dhcpLease(nil), found...)
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].mac != out[j].mac {
+			return out[i].mac
+		}
+		return out[i].expiry > out[j].expiry
+	})
+	return out
+}
+
+// candidateLeaseIPs returns every ip that could be the appliance, best first.
+func candidateLeaseIPs(mac string) ([]string, error) {
+	return candidateLeaseIPsIn("/var/db/dhcpd_leases", mac, "fuse-local")
+}
+
+func candidateLeaseIPsIn(path, mac, name string) ([]string, error) {
+	found, err := scanLeases(path, mac, name)
+	if err != nil {
+		return nil, err
+	}
+	var ips []string
+	seen := map[string]bool{}
+	for _, l := range orderLeases(found) {
+		if !seen[l.ip] {
+			seen[l.ip] = true
+			ips = append(ips, l.ip)
 		}
 	}
-	return "", nil
+	return ips, nil
 }
 
 func normalizeMAC(mac string) string {
@@ -390,25 +492,6 @@ func applianceSSHArgs(s *localState, ip string) []string {
 		"-o", "ConnectTimeout=5",
 		applianceSSHUser + "@" + ip,
 	}
-}
-
-func waitApplianceSSH(ctx context.Context, s *localState, ip string, timeout time.Duration) error {
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for time.Now().Before(deadline) {
-		args := append(applianceSSHArgs(s, ip), "true")
-		if err := exec.CommandContext(ctx, "ssh", args...).Run(); err == nil {
-			return nil
-		} else {
-			lastErr = err
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-time.After(2 * time.Second):
-		}
-	}
-	return fmt.Errorf("timed out after %s: %w", timeout, lastErr)
 }
 
 // applianceSetup runs the embedded setup script inside the appliance with the
@@ -454,6 +537,14 @@ func injectDevOrchestratorAppliance(s *localState, ip string) error {
 	cmd.Stdin = f
 	if out, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("push dev orchestrator: %w: %s", err, out)
+	}
+	// the version marker install reads to decide whether to re-download. "dev"
+	// is the one value it will not overwrite, so a dev binary survives every
+	// later `fuse local up` instead of being replaced by the release build.
+	mark := append(applianceSSHArgs(s, ip),
+		"sudo bash -c 'echo dev > "+applianceDir+"/bin/.orchestrator-version'")
+	if out, err := exec.Command("ssh", mark...).CombinedOutput(); err != nil {
+		return fmt.Errorf("mark dev orchestrator: %w: %s", err, out)
 	}
 	infof("using dev orchestrator binary from %s", src)
 	return nil
