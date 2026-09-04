@@ -149,9 +149,16 @@ install_stack() {
     chmod 600 "$DIR/fc/ubuntu.id_rsa"
   fi
 
-  # orchestrator from the fuse release archive, checksum-verified. a binary
-  # already at bin/orchestrator wins (that's the dev-build injection path).
-  if [ ! -x "$DIR/bin/orchestrator" ]; then
+  # orchestrator from the fuse release archive, checksum-verified. the version
+  # marker is what makes an upgrade land: keying only on "is the binary there"
+  # meant a newer cli reused whatever orchestrator the first run installed, for
+  # the life of the appliance, with install still logging "install complete".
+  # a marker reading "dev" is the FUSE_LOCAL_ORCH_BIN injection and is never
+  # overwritten, so the orchestrator dev loop still works.
+  local orch_marker orch_have
+  orch_marker="$DIR/bin/.orchestrator-version"
+  orch_have=$(cat "$orch_marker" 2>/dev/null || true)
+  if [ ! -x "$DIR/bin/orchestrator" ] || { [ "$orch_have" != "dev" ] && [ "$orch_have" != "$FUSE_VERSION" ]; }; then
     local tmp
     tmp=$(mktemp -d)
     fetch "$REL_BASE/checksums.txt" "$tmp/checksums.txt"
@@ -160,19 +167,23 @@ install_stack() {
     tar -xzf "$tmp/fuse.tar.gz" -C "$tmp" orchestrator
     install -m0755 "$tmp/orchestrator" "$DIR/bin/orchestrator"
     rm -rf "$tmp"
+    echo "$FUSE_VERSION" > "$orch_marker"
     log "installed orchestrator ($FUSE_VERSION)"
   fi
 
   # fused, injected straight into the base rootfs so guests need no network
-  # fetch at boot (the ci rootfs has no dns configured). marker records which
-  # fused is inside so re-running install is a no-op until the asset changes.
-  local fused_tmp fused_sum
+  # fetch at boot (the ci rootfs has no dns configured). the marker holds the
+  # version whose fused is inside the rootfs; the old marker held a sha and was
+  # only ever tested for existence, so "until the asset changes" never fired and
+  # guests kept booting the first fused ever installed. an old sha marker does
+  # not equal a version, so upgrading installs re-inject exactly once.
+  local fused_tmp fused_marker
   fused_tmp=$(mktemp -d)
-  if [ ! -f "$DIR/fc/.fused-injected" ] || [ ! -s "$DIR/fc/.fused-injected" ]; then
+  fused_marker="$DIR/fc/.fused-injected"
+  if [ "$(cat "$fused_marker" 2>/dev/null || true)" != "$FUSE_VERSION" ]; then
     fetch "$REL_BASE/checksums.txt" "$fused_tmp/checksums.txt"
     fetch "$REL_BASE/fused_Linux_${ASSET_ARCH}" "$fused_tmp/fused"
     verify_asset "$fused_tmp/fused" "fused_Linux_${ASSET_ARCH}" "$fused_tmp/checksums.txt" || die "fused asset failed verification"
-    fused_sum=$(sha256_of "$fused_tmp/fused")
     local mnt
     mnt=$(mktemp -d)
     sudo -n mount -o loop "$DIR/fc/rootfs.ext4" "$mnt" || die "loop-mounting the base rootfs needs passwordless sudo (or run install as root)"
@@ -182,12 +193,26 @@ install_stack() {
     echo "nameserver 1.1.1.1" | sudo -n tee "$mnt/etc/resolv.conf" >/dev/null
     sudo -n umount "$mnt"
     rmdir "$mnt"
-    echo "$fused_sum" > "$DIR/fc/.fused-injected"
-    log "injected fused into base rootfs"
+    echo "$FUSE_VERSION" > "$fused_marker"
+    log "injected fused into base rootfs ($FUSE_VERSION)"
   fi
   rm -rf "$fused_tmp"
 
   log "install complete"
+}
+
+# a live pid is not proof the right thing is running. `fuse local down` stops
+# the appliance vm without ever calling stop_stack, so both pidfiles survive
+# onto the next boot, where the kernel hands the same low pids out again. that
+# is how fc-agent.pid ended up holding the orchestrator's pid: start_stack saw
+# a live process, skipped fc-agent, and left the stack half up with no error.
+# match the pid's cmdline too, so a reused pid reads as stopped.
+pid_running() {
+  local pidfile="$1" want="$2" pid
+  pid=$(cat "$pidfile" 2>/dev/null) || return 1
+  [ -n "$pid" ] || return 1
+  kill -0 "$pid" 2>/dev/null || return 1
+  tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null | grep -q -- "$want"
 }
 
 start_stack() {
@@ -197,7 +222,7 @@ start_stack() {
 
   sudo -n sysctl -w net.ipv4.ip_forward=1 >/dev/null || die "enabling ip_forward needs passwordless sudo (or run start as root)"
 
-  if [ -f "$DIR/orchestrator.pid" ] && kill -0 "$(cat "$DIR/orchestrator.pid")" 2>/dev/null; then
+  if pid_running "$DIR/orchestrator.pid" "bin/orchestrator"; then
     log "orchestrator already running (pid $(cat "$DIR/orchestrator.pid"))"
   else
     ORCH_AUTH_TOKEN="${ORCH_AUTH_TOKEN:?ORCH_AUTH_TOKEN is required}" \
@@ -207,7 +232,7 @@ start_stack() {
     log "orchestrator started on :$ORCH_PORT (pid $!)"
   fi
 
-  if [ -f "$DIR/fc-agent.pid" ] && kill -0 "$(cat "$DIR/fc-agent.pid")" 2>/dev/null; then
+  if pid_running "$DIR/fc-agent.pid" "fc-agent.py"; then
     log "fc-agent already running (pid $(cat "$DIR/fc-agent.pid"))"
   else
     FC_AGENT_TOKEN="${FC_AGENT_TOKEN:?FC_AGENT_TOKEN is required}" \
@@ -233,9 +258,13 @@ stop_stack() {
 }
 
 status_stack() {
-  local name up=0
+  local name want up=0
   for name in orchestrator fc-agent; do
-    if [ -f "$DIR/$name.pid" ] && kill -0 "$(cat "$DIR/$name.pid")" 2>/dev/null; then
+    case "$name" in
+      orchestrator) want="bin/orchestrator" ;;
+      fc-agent)     want="fc-agent.py" ;;
+    esac
+    if pid_running "$DIR/$name.pid" "$want"; then
       echo "$name: running (pid $(cat "$DIR/$name.pid"))"
       up=$((up+1))
     else
