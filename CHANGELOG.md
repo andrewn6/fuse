@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.29.3](https://github.com/folsomintel/fuse/compare/v0.29.2...v0.29.3) (2026-09-04)
+
+
+### Bug Fixes
+
+* **local:** probe leases before use, verify pid identity, and honor version on reinstall ([#232](https://github.com/folsomintel/fuse/issues/232)) ([29c7ed9](https://github.com/folsomintel/fuse/commit/29c7ed93cd81d9803a5dd18cf2145d64e7730400))
+
 ## [0.29.2](https://github.com/folsomintel/fuse/compare/v0.29.1...v0.29.2) (2026-09-02)
 
 

@@ -2,7 +2,7 @@
 # target is `fuse` so `use fuse::Client` mirrors the python sdk's `import fuse`.
 [package]
 name = "folsom-fuse"
-version = "0.29.2"
+version = "0.29.3"
 edition = "2021"
 rust-version = "1.75"
 description = "Rust client for the Fuse microVM control plane"
